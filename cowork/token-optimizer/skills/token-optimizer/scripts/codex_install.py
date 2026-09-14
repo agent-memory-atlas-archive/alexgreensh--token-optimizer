@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import argparse
+import ast
+import base64
 import json
 import re
 import shlex
@@ -46,6 +48,91 @@ _BASH_RESOLVER_PREFIX = (
 )
 _BASH_RESOLVER_SUFFIX = "; done; exit 0"
 
+# Marker baked into every generated Windows launcher command so install,
+# uninstall, doctor, and dashboard ownership checks can recognize it.
+_LAUNCHER_MARKER = "token-optimizer/scripts/windows-launcher"
+_LAUNCHER_B64_RE = re.compile(r"b64decode\('([A-Za-z0-9+/=]+)'\)")
+# Sentinel version leaf used when normalizing a launcher for signature
+# comparison (see _launcher_signature).
+_SIGNATURE_VERSION = "0.0.0"
+
+
+def _windows_bootstrap(root: Path, script: str, args: list, extra_env: dict) -> str:
+    """The plaintext Python bootstrap embedded in Windows launcher commands.
+
+    cmd.exe parses a /C command line ONCE, before anything on it runs: %VAR%
+    expands to the pre-line value and `setlocal EnableDelayedExpansion` only
+    takes effect from the NEXT line, so neither expansion form can carry a
+    resolved version directory into the runner path on the same line (issue
+    #180). Resolving the newest semver sibling inside Python removes the
+    nested-quoting problem entirely -- no for/f, no PowerShell hop.
+
+    The generated code below is ALL the base64 payload ever does:
+      1. `root` starts as the baked install dir (.../token-optimizer/<X.Y.Z>/).
+      2. Scan root's parent for sibling directories named X.Y.Z; pick the
+         highest semver. On any listing failure keep the baked dir (fail-open).
+      3. Export TOKEN_OPTIMIZER_RUNTIME=codex, TOKEN_OPTIMIZER_RUNTIME_ROOT
+         = resolved root, plus any extra_env the hook needs.
+      4. runpy.run_path the resolved hooks/run.py with sys.argv =
+         [runner, script, *args].
+
+    Audit any emitted command without executing it:
+      codex_install.py --decode-launcher "<command>"
+    """
+    return (
+        "import os, re, runpy, sys\n"
+        "from pathlib import Path\n"
+        f"root = Path({str(root)!r})\n"
+        "try:\n"
+        "    versions = [p for p in root.parent.iterdir() if p.is_dir() "
+        "and re.fullmatch(r'\\d+\\.\\d+\\.\\d+', p.name)]\n"
+        "    root = max(versions, key=lambda p: tuple(map(int, p.name.split('.'))), default=root)\n"
+        "except OSError:\n"
+        "    pass\n"
+        "os.environ['TOKEN_OPTIMIZER_RUNTIME'] = 'codex'\n"
+        "os.environ['TOKEN_OPTIMIZER_RUNTIME_ROOT'] = str(root)\n"
+        f"os.environ.update({extra_env!r})\n"
+        "runner = root / 'hooks' / 'run.py'\n"
+        f"sys.argv = [str(runner), {script!r}, *{list(args)!r}]\n"
+        "sys.path.insert(0, str(runner.parent))\n"
+        "runpy.run_path(str(runner), run_name='__main__')\n"
+    )
+
+
+def _windows_launcher_command(root: Path, script: str, args, extra_env: dict) -> str:
+    """Build the baked Windows hook command for a versioned marketplace root.
+
+    The base64 blob is exactly the readable output of _windows_bootstrap()
+    above -- encoding keeps paths/arguments containing CMD metacharacters out
+    of the cmd.exe /C parser (spaces, &, %, !, quotes all survive untouched).
+    The trailing marker keeps the command recognizable to ownership checks.
+    """
+    encoded = base64.b64encode(
+        _windows_bootstrap(root, script, list(args), extra_env).encode("utf-8")
+    ).decode("ascii")
+    python = subprocess.list2cmdline([sys.executable])
+    return (
+        f"{python} -c \"exec(__import__('base64').b64decode('{encoded}'))\""
+        f" {_LAUNCHER_MARKER}"
+    )
+
+
+def decode_launcher_command(command: str) -> str | None:
+    """Decode the embedded Python bootstrap of a generated Windows launcher.
+
+    Returns None when `command` is not one of ours (no launcher marker or no
+    base64 payload). Pure decode-and-print for audits; never executes.
+    """
+    if _LAUNCHER_MARKER not in command:
+        return None
+    match = _LAUNCHER_B64_RE.search(command)
+    if not match:
+        return None
+    try:
+        return base64.b64decode(match.group(1)).decode("utf-8")
+    except (ValueError, UnicodeError):
+        return None
+
 
 def _hook_command(script: str, *args: str, redirect_quiet: bool = False,
                    extra_env: dict[str, str] | None = None) -> str:
@@ -57,79 +144,23 @@ def _hook_command(script: str, *args: str, redirect_quiet: bool = False,
         # bash and python-launcher.sh (several CreateProcess calls per hook).
         # list2cmdline applies native Windows quoting for paths with spaces.
         #
-        # Verified 2026-08-05 against Codex CLI source: codex-rs/hooks/src/
-        # engine/command_runner.rs default_shell_command() spawns hooks as
-        # `%COMSPEC% /C <command>` (fallback cmd.exe) on Windows unless the
-        # user overrides the hook shell in config. So the cmd.exe syntax below
-        # (for /f, 2^>NUL, >NUL 2>&1) is CORRECT here — do NOT
-        # "bash-ify" it. The inverse bug: Claude Code runs hooks via
-        # Git Bash, so measure.py's Claude-facing commands are POSIX-shaped.
+        # Codex uses %COMSPEC% /C on native Windows, not Git Bash. Avoid
+        # batch-only SETLOCAL semantics and nested shell quoting here.
         _win_env = ''.join(
             f'set "{k}={v}" && ' for k, v in extra_env.items()
         )
         if _SEMVER_DIR_RE.match(root.name):
             # CMD needs a Windows-native counterpart to the POSIX runtime
             # resolver below. cmd.exe parses a /C command line ONCE, before
-            # anything on it runs: %VAR% expands to the pre-line value, and
-            # `setlocal EnableDelayedExpansion` only takes effect from the
-            # NEXT line, so a !VAR! reference on the same line is passed
-            # through literally (issue #180: python received the verbatim
-            # path "...\\!TOKEN_OPTIMIZER_RUNTIME_ROOT!\\hooks\\run.py" and
-            # exited 1). Neither expansion form can see the for-loop
-            # assignment on the same line. The one value that DOES land is
-            # the FOR variable itself, so the runner path is built from %R
-            # inside the do-body and no expansion form is needed.
-            #
-            # Fallback: the resolver always prints exactly one directory name
-            # - the newest semver install, or the baked install directory
-            # when the scan finds none - so the do-body still runs against
-            # the baked path. (If powershell.exe itself cannot start, the
-            # loop body never runs and the hook no-ops, the same fail-quiet
-            # contract as the POSIX resolver's missing-bash path.)
-            # The fallback is silent by design; TOKEN_OPTIMIZER_DEBUG=1 makes
-            # it observable by appending a line to
-            # <base>\token-optimizer-codex-resolver.log. A file is the only
-            # channel that reaches the user here: resolver stderr is 2^>NUL'd
-            # inside the for /f in-clause, and every extra stdout line would
-            # run the do-body again with junk as %R. The added syntax is
-            # deliberately free of ()<>%&| so cmd.exe's /C line parser never
-            # sees it.
-            #
-            # Only the version LEAF NAME crosses the cmd/PowerShell pipe, and
-            # it is always ASCII (it matched the semver regex); the base path
-            # travels baked into the command line (Unicode-safe via
-            # CreateProcessW), so non-ASCII install paths - e.g. a Hebrew or
-            # CJK user profile name - are never mangled by a console-codepage
-            # round-trip. Exactly one line is printed, so python runs once.
-            base = str(root.parent)
-            ps_base = base.replace("'", "''")
-            ps_fallback = root.name.replace("'", "''")
-            ps_command = (
-                "$ErrorActionPreference='SilentlyContinue'; "
-                f"$v = Get-ChildItem -LiteralPath '{ps_base}' -Directory | "
-                "Where-Object { $_.Name -match '^\\d+\\.\\d+\\.\\d+$' } | "
-                "Sort-Object { [version]$_.Name } -Descending | "
-                "Select-Object -First 1 -ExpandProperty Name; "
-                "if ($v) { $v } else { "
-                "if ($env:TOKEN_OPTIMIZER_DEBUG) { $t = Get-Date -Format o; "
-                f"Add-Content -LiteralPath '{ps_base}\\token-optimizer-codex-resolver.log' "
-                f'-Value "$t codex hook resolver found no semver install; using baked {ps_fallback}" '
-                "-ErrorAction SilentlyContinue }; "
-                f"'{ps_fallback}' }}"
-            )
-            resolver = subprocess.list2cmdline(
-                ["powershell", "-NoProfile", "-Command", ps_command]
-            )
-            python = subprocess.list2cmdline([sys.executable])
-            script_args = subprocess.list2cmdline([script, *args])
-            command = (
-                'set "TOKEN_OPTIMIZER_RUNTIME=codex" && '
-                f'for /f "delims=" %R in (\'{resolver} 2^>NUL\') '
-                f'do @set "TOKEN_OPTIMIZER_RUNTIME_ROOT={base}\\%R" && '
-                f'{_win_env}'
-                f'{python} "{base}\\%R\\hooks\\run.py" '
-                f"{script_args}"
-            )
+            # anything on it runs, so neither %VAR% nor a same-line !VAR!
+            # (setlocal does not apply outside batch files) can carry the
+            # resolved version into the runner path (issue #180). The base64
+            # payload decodes to the fixed, readable bootstrap in
+            # _windows_bootstrap() -- it resolves the newest semver install in
+            # the Python process we are already launching, which removes the
+            # nested-quoting and console-codepage problems entirely. Audit any
+            # baked command with: codex_install.py --decode-launcher "<cmd>".
+            command = _windows_launcher_command(root, script, args, extra_env)
         else:
             prefix = f'set "TOKEN_OPTIMIZER_RUNTIME=codex" && {_win_env}'
             argv = [sys.executable, str(root / "hooks" / "run.py"), script, *args]
@@ -196,7 +227,8 @@ def _managed_hooks(
     same diagnostics-routing, systemMessage-preservation, and process-
     consolidation fixes as Claude Code. SubagentStart/Stop remain on the
     Codex-specific bridge (no runner exists for subagent events). Bash
-    compression stays explicit opt-in (Codex cannot rewrite command input yet).
+    compression uses Codex's PreToolUse updatedInput and remains an explicit
+    opt-in; it is inert on Codex builds that do not honor updatedInput.
     """
     hooks = {
         "Stop": [
@@ -307,7 +339,7 @@ def _managed_hooks(
                     {
                         "type": "command",
                         "command": _hook_command(
-                            "skills/token-optimizer/scripts/bash_hook.py",
+                            "skills/token-optimizer/scripts/codex_command_compress.py",
                             "--quiet",
                         ),
                         "timeout": 8,
@@ -430,6 +462,62 @@ def _is_token_optimizer_group(group: Any) -> bool:
     )
 
 
+def _parse_launcher_bootstrap(code: str):
+    """Extract the four interpolated fields from a bootstrap we generated.
+
+    Returns (root, env, script, args) or None. These are the only values
+    _windows_bootstrap() interpolates; anything unparseable is not ours.
+    """
+    try:
+        lines = code.split("\n")
+        root = Path(ast.literal_eval(
+            next(l for l in lines if l.startswith("root = Path("))[len("root = Path("):-1]))
+        env = ast.literal_eval(
+            next(l for l in lines if l.startswith("os.environ.update("))[len("os.environ.update("):-1])
+        argv_line = next(l for l in lines if l.startswith("sys.argv = [str(runner), "))
+        script_repr, args_repr = argv_line[len("sys.argv = [str(runner), "):-1].split(", *[", 1)
+        script = ast.literal_eval(script_repr)
+        args = ast.literal_eval("[" + args_repr)
+    except (ValueError, SyntaxError, StopIteration, IndexError):
+        return None
+    if not isinstance(env, dict) or not isinstance(script, str) or not isinstance(args, list):
+        return None
+    return root, env, script, args
+
+
+def _launcher_signature(command):
+    """Canonical form of a generated Windows launcher, modulo the version dir.
+
+    Preserving an equivalent installed command avoids an unnecessary trust
+    review on upgrade. Instead of regex-splicing the embedded base64 (which
+    silently degrades when the embedded format drifts), decode the bootstrap,
+    pull out the four interpolated fields, verify the decoded text is EXACTLY
+    what _windows_bootstrap() regenerates for them, and rebuild the payload
+    with the version leaf normalized to a sentinel. Installed commands then
+    compare equal across upgrades iff interpreter, install parent, env,
+    script, args, redirect, and the bootstrap template itself all match. A
+    command whose embedded code deviates from the generator compares verbatim
+    and still triggers the trust review it should.
+    """
+    match = _LAUNCHER_B64_RE.search(command)
+    if not match or _LAUNCHER_MARKER not in command:
+        return command
+    code = decode_launcher_command(command)
+    if code is None:
+        return command
+    fields = _parse_launcher_bootstrap(code)
+    if fields is None:
+        return command
+    root, env, script, args = fields
+    if not _SEMVER_DIR_RE.fullmatch(root.name):
+        return command
+    if code != _windows_bootstrap(root, script, args, env):
+        return command
+    canonical = _windows_bootstrap(root.parent / _SIGNATURE_VERSION, script, args, env)
+    normalized = base64.b64encode(canonical.encode("utf-8")).decode("ascii")
+    return command[:match.start(1)] + normalized + command[match.end(1):]
+
+
 def _merge_hooks(
     existing: dict[str, Any],
     *,
@@ -450,6 +538,16 @@ def _merge_hooks(
         groups = hooks.get(event, [])
         if not isinstance(groups, list):
             groups = []
+        for fresh_group in managed.get(event, []):
+            for old_group in groups:
+                if not _is_token_optimizer_group(old_group):
+                    continue
+                old_handlers = old_group.get('hooks', [])
+                fresh_handlers = fresh_group.get('hooks', [])
+                if len(old_handlers) == len(fresh_handlers) == 1:
+                    old_handler, fresh_handler = old_handlers[0], fresh_handlers[0]
+                    if _launcher_signature(old_handler.get('command', '')) == _launcher_signature(fresh_handler.get('command', '')):
+                        fresh_handler['command'] = old_handler['command']
         hooks[event] = [group for group in groups if not _is_token_optimizer_group(group)]
         hooks[event].extend(managed.get(event, []))
         if not hooks[event]:
@@ -543,6 +641,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dry-run", action="store_true", help="Validate and print intended action without writing")
     parser.add_argument("--uninstall", action="store_true", help="Remove Token Optimizer hooks")
     parser.add_argument(
+        "--decode-launcher",
+        metavar="COMMAND",
+        default=None,
+        help=(
+            "Print the decoded Python bootstrap embedded in a generated Windows "
+            "launcher command (the base64 in `python -c \"exec(...b64decode...)\"`). "
+            "Audit/diagnostic only: decodes and prints, never executes."
+        ),
+    )
+    parser.add_argument(
         "--profile",
         choices=("quiet", "balanced", "telemetry", "aggressive"),
         default="aggressive",
@@ -550,7 +658,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Hook profile: aggressive=max savings, all silent hooks (default); "
             "balanced=Stop+prompt hooks; quiet=Stop only; telemetry=Stop+PostToolUse. "
             "Bash compression stays opt-in (--enable-bash-compression) on every profile "
-            "because Codex cannot rewrite command input yet."
+            "to preserve the user's existing command-output workflow."
         ),
     )
     parser.add_argument("--skip-compact-prompt", action="store_true", help="Do not install Codex compact prompt")
@@ -558,7 +666,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--enable-bash-compression",
         action="store_true",
-        help="Experimental visible PreToolUse(Bash) hook; Codex does not yet support command rewriting",
+        help="Compress eligible inspection commands through Codex updatedInput; preserves full originals and failures",
     )
     parser.add_argument("--disable-bash-compression", action="store_true", help="Deprecated no-op; Bash compression is off by default")
     parser.add_argument("--enable-hot-path-hooks", action="store_true", help="Opt into visible PostToolUse tool-output hooks")
@@ -585,6 +693,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.decode_launcher is not None:
+        decoded = decode_launcher_command(args.decode_launcher)
+        if decoded is None:
+            print("[Token Optimizer] not a generated windows-launcher command", file=sys.stderr)
+            return 1
+        print(decoded, end="")
+        return 0
     is_global = args.project is None
     try:
         project = Path(".") if is_global else _resolve_project(Path(args.project))
@@ -593,11 +708,8 @@ def main(argv: list[str] | None = None) -> int:
         else:
             enable_prompt_hooks = args.enable_prompt_hooks or args.profile in {"balanced", "aggressive"}
             enable_hot_path_hooks = args.enable_hot_path_hooks or args.profile in {"telemetry", "aggressive"}
-            # Bash compression stays explicit opt-in on every profile (including
-            # aggressive): Codex PreToolUse cannot rewrite command input yet, so the
-            # hook is non-functional AND visible. Enabling it by default would add a
-            # visible row per Bash call with no token saving. Re-couple to the
-            # aggressive profile once Codex supports input rewriting.
+            # Command rewriting is supported by current Codex. Keep its activation
+            # explicit because it changes the model-visible output of commands.
             enable_bash_compression = args.enable_bash_compression
             enable_subagent_hooks = (
                 args.enable_subagent_hooks or args.profile in {"balanced", "aggressive"}
