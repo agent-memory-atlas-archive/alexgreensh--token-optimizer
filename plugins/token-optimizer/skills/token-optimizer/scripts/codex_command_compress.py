@@ -214,16 +214,19 @@ def run(plan):
     if not shell:
         print('Token Optimizer: no usable default shell', file=sys.stderr)
         return 2
-    os.environ['TOKEN_OPTIMIZER_RUNTIME'] = 'codex'
+    # Scope runtime markers to the child environment only. Mutating the
+    # parent's os.environ leaks 'codex' into any process that calls run()
+    # in-process (and poisons detect_runtime() for everything after it).
+    child_env = dict(os.environ, TOKEN_OPTIMIZER_RUNTIME='codex')
     if plan.get('session_id'):
-        os.environ['TOKEN_OPTIMIZER_SESSION_ID'] = str(plan['session_id'])
+        child_env['TOKEN_OPTIMIZER_SESSION_ID'] = str(plan['session_id'])
     if Path(shell).stem.lower() in ('pwsh', 'powershell'):
         tail = '; $toSucceeded=$?; $toExit=$LASTEXITCODE; if ($null -ne $toExit) { exit $toExit }; if (-not $toSucceeded) { exit 1 }'
         argv = [shell, '-NoLogo', '-NoProfile', '-NonInteractive', '-Command', command + tail]
     else:
         argv = [shell, '-c', command]
     with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
-        result = subprocess.run(argv, stdout=output, stderr=errors,
+        result = subprocess.run(argv, stdout=output, stderr=errors, env=child_env,
                                 creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
         output.seek(0, 2)
         size = output.tell()

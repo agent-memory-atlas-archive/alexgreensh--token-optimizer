@@ -71,6 +71,9 @@ def _windows_bootstrap(root: Path, script: str, args: list, extra_env: dict) -> 
       1. `root` starts as the baked install dir (.../token-optimizer/<X.Y.Z>/).
       2. Scan root's parent for sibling directories named X.Y.Z; pick the
          highest semver. On any listing failure keep the baked dir (fail-open).
+         A fallback resolve is observable only via a TOKEN_OPTIMIZER_DEBUG-
+         gated line appended to token-optimizer-codex-resolver.log next to
+         the version dirs (the channel the old PowerShell resolver had).
       3. Export TOKEN_OPTIMIZER_RUNTIME=codex, TOKEN_OPTIMIZER_RUNTIME_ROOT
          = resolved root, plus any extra_env the hook needs.
       4. runpy.run_path the resolved hooks/run.py with sys.argv =
@@ -83,12 +86,19 @@ def _windows_bootstrap(root: Path, script: str, args: list, extra_env: dict) -> 
         "import os, re, runpy, sys\n"
         "from pathlib import Path\n"
         f"root = Path({str(root)!r})\n"
+        "baked = root\n"
         "try:\n"
         "    versions = [p for p in root.parent.iterdir() if p.is_dir() "
         "and re.fullmatch(r'\\d+\\.\\d+\\.\\d+', p.name)]\n"
         "    root = max(versions, key=lambda p: tuple(map(int, p.name.split('.'))), default=root)\n"
         "except OSError:\n"
         "    pass\n"
+        "if root == baked and os.environ.get('TOKEN_OPTIMIZER_DEBUG'):\n"
+        "    try:\n"
+        "        with (root.parent / 'token-optimizer-codex-resolver.log').open('a', encoding='utf-8') as _log:\n"
+        "            _log.write(str(root) + '\\n')\n"
+        "    except OSError:\n"
+        "        pass\n"
         "os.environ['TOKEN_OPTIMIZER_RUNTIME'] = 'codex'\n"
         "os.environ['TOKEN_OPTIMIZER_RUNTIME_ROOT'] = str(root)\n"
         f"os.environ.update({extra_env!r})\n"
