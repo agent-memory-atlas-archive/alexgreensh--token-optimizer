@@ -18,17 +18,40 @@ SCHEMA_VERSION = 2
 def _connect():
     root = resolve_snapshot_dir()
     root.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(root / 'codex-log-index.db', timeout=0.2)
-    conn.execute('PRAGMA journal_mode=WAL')
-    conn.executescript('''
-      CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY, identity TEXT, offset INTEGER,
-        size INTEGER, skipped INTEGER, revision INTEGER, mtime INTEGER);
-      CREATE TABLE IF NOT EXISTS records(path TEXT, offset INTEGER, data TEXT,
-        PRIMARY KEY(path, offset));
-    ''')
-    if 'mtime' not in {row[1] for row in conn.execute('PRAGMA table_info(files)')}:
-        conn.execute('ALTER TABLE files ADD COLUMN mtime INTEGER')
-    return conn
+    db_path = root / 'codex-log-index.db'
+    try:
+        conn = sqlite3.connect(db_path, timeout=5.0)
+        conn.execute('PRAGMA journal_mode=WAL')
+        conn.execute('PRAGMA busy_timeout=5000')
+        conn.executescript('''
+          CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY, identity TEXT, offset INTEGER,
+            size INTEGER, skipped INTEGER, revision INTEGER, mtime INTEGER);
+          CREATE TABLE IF NOT EXISTS records(path TEXT, offset INTEGER, data TEXT,
+            PRIMARY KEY(path, offset));
+        ''')
+        if 'mtime' not in {row[1] for row in conn.execute('PRAGMA table_info(files)')}:
+            try:
+                conn.execute('ALTER TABLE files ADD COLUMN mtime INTEGER')
+            except sqlite3.OperationalError:
+                pass  # concurrent migration: column already added
+        return conn
+    except sqlite3.DatabaseError:
+        # Corrupt DB: self-heal by removing and rebuilding.
+        for suffix in ('', '-wal', '-shm'):
+            try:
+                (db_path.parent / (db_path.name + suffix)).unlink()
+            except OSError:
+                pass
+        conn = sqlite3.connect(db_path, timeout=5.0)
+        conn.execute('PRAGMA journal_mode=WAL')
+        conn.execute('PRAGMA busy_timeout=5000')
+        conn.executescript('''
+          CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY, identity TEXT, offset INTEGER,
+            size INTEGER, skipped INTEGER, revision INTEGER, mtime INTEGER);
+          CREATE TABLE IF NOT EXISTS records(path TEXT, offset INTEGER, data TEXT,
+            PRIMARY KEY(path, offset));
+        ''')
+        return conn
 
 
 def pending(filepath):
@@ -77,18 +100,36 @@ def records(filepath):
     key = str(path)
     conn = _connect()
     try:
-        with path.open('rb') as handle:
+        # Read the file and parse OUTSIDE the write transaction to avoid
+        # holding the SQLite write lock during the (potentially multi-second)
+        # JSON parse loop. The parsed records are buffered in memory (bounded
+        # by PASS_BYTES of compact metadata per pass), then committed in a
+        # tight transaction.
+        try:
+            handle = path.open('rb')
+        except OSError:
+            # Missing/deleted/directory: degrade gracefully like pending().
+            conn.close()
+            def empty_iter():
+                if False:
+                    yield
+            return empty_iter(), {'incomplete': True, 'scan_mode': 'indexing',
+                                  'indexed_bytes': 0, 'source_bytes': 0, 'skipped_records': 0}
+        with handle:
             stat = path.stat()
             identity = f'{SCHEMA_VERSION}:{stat.st_dev}:{stat.st_ino}:' + hashlib.sha256(handle.readline(65536)).hexdigest()
-            conn.execute('BEGIN IMMEDIATE')
+            # Decide whether to re-index BEFORE acquiring the write lock.
             row = conn.execute('SELECT identity,offset,skipped,mtime FROM files WHERE path=?', (key,)).fetchone()
-            if not row or row[0] != identity or row[1] > stat.st_size or (row[1] == stat.st_size and row[3] != stat.st_mtime_ns):
-                conn.execute('DELETE FROM records WHERE path=?', (key,))
+            # mtime check is UNCONDITIONAL: a truncate-and-regrow (same first
+            # line, larger size) changes mtime and must trigger a full re-index.
+            # Gating mtime behind offset==size missed that case.
+            if not row or row[0] != identity or row[1] > stat.st_size or row[3] != stat.st_mtime_ns:
                 offset, skipped = 0, 0
             else:
                 offset, skipped = row[1], row[2]
             handle.seek(offset)
             end = min(stat.st_size, offset + PASS_BYTES)
+            parsed = []
             while handle.tell() < end:
                 start = handle.tell()
                 line = handle.readline(LINE_BYTES + 1)
@@ -115,13 +156,18 @@ def records(filepath):
                         if compact:
                             value = json.dumps(compact, ensure_ascii=False)
                             if len(value) <= 65536:
-                                conn.execute('INSERT OR REPLACE INTO records VALUES (?,?,?)', (key, start, value))
+                                parsed.append((key, start, value))
                             else:
                                 skipped += 1
                 offset = handle.tell()
-            conn.execute('INSERT OR REPLACE INTO files VALUES (?,?,?,?,?,?,?)',
-                         (key, identity, offset, stat.st_size, skipped, SCHEMA_VERSION, stat.st_mtime_ns))
-            conn.commit()
+        # Now acquire the write lock for a tight batch commit only.
+        conn.execute('BEGIN IMMEDIATE')
+        if not row or row[0] != identity or row[1] > stat.st_size or row[3] != stat.st_mtime_ns:
+            conn.execute('DELETE FROM records WHERE path=?', (key,))
+        conn.executemany('INSERT OR REPLACE INTO records(path, offset, data) VALUES (?,?,?)', parsed)
+        conn.execute('INSERT OR REPLACE INTO files(path, identity, offset, size, skipped, revision, mtime) VALUES (?,?,?,?,?,?,?)',
+                     (key, identity, offset, stat.st_size, skipped, SCHEMA_VERSION, stat.st_mtime_ns))
+        conn.commit()
         info = {'incomplete': offset < stat.st_size or skipped > 0,
                 'scan_mode': 'indexing' if offset < stat.st_size else 'indexed_full',
                 'indexed_bytes': offset, 'source_bytes': stat.st_size, 'skipped_records': skipped}

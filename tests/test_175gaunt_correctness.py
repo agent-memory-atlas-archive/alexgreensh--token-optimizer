@@ -248,6 +248,114 @@ class TestDeltaTokenAccounting:
             "reasoning_output_tokens should NOT be added on top of output_tokens"
         )
 
+    def test_cumulative_decrease_no_last_does_not_over_count(self, tmp_path):
+        """CRITICAL: cumulative token usage DECREASES mid-stream (compaction
+        reset, session resume boundary) with no last_token_usage.
+
+        Before the fix, the ``elif not turn_usage`` fallback attributed the
+        FULL cumulative total to one call, over-counting by the entire
+        pre-reset total.  After the fix, the decrease record is skipped
+        (contributes 0) and previous_usage stays at the pre-decrease baseline
+        so the next delta is correct.
+
+        Sequence: 1000 -> 1500 -> 1200(decrease) -> 1700
+        Without last_token_usage:
+          r1: first, no last -> full cum = 1000. prev=1000.
+          r2: 1500>=1000 -> delta=500. prev=1500.
+          r3: 1200<1500 -> decrease, no last -> skip(0). prev stays 1500.
+          r4: 1700>=1500 -> delta=200. prev=1700.
+          Total = 1000+500+0+200 = 1700
+        Before fix: r3 added full 1200, total = 3200.
+        """
+        records = [
+            _meta(SID_A),
+            _turn_ctx(),
+            _agent_msg(),
+            _tc(usage_cum={"input_tokens": 1000, "cached_input_tokens": 400,
+                           "output_tokens": 100, "reasoning_output_tokens": 10}),
+            _agent_msg(),
+            _tc(usage_cum={"input_tokens": 1500, "cached_input_tokens": 600,
+                           "output_tokens": 150, "reasoning_output_tokens": 15}),
+            _agent_msg(),
+            _tc(usage_cum={"input_tokens": 1200, "cached_input_tokens": 500,
+                           "output_tokens": 120, "reasoning_output_tokens": 12}),  # DECREASE
+            _agent_msg(),
+            _tc(usage_cum={"input_tokens": 1700, "cached_input_tokens": 700,
+                           "output_tokens": 170, "reasoning_output_tokens": 17}),
+        ]
+        p = write_session(tmp_path / "decrease.jsonl", records)
+        parsed = cs.parse_session_jsonl(p)
+        assert parsed["total_input_tokens"] == 1700, (
+            f"cumulative-decrease over-count: got {parsed['total_input_tokens']}, "
+            "expected 1700 (was 3200 before fix)"
+        )
+        assert parsed["total_output_tokens"] == 170, (
+            f"output over-count: got {parsed['total_output_tokens']}, expected 170"
+        )
+
+    def test_cumulative_decrease_with_last_uses_per_request(self, tmp_path):
+        """CRITICAL: cumulative DECREASES but last_token_usage IS present.
+
+        The per-request value is correct and should be used, not the delta
+        against the (now stale) previous_usage.
+
+        Sequence: 1000/last=1000 -> 1500/last=500 -> 1200/last=300 -> 1700/last=500
+          r1: last=1000. r2: delta=500. r3: decrease, last=300. r4: delta=200.
+          Total = 1000+500+300+200 = 2000
+        """
+        records = [
+            _meta(SID_A),
+            _turn_ctx(),
+            _agent_msg(),
+            _tc(usage_cum={"input_tokens": 1000, "cached_input_tokens": 400,
+                           "output_tokens": 100, "reasoning_output_tokens": 10},
+                usage_last={"input_tokens": 1000, "cached_input_tokens": 400,
+                            "output_tokens": 100, "reasoning_output_tokens": 10}),
+            _agent_msg(),
+            _tc(usage_cum={"input_tokens": 1500, "cached_input_tokens": 600,
+                           "output_tokens": 150, "reasoning_output_tokens": 15},
+                usage_last={"input_tokens": 500, "cached_input_tokens": 200,
+                            "output_tokens": 50, "reasoning_output_tokens": 5}),
+            _agent_msg(),
+            _tc(usage_cum={"input_tokens": 1200, "cached_input_tokens": 500,
+                           "output_tokens": 120, "reasoning_output_tokens": 12},
+                usage_last={"input_tokens": 300, "cached_input_tokens": 100,
+                            "output_tokens": 30, "reasoning_output_tokens": 3}),
+            _agent_msg(),
+            _tc(usage_cum={"input_tokens": 1700, "cached_input_tokens": 700,
+                           "output_tokens": 170, "reasoning_output_tokens": 17},
+                usage_last={"input_tokens": 500, "cached_input_tokens": 200,
+                            "output_tokens": 50, "reasoning_output_tokens": 5}),
+        ]
+        p = write_session(tmp_path / "decrease_with_last.jsonl", records)
+        parsed = cs.parse_session_jsonl(p)
+        assert parsed["total_input_tokens"] == 2000, (
+            f"cumulative-decrease with last: got {parsed['total_input_tokens']}, "
+            "expected 2000"
+        )
+
+    def test_negative_token_fields_clamped(self, tmp_path):
+        """MEDIUM: corrupt/adversarial negative token fields must not drive
+        cache_read, output, or cache_hit_rate negative."""
+        records = [
+            _meta(SID_A),
+            _turn_ctx(),
+            _agent_msg(),
+            _tc(usage_cum={"input_tokens": 100, "cached_input_tokens": -30,
+                           "output_tokens": -50, "reasoning_output_tokens": -10}),
+        ]
+        p = write_session(tmp_path / "negative.jsonl", records)
+        parsed = cs.parse_session_jsonl(p)
+        assert parsed["total_cache_read"] >= 0, (
+            f"negative cache_read not clamped: {parsed['total_cache_read']}"
+        )
+        assert parsed["total_output_tokens"] >= 0, (
+            f"negative output not clamped: {parsed['total_output_tokens']}"
+        )
+        assert 0.0 <= parsed["cache_hit_rate"] <= 1.0, (
+            f"cache_hit_rate out of [0,1]: {parsed['cache_hit_rate']}"
+        )
+
 
 # ===========================================================================
 # 2. PER-REQUEST LONG-CONTEXT PRICING
