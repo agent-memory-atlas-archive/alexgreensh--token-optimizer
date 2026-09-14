@@ -308,7 +308,7 @@ def find_session_jsonl_by_id(session_id: str) -> Path | None:
 
 
 def _session_meta_id(path: Path) -> str | None:
-    for record in _iter_json_records(path, skip_large_file=False):
+    for record in _iter_json_records(path, skip_large_file=True):
         if record.get("type") != "session_meta":
             continue
         value = _payload(record).get("id")
@@ -317,7 +317,7 @@ def _session_meta_id(path: Path) -> str | None:
 
 
 def _project_name_from_file(path: Path) -> str:
-    for record in _iter_json_records(path, skip_large_file=False):
+    for record in _iter_json_records(path, skip_large_file=True):
         if record.get("type") != "session_meta":
             continue
         cwd = _payload(record).get("cwd")
@@ -406,17 +406,32 @@ def _parse_session_records(records, incomplete=False, sampled=False):
             # limits change. Cumulative deltas count each API response once.
             info = payload.get('info') or {}
             if usage and info.get('total_token_usage'):
-                if previous_usage and usage['input_tokens'] >= previous_usage['input_tokens']:
-                    turn_usage = {k: max(0, usage[k] - previous_usage[k])
-                                  for k in ('input_tokens', 'cached_input_tokens', 'output_tokens', 'reasoning_output_tokens')}
-                elif not turn_usage:
-                    # First record seen (resumed session, or a tail pass that
-                    # begins mid-stream): cumulative totals are not this call's
-                    # usage. Prefer the per-request last_token_usage already
-                    # extracted above; only a record with no last_token_usage
-                    # at all falls back to the full cumulative figure.
-                    turn_usage = usage
-                previous_usage = usage
+                has_last = isinstance(info.get('last_token_usage'), dict)
+                if previous_usage and usage['input_tokens'] < previous_usage['input_tokens']:
+                    # Cumulative decreased (compaction reset, session resume
+                    # boundary, or a Codex quirk). The cumulative total is NOT
+                    # this call's work — it includes tokens from before the
+                    # reset. If last_token_usage is available, use it (per-
+                    # call, correct). If not, skip this record entirely rather
+                    # than attributing the full cumulative to one call (which
+                    # would over-count by the entire pre-reset total).
+                    # Keep previous_usage at the pre-decrease baseline so the
+                    # next delta is computed against the correct reference.
+                    if not has_last:
+                        turn_usage = None
+                    # Do NOT update previous_usage on decrease.
+                else:
+                    if previous_usage and usage['input_tokens'] >= previous_usage['input_tokens']:
+                        turn_usage = {k: max(0, usage[k] - previous_usage[k])
+                                      for k in ('input_tokens', 'cached_input_tokens', 'output_tokens', 'reasoning_output_tokens')}
+                    elif not has_last:
+                        # First record seen with no last_token_usage (resumed
+                        # session, or a tail pass that begins mid-stream):
+                        # cumulative totals are not this call's usage, but we
+                        # have no per-request value. Fall back to the full
+                        # cumulative figure as the best available estimate.
+                        turn_usage = usage
+                    previous_usage = usage
             if turn_usage:
                 model_key = current_model if current_model != _UNKNOWN_MODEL else _DEFAULT_MODEL
                 bucket = per_model_usage.setdefault(
@@ -424,13 +439,13 @@ def _parse_session_records(records, incomplete=False, sampled=False):
                     {"fresh_input": 0, "cache_read": 0, "cache_create": 0, "output": 0},
                 )
                 bucket["fresh_input"] += max(0, turn_usage["input_tokens"] - turn_usage["cached_input_tokens"])
-                bucket["cache_read"] += turn_usage["cached_input_tokens"]
-                bucket["output"] += turn_usage["output_tokens"]
+                bucket["cache_read"] += max(0, turn_usage["cached_input_tokens"])
+                bucket["output"] += max(0, turn_usage["output_tokens"])
                 if turn_usage['input_tokens'] or turn_usage['output_tokens']:
                     bucket.setdefault('requests', []).append({
                         'fresh_input': max(0, turn_usage['input_tokens'] - turn_usage['cached_input_tokens']),
-                        'cache_read': turn_usage['cached_input_tokens'],
-                        'output': turn_usage['output_tokens'],
+                        'cache_read': max(0, turn_usage['cached_input_tokens']),
+                        'output': max(0, turn_usage['output_tokens']),
                     })
 
         elif payload_type == "collab_agent_spawn_end":
@@ -537,7 +552,7 @@ def _parse_session_records(records, incomplete=False, sampled=False):
         "total_cache_create_1h": 0,
         "total_cache_create_5m": 0,
         "model_context_window": last_usage["model_context_window"] if last_usage else None,
-        "cache_hit_rate": cache_read / estimated_input if estimated_input else 0.0,
+        "cache_hit_rate": max(0.0, min(1.0, cache_read / estimated_input)) if estimated_input else 0.0,
         "avg_call_gap_seconds": None,
         "max_call_gap_seconds": None,
         "p95_call_gap_seconds": None,

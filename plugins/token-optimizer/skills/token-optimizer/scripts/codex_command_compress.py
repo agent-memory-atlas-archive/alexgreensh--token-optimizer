@@ -305,8 +305,22 @@ def run(plan):
     else:
         argv = [shell, '-c', command]
     with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
-        result = subprocess.run(argv, stdout=output, stderr=errors, env=child_env,
-                                creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        try:
+            result = subprocess.run(argv, stdout=output, stderr=errors, env=child_env,
+                                    timeout=6,
+                                    creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        except subprocess.TimeoutExpired:
+            # Stream whatever was captured before the timeout, then exit.
+            output.seek(0)
+            shutil.copyfileobj(output, sys.stdout.buffer)
+            errors.seek(0)
+            shutil.copyfileobj(errors, sys.stderr.buffer)
+            print('Token Optimizer: command timed out', file=sys.stderr)
+            return 124
+        except OSError:
+            # Spawn failed (shell binary deleted between check and exec, etc.).
+            print('Token Optimizer: failed to spawn command', file=sys.stderr)
+            return 127
         output.seek(0, 2)
         size = output.tell()
         output.seek(0)
@@ -337,9 +351,13 @@ def run(plan):
                 archive = resolve_snapshot_dir() / 'codex-command-output'
                 archive.mkdir(parents=True, exist_ok=True)
                 target = archive / (uuid.uuid4().hex + '.txt')
-                with target.open('xb') as handle:
-                    handle.write(raw_bytes)
-                short += f'\n[Token Optimizer: full command output saved to {target}]\n'
+                try:
+                    with target.open('xb') as handle:
+                        handle.write(raw_bytes)
+                except OSError:
+                    target = None  # disk full or permission denied; skip archive
+                if target:
+                    short += f'\n[Token Optimizer: full command output saved to {target}]\n'
                 if estimate_tokens(short) < estimate_tokens(raw):
                     sys.stdout.buffer.write(short.encode('utf-8'))
                     sys.stdout.buffer.flush()

@@ -710,3 +710,101 @@ def test_clean_doctor_load_json_valid(tmp_path):
     result, error = codex_doctor._load_json(path)
     assert error is None
     assert result['name'] == 'token-optimizer'
+
+
+# --------------------------------------------------------------------------- #
+# Torture gauntlet: SQLite index concurrency + truncate+regrow + missing file
+# --------------------------------------------------------------------------- #
+
+def test_records_handles_missing_file_gracefully(tmp_path):
+    """records() on a non-existent path must not raise (mirrors pending())."""
+    missing = tmp_path / "nope.jsonl"
+    records_iter, info = index.records(missing)
+    assert info["incomplete"] is True
+    assert list(records_iter) == []
+
+
+def test_records_handles_directory_gracefully(tmp_path):
+    """records() on a directory must not raise (mirrors pending())."""
+    records_iter, info = index.records(tmp_path)
+    assert info["incomplete"] is True
+    assert list(records_iter) == []
+
+
+def test_truncate_and_regrow_triggers_reindex(tmp_path, monkeypatch):
+    """HIGH: truncate+regrow with stable identity (same first line) and
+    LARGER size must trigger a full re-index, not resume from stale offset.
+
+    Before the fix, mtime was only checked when offset==size, so a
+    truncate+regrow-to-larger bypassed the re-index guard and the index
+    returned stale records from the old content.
+    """
+    SID = "regrow-aaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    meta = {"type": "session_meta", "payload": {"id": SID, "cwd": "/p"}}
+    tc = {"type": "event_msg", "payload": {"type": "token_count", "info": {
+        "total_token_usage": {"input_tokens": 100, "output_tokens": 10,
+                               "cached_input_tokens": 0, "reasoning_output_tokens": 0}}}}
+    p = tmp_path / "session.jsonl"
+    p.write_text(json.dumps(meta) + "\n" + json.dumps(tc) + "\n")
+    # First index pass
+    recs1, info1 = index.records(p)
+    list(recs1)
+    assert info1["scan_mode"] == "indexed_full"
+    # Truncate and regrow LARGER with same first line (stable identity)
+    p.write_text(json.dumps(meta) + "\n" + json.dumps(tc) + "\n" + json.dumps(tc) + "\n")
+    os.utime(p, ns=(p.stat().st_mtime_ns + 1_000_000, p.stat().st_mtime_ns + 1_000_000))
+    recs2, info2 = index.records(p)
+    records2 = list(recs2)
+    # After re-index, should see 3 records (meta + 2 token_count), not stale 2
+    assert len(records2) == 3, (
+        f"truncate+regrow returned stale records: got {len(records2)}, expected 3"
+    )
+
+
+def test_corrupt_db_self_heals(tmp_path, monkeypatch):
+    """MEDIUM: a corrupt index DB must be detected and rebuilt, not
+    permanently bypassed."""
+    db_dir = tmp_path / "data"
+    db_dir.mkdir()
+    db_path = db_dir / "codex-log-index.db"
+    # Write a corrupt DB file
+    db_path.write_bytes(b"NOT A DATABASE")
+    monkeypatch.setattr(plugin_env, "resolve_snapshot_dir", lambda: db_dir)
+    # _connect should self-heal by deleting and rebuilding
+    conn = index._connect()
+    # Should succeed and have the correct schema
+    tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "files" in tables
+    assert "records" in tables
+    conn.close()
+
+
+def test_concurrent_records_different_files_no_busy(tmp_path, monkeypatch):
+    """CRITICAL: concurrent records() calls on DIFFERENT files must not
+    fail with SQLITE_BUSY. Before the fix, the write lock was held during
+    the entire parse loop (up to 4s for 64MiB), serializing all callers."""
+    import threading
+    SID = "conc-aaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    meta = {"type": "session_meta", "payload": {"id": SID, "cwd": "/p"}}
+    tc = {"type": "event_msg", "payload": {"type": "token_count", "info": {
+        "total_token_usage": {"input_tokens": 100, "output_tokens": 10,
+                               "cached_input_tokens": 0, "reasoning_output_tokens": 0}}}}
+    errors = []
+    for i in range(4):
+        p = tmp_path / f"session_{i}.jsonl"
+        p.write_text(json.dumps(meta) + "\n" + json.dumps(tc) + "\n")
+
+    def worker(i):
+        try:
+            p = tmp_path / f"session_{i}.jsonl"
+            recs, info = index.records(p)
+            list(recs)
+        except sqlite3.OperationalError as e:
+            errors.append(str(e))
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not errors, f"concurrent records() failed with SQLITE_BUSY: {errors}"

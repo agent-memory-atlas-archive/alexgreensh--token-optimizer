@@ -290,3 +290,42 @@ def test_codex_manifest_does_not_load_claude_hook_bundle():
     manifest = json.loads((SCRIPTS.parents[2] / '.codex-plugin/plugin.json').read_text())
     assert manifest['hooks'] == './hooks/codex-hooks.json'
     assert json.loads((SCRIPTS.parents[2] / manifest['hooks']).read_text())['hooks'] == {}
+
+
+# --------------------------------------------------------------------------- #
+# Torture gauntlet: subprocess timeout + spawn failure handling
+# --------------------------------------------------------------------------- #
+
+def test_run_handles_spawn_failure(monkeypatch, capsys, tmp_path):
+    """HIGH: subprocess.run spawn failure (OSError) must return 127, not
+    crash with a Python traceback that hides the user's command."""
+    import codex_command_compress
+    # Set up a git repo so 'git status' is eligible
+    subprocess.run(['git', 'init', '-q'], cwd=tmp_path, check=True)
+    monkeypatch.chdir(tmp_path)
+    plan = {'command': 'git status', 'session_id': None, 'model': None}
+    monkeypatch.setattr(codex_command_compress, '_default_shell', lambda: '/bin/sh')
+    def fake_run(*args, **kwargs):
+        raise OSError('No such file or directory')
+    monkeypatch.setattr(subprocess, 'run', fake_run)
+    rc = codex_command_compress.run(plan)
+    assert rc == 127, f"expected 127 on spawn failure, got {rc}"
+    captured = capsys.readouterr()
+    assert 'failed to spawn' in captured.err.lower()
+
+
+def test_run_handles_timeout(monkeypatch, capsys, tmp_path):
+    """HIGH: subprocess.run timeout must return 124 and stream captured
+    output, not hang indefinitely or crash."""
+    import codex_command_compress
+    subprocess.run(['git', 'init', '-q'], cwd=tmp_path, check=True)
+    monkeypatch.chdir(tmp_path)
+    plan = {'command': 'git status', 'session_id': None, 'model': None}
+    monkeypatch.setattr(codex_command_compress, '_default_shell', lambda: '/bin/sh')
+    def fake_run(*args, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs.get('timeout', 6))
+    monkeypatch.setattr(subprocess, 'run', fake_run)
+    rc = codex_command_compress.run(plan)
+    assert rc == 124, f"expected 124 on timeout, got {rc}"
+    captured = capsys.readouterr()
+    assert 'timed out' in captured.err.lower()
