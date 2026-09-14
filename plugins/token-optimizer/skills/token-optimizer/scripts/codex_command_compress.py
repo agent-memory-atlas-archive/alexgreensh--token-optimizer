@@ -2,11 +2,15 @@
 
 Security model (hardened relative to the original design):
 
-- ``tool_input.shell`` is IGNORED, never propagated. A prompt-injected model
-  could otherwise point this auto-approved wrapper at an attacker-named
-  interpreter. Both the rewrite quoting and the ``--run`` exec always use the
-  runtime-default shell resolved here, and the injected field is stripped from
-  the ``updatedInput`` we hand back so it cannot survive into the tool call.
+- ``tool_input`` execution-context fields (``shell``, ``env``, ``cwd`` and any
+  sibling) are IGNORED, never propagated. A prompt-injected model could
+  otherwise point this auto-approved wrapper at an attacker-named interpreter
+  or redirect a confined read to a sensitive directory. Both the rewrite
+  quoting and the ``--run`` exec always use runtime defaults resolved here, and
+  ``updatedInput`` carries only the rewritten ``command`` so no model-supplied
+  field can survive into the tool call. ``--run`` also refuses to execute when
+  the ambient working directory differs from the rewrite-time cwd recorded in
+  the plan.
 - ``permissionDecision: 'allow'`` is emitted ONLY for commands whose file
   operands are provably confined to the working directory (non-hidden,
   non-sensitive, non-absolute, glob-free, no symlink escape). Eligible but
@@ -62,7 +66,13 @@ _RG_SCOPE_FLAGS = frozenset({
 # `tree --fromfile f`). The value must pass the path check like any operand,
 # and a pattern-supplying flag (-e/-f) means there is no pattern positional.
 _PATTERN_FLAGS = frozenset({'-e', '--regexp', '-f', '--file', '--fromfile'})
-_FILE_VALUE_FLAGS = frozenset({'-f', '--file', '--fromfile', '--ignore-file'})
+_FILE_VALUE_FLAGS = frozenset({'-f', '--file', '--fromfile', '--ignore-file',
+                               '--files0-from'})
+# Flags that widen a listing to hidden files (``ls -a``, ``ls -A``,
+# ``ls -la``, ``tree -a``, ``--all``, ``--almost-all``). Confinement checks
+# operands, but these flags reveal dotfile names inside the cwd.
+_HIDDEN_LISTING_RE = re.compile(r'-[a-zA-Z]*[aA][a-zA-Z]*')
+_HIDDEN_LISTING_LONG = frozenset({'--all', '--almost-all'})
 # First positional of these commands is a pattern, not a path.
 _PATTERN_FIRST_COMMANDS = frozenset({'rg', 'grep'})
 # PowerShell switches that widen a literal Get-Content/Get-ChildItem into
@@ -97,14 +107,48 @@ def eligible(command):
 
 def _default_shell():
     """The shell this runtime would use. ``tool_input.shell`` is never read:
-    it is model-controlled text and must not steer an auto-approved hook."""
+    it is model-controlled text and must not steer an auto-approved hook.
+
+    PATH is walked entry by entry and every candidate must resolve under a
+    system directory. ``shutil.which`` would return the first PATH hit, so a
+    model-controlled ``env.PATH`` could otherwise point this wrapper at an
+    attacker-placed ``bash``/``pwsh``. An environment with no validated shell
+    yields ``None`` (fail closed: the command passes through unrewritten).
+    """
     if os.name == 'nt':
-        shell = shutil.which('pwsh') or shutil.which('powershell')
+        names = ('pwsh.exe', 'powershell.exe')
+        roots = []
+        for var, fallback in (('SystemRoot', r'C:\Windows'),
+                              ('ProgramFiles', r'C:\Program Files'),
+                              ('ProgramFiles(x86)', r'C:\Program Files (x86)')):
+            raw = os.environ.get(var) or fallback
+            try:
+                roots.append(Path(raw).resolve())
+            except OSError:
+                continue
     else:
-        shell = shutil.which('bash') or shutil.which('sh')
-    if not shell or Path(shell).stem.lower() not in ('pwsh', 'powershell', 'bash', 'sh', 'zsh'):
-        return None
-    return shell
+        names = ('bash', 'sh')
+        roots = []
+        for directory in ('/bin', '/sbin', '/usr/bin', '/usr/sbin',
+                          '/usr/local/bin', '/usr/local/sbin',
+                          '/opt/homebrew/bin', '/opt/homebrew/sbin'):
+            try:
+                roots.append(Path(directory).resolve())
+            except OSError:
+                continue
+    for name in names:
+        for directory in os.environ.get('PATH', '').split(os.pathsep):
+            if not directory:
+                continue
+            try:
+                candidate = (Path(directory) / name).resolve()
+            except OSError:
+                continue
+            if (candidate.name.lower() == name and candidate.is_file()
+                    and os.access(candidate, os.X_OK)
+                    and any(candidate.is_relative_to(root) for root in roots)):
+                return str(candidate)
+    return None
 
 
 def _operand_confined(arg, base):
@@ -153,15 +197,31 @@ def _confined(command, base):
             a == '--recursive' or a == '--dereference-recursive'
             or re.fullmatch(r'-[a-zA-Z]*[rR][a-zA-Z]*', a) for a in args):
         return False
+    if cmd0 in ('ls', 'tree') and any(
+            _HIDDEN_LISTING_RE.fullmatch(a) or a in _HIDDEN_LISTING_LONG
+            for a in args):
+        return False
     expect_pattern = cmd0 in _PATTERN_FIRST_COMMANDS
     file_value_next = False
     for arg in args:
         if file_value_next:
             file_value_next = False
         elif arg.startswith('-') and arg != '-':
-            if arg in _FILE_VALUE_FLAGS:
-                file_value_next = True
-            if arg in _PATTERN_FLAGS:
+            name, sep, value = arg.partition('=')
+            if name in _FILE_VALUE_FLAGS:
+                if sep:
+                    # Attached ``--flag=VALUE``: the value is a file operand
+                    # too, so it gets the same confinement check.
+                    if not _operand_confined(value, base):
+                        return False
+                else:
+                    file_value_next = True
+            elif not sep and len(arg) > 2 and arg[:2] in _FILE_VALUE_FLAGS:
+                # Glued short form: ``grep -fFILE`` / ``rg -fFILE``.
+                if not _operand_confined(arg[2:], base):
+                    return False
+            if name in _PATTERN_FLAGS or (
+                    not sep and len(arg) > 2 and arg[:2] in _PATTERN_FLAGS):
                 expect_pattern = False
             continue
         elif expect_pattern:
@@ -176,9 +236,11 @@ def rewrite(payload):
     from plugin_env import is_v5_flag_enabled
     if not is_v5_flag_enabled('v5_bash_compress', 'TOKEN_OPTIMIZER_BASH_COMPRESS', default=True):
         return None
-    if payload.get('tool_name') != 'Bash':
+    if not isinstance(payload, dict) or payload.get('tool_name') != 'Bash':
         return None
-    tool_input = payload.get('tool_input') or {}
+    tool_input = payload.get('tool_input')
+    if not isinstance(tool_input, dict):
+        return None
     command = tool_input.get('command')
     shell = _default_shell()
     if not eligible(command) or not shell:
@@ -189,15 +251,18 @@ def rewrite(payload):
         # prompts exactly as it would without this hook).
         return None
     plan = {'command': command, 'session_id': payload.get('session_id'),
-            'model': payload.get('model')}
+            'model': payload.get('model'), 'cwd': str(Path.cwd().resolve())}
     encoded = base64.b64encode(json.dumps(plan).encode()).decode()
     argv = [sys.executable, str(Path(__file__).resolve()), '--run', encoded]
     if Path(shell).stem.lower() in ('pwsh', 'powershell'):
         rewritten = '& ' + ' '.join("'" + a.replace("'", "''") + "'" for a in argv) + '; exit $LASTEXITCODE'
     else:
         rewritten = shlex.join(argv)
-    updated = {k: v for k, v in tool_input.items() if k != 'shell'}
-    updated['command'] = rewritten
+    # updatedInput carries ONLY the rewritten command. Every other tool_input
+    # field (shell, env, cwd, and any future execution-context sibling) is
+    # model-controlled and must never reach an auto-approved tool call: env
+    # could steer PATH resolution, cwd could redirect the confined read.
+    updated = {'command': rewritten}
     return {'hookSpecificOutput': {'hookEventName': 'PreToolUse', 'permissionDecision': 'allow',
                                   'updatedInput': updated}}
 
@@ -210,6 +275,20 @@ def run(plan):
     if not eligible(command) or not _confined(command, Path.cwd().resolve()):
         print('Token Optimizer: command is not eligible', file=sys.stderr)
         return 2
+    # The plan pins the rewrite-time working directory. Confinement was proven
+    # against THAT cwd; if the ambient cwd differs (e.g. a model-controlled
+    # tool_input.cwd survived into the tool call), re-running the confined
+    # command here would read files in a different directory. Refuse.
+    expected_cwd = plan.get('cwd')
+    if expected_cwd:
+        try:
+            same_cwd = Path.cwd().resolve() == Path(str(expected_cwd)).resolve()
+        except OSError:
+            same_cwd = False
+        if not same_cwd:
+            print('Token Optimizer: working directory changed since approval',
+                  file=sys.stderr)
+            return 2
     shell = _default_shell()
     if not shell:
         print('Token Optimizer: no usable default shell', file=sys.stderr)

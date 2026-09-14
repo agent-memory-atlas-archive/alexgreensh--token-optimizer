@@ -1396,6 +1396,20 @@ def _cost_from_model_breakdown(model_usage_breakdown, tier=None, cache_create_1h
         if isinstance(requests, list) and requests:
             total += sum(_cost_from_model_breakdown({model: request}, tier=tier)
                          for request in requests if isinstance(request, dict))
+            # Bucket totals include deltas from records that were never
+            # appended to requests (e.g. a cache-read-only turn with zero
+            # input/output, or cache_create which requests never carry).
+            # Price the unpriced remainder at the aggregate rate instead of
+            # silently dropping those tokens from the cost.
+            remainder = {
+                key: max(0, int(parts.get(key) or 0) - sum(
+                    int(request.get(key) or 0) for request in requests
+                    if isinstance(request, dict)))
+                for key in ('fresh_input', 'cache_read', 'output',
+                            'cache_create', 'cache_create_1h', 'cache_create_5m')
+            }
+            if any(remainder.values()):
+                total += _cost_from_model_breakdown({model: remainder}, tier=tier)
             continue
         part_1h = parts.get("cache_create_1h")
         part_5m = parts.get("cache_create_5m")

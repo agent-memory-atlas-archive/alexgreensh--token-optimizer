@@ -234,8 +234,13 @@ def resolve_session(transcript_path=None, session_id=None):
     sid = _safe_session_id(session_id)
     if transcript_path:
         p = Path(transcript_path)
-        if p.is_file() and (not sid or _safe_session_id(p.stem) == sid or _session_meta_id(p) == sid):
-            return p
+        if p.is_file():
+            if not sid or _safe_session_id(p.stem) == sid or _session_meta_id(p) == sid:
+                return p
+            # The transcript exists but names a different session: falling
+            # through to find_session_jsonl_by_id would substitute another
+            # task's log and attribute its costs to this hook. Refuse.
+            return None
     if sid:
         return find_session_jsonl_by_id(sid)
     return None
@@ -404,7 +409,12 @@ def _parse_session_records(records, incomplete=False, sampled=False):
                 if previous_usage and usage['input_tokens'] >= previous_usage['input_tokens']:
                     turn_usage = {k: max(0, usage[k] - previous_usage[k])
                                   for k in ('input_tokens', 'cached_input_tokens', 'output_tokens', 'reasoning_output_tokens')}
-                else:
+                elif not turn_usage:
+                    # First record seen (resumed session, or a tail pass that
+                    # begins mid-stream): cumulative totals are not this call's
+                    # usage. Prefer the per-request last_token_usage already
+                    # extracted above; only a record with no last_token_usage
+                    # at all falls back to the full cumulative figure.
                     turn_usage = usage
                 previous_usage = usage
             if turn_usage:

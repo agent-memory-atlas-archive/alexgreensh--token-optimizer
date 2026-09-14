@@ -22,7 +22,7 @@ def effective_window(model):
                 percent = int(entry.get('effective_context_window_percent', 100))
                 if window > 0 and 0 < percent <= 100:
                     return window * percent // 100
-            except (KeyError, ValueError, TypeError):
+            except (KeyError, ValueError, TypeError, OverflowError):
                 pass
     return None
 

@@ -118,7 +118,7 @@ def plan_install(force: bool = False) -> dict[str, str | bool]:
 
     try:
         config_text = config_path.read_text(encoding="utf-8")
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         config_text = ""
 
     if INLINE_COMPACT_RE.search(config_text) and not force:
@@ -142,7 +142,7 @@ def install(force: bool = False) -> str:
 
     try:
         config_text, crlf = codex_io.read_config_text(config_path)
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         config_text, crlf = "", False
 
     if INLINE_COMPACT_RE.search(config_text) and not force:
@@ -228,7 +228,10 @@ def status() -> str:
     config_path = _config_path()
     if not config_path.exists():
         return f"not configured: {config_path} not found"
-    text = config_path.read_text(encoding="utf-8")
+    try:
+        text = config_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return f"not configured: {config_path} unreadable"
     if str(prompt_path) in text and prompt_path.exists():
         return f"configured: {prompt_path}"
     if "compact_prompt" in text or "experimental_compact_prompt_file" in text:

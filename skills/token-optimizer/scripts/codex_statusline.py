@@ -240,7 +240,10 @@ def status() -> str:
     config_path = _config_path()
     if not config_path.exists():
         return f"not configured: {config_path} not found"
-    text = config_path.read_text(encoding="utf-8")
+    try:
+        text = config_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return f"not configured: {config_path} unreadable"
     if MANAGED_BEGIN in text and MANAGED_END in text:
         return "configured: Token Optimizer status line"
     span = _tui_span(text)

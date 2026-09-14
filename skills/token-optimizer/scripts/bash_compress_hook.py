@@ -71,11 +71,21 @@ def main() -> None:
     # it into CLAUDE_SESSION_ID so the archive key, cross-turn dedup, and the
     # savings log (all of which read the env) attribute to the real session
     # instead of "". Empty session_id priced every event oneshot-only, dropping
-    # its reread annuity (current-week-undercount).
+    # its reread annuity (current-week-undercount). Scoped to this hook run:
+    # the finally below removes it again so in-process callers never observe a
+    # mutated parent environment.
     _sid = str(payload.get("session_id", "") or "")
-    if _sid and not os.environ.get("CLAUDE_SESSION_ID"):
+    _injected = bool(_sid) and not os.environ.get("CLAUDE_SESSION_ID")
+    if _injected:
         os.environ["CLAUDE_SESSION_ID"] = _sid
+    try:
+        _run(payload)
+    finally:
+        if _injected:
+            del os.environ["CLAUDE_SESSION_ID"]
 
+
+def _run(payload: dict) -> None:
     tool_name = payload.get("tool_name", "")
     if tool_name != "Bash":
         return
