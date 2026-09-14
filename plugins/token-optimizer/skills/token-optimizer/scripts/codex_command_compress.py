@@ -44,7 +44,10 @@ MAX_COMPRESS_BYTES = 8 * 1024 * 1024
 # A command is wrapped (and auto-allowed) only when every file operand stays
 # provably inside the working directory and names nothing sensitive. Failing
 # the gate costs only the compression: the command reaches Codex verbatim.
-_ABSOLUTE_OPERAND_RE = re.compile(r'^(?:/|\\\\|[A-Za-z]:[\\/])')
+# A single leading backslash is also absolute on Windows (drive-relative,
+# e.g. ``\Users\x\.ssh\id_rsa``). Catching it fail-closes the confinement
+# gate for rootless Windows paths that shlex would otherwise mangle.
+_ABSOLUTE_OPERAND_RE = re.compile(r'^(?:/|\\|[A-Za-z]:[\\/])')
 _GLOB_OPERAND_RE = re.compile(r'[*?\[\]{}!]')
 # Path components that hold credential/key material or secret stores. Applied
 # per-component so `src/.ssh/config` and `.env.local` are caught, not just
@@ -173,6 +176,14 @@ def _confined(command, base):
     `base` is always the real process cwd at call time -- never the
     model-influenced payload cwd, which cannot be trusted as a confinement
     boundary.
+
+    Tokenization uses ``posix=False`` so backslashes in Windows path
+    operands (``C:\\Users\\x\\.ssh\\id_rsa``) are preserved for the
+    absolute-path and sensitive-component checks. POSIX-mode shlex would
+    consume the backslashes, collapsing the path to a relative-looking
+    token that bypasses confinement. Quote characters retained by
+    ``posix=False`` are stripped before every flag/operand comparison
+    (mirroring the PowerShell branch and ``_operand_confined``).
     """
     if re.match(r'^(Get-Content|Get-ChildItem)\s', command, re.I):
         # PowerShell quoting differs from POSIX; flag-looking tokens are still
@@ -186,28 +197,41 @@ def _confined(command, base):
         cmd0 = ''
     else:
         try:
-            args = shlex.split(command)
+            args = shlex.split(command, posix=False)
         except ValueError:
             return False
-        cmd0 = args[0] if args else ''
+        cmd0 = args[0].strip('"\'') if args else ''
         args = args[1:]
-    if cmd0 == 'rg' and any(a in _RG_SCOPE_FLAGS for a in args):
+    if cmd0 == 'rg' and any(a.strip('\'"') in _RG_SCOPE_FLAGS for a in args):
         return False
-    if cmd0 == 'grep' and any(
-            a == '--recursive' or a == '--dereference-recursive'
-            or re.fullmatch(r'-[a-zA-Z]*[rR][a-zA-Z]*', a) for a in args):
-        return False
+    if cmd0 == 'grep':
+        stripped = [a.strip('\'"') for a in args]
+        if any(a == '--recursive' or a == '--dereference-recursive'
+               or re.fullmatch(r'-[a-zA-Z]*[rR][a-zA-Z]*', a) for a in stripped):
+            return False
+        # ``grep -d recurse`` / ``--directories=recurse`` is functionally -r:
+        # it recurses into directories and reads dotfiles in the cwd. The
+        # value following ``-d``/``--directories`` is the action keyword.
+        for i, a in enumerate(stripped):
+            if a == '-d' or a == '--directories':
+                nxt = stripped[i + 1] if i + 1 < len(stripped) else ''
+                if nxt == 'recurse':
+                    return False
+            elif a.startswith('--directories='):
+                if a.split('=', 1)[1] == 'recurse':
+                    return False
     if cmd0 in ('ls', 'tree') and any(
-            _HIDDEN_LISTING_RE.fullmatch(a) or a in _HIDDEN_LISTING_LONG
+            _HIDDEN_LISTING_RE.fullmatch(a.strip('\'"')) or a.strip('\'"') in _HIDDEN_LISTING_LONG
             for a in args):
         return False
     expect_pattern = cmd0 in _PATTERN_FIRST_COMMANDS
     file_value_next = False
     for arg in args:
+        tok = arg.strip('\'"')  # posix=False keeps quote characters
         if file_value_next:
             file_value_next = False
-        elif arg.startswith('-') and arg != '-':
-            name, sep, value = arg.partition('=')
+        elif tok.startswith('-') and tok != '-':
+            name, sep, value = tok.partition('=')
             if name in _FILE_VALUE_FLAGS:
                 if sep:
                     # Attached ``--flag=VALUE``: the value is a file operand
@@ -216,12 +240,12 @@ def _confined(command, base):
                         return False
                 else:
                     file_value_next = True
-            elif not sep and len(arg) > 2 and arg[:2] in _FILE_VALUE_FLAGS:
+            elif not sep and len(tok) > 2 and tok[:2] in _FILE_VALUE_FLAGS:
                 # Glued short form: ``grep -fFILE`` / ``rg -fFILE``.
-                if not _operand_confined(arg[2:], base):
+                if not _operand_confined(tok[2:], base):
                     return False
             if name in _PATTERN_FLAGS or (
-                    not sep and len(arg) > 2 and arg[:2] in _PATTERN_FLAGS):
+                    not sep and len(tok) > 2 and tok[:2] in _PATTERN_FLAGS):
                 expect_pattern = False
             continue
         elif expect_pattern:
@@ -339,6 +363,13 @@ def run(plan):
                 target = archive / (uuid.uuid4().hex + '.txt')
                 with target.open('xb') as handle:
                     handle.write(raw_bytes)
+                # Restrict to owner-only read: the archive may hold command
+                # output that touched sensitive in-cwd files. Mirrors
+                # archive_result._chmod_private_file on the tool-archive path.
+                try:
+                    os.chmod(target, 0o600)
+                except OSError:
+                    pass
                 short += f'\n[Token Optimizer: full command output saved to {target}]\n'
                 if estimate_tokens(short) < estimate_tokens(raw):
                     sys.stdout.buffer.write(short.encode('utf-8'))

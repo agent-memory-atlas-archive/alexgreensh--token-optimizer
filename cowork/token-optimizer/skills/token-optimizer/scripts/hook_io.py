@@ -108,7 +108,12 @@ def read_stdin_hook_input(max_bytes: int = 1_048_576) -> dict:
             sid = codex_session._safe_session_id(parsed.get('session_id'))
             if sid:
                 resolved = codex_session.resolve_session(parsed.get('transcript_path'), sid)
-                parsed['transcript_path'] = str(resolved) if resolved else None
+                # Only overwrite on success: resolve_session returns None when
+                # the transcript exists but names a different session. Clobbering
+                # a valid caller-provided path with None would silently lose the
+                # transcript for every hook whose session_id is stale/mismatched.
+                if resolved:
+                    parsed['transcript_path'] = str(resolved)
         return parsed
     except (OSError, json.JSONDecodeError, ValueError):
         pass

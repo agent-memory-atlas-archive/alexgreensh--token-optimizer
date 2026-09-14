@@ -508,3 +508,75 @@ def test_hidden_revealing_flags_not_auto_allowed(command, tmp_path):
 #
 # 11. PowerShell scope flags: _PS_SCOPE_FLAGS catches -Recurse, -Force, -Hidden.
 # =========================================================================== #
+
+
+# =========================================================================== #
+# CRITICAL (FIXED): shlex.split(posix=True) ate backslashes, so a Windows
+# absolute path operand like C:\Users\x\.ssh\id_rsa was tokenized to
+# C:Usersx.sshid_rsa (a relative-looking token), bypassing the absolute-path
+# and sensitive-component confinement checks. The command was auto-allowed
+# (permissionDecision='allow') and rewritten into an opaque python --run
+# blob, laundering a sensitive-path read past Codex's consent.
+#
+# Fix: _confined() now tokenizes with posix=False (preserving backslashes)
+# and _ABSOLUTE_OPERAND_RE also matches a single leading backslash.
+# =========================================================================== #
+
+@pytest.mark.parametrize('command', [
+    r'wc -l C:\Users\x\.ssh\id_rsa',
+    r'tail C:\Users\bob\.aws\credentials',
+    r'wc --files0-from=C:\Users\x\.ssh\id_rsa',
+    r'rg secret C:\Users\x\.ssh\config',
+    r'ls C:\Users\x\.ssh',
+    r'grep secret C:\Users\x\.gnupg\pubring.gpg',
+    r'wc -l \Users\x\.ssh\id_rsa',
+])
+def test_windows_backslash_path_not_auto_allowed(command):
+    """CRITICAL (fixed): backslash-bearing Windows paths must not be
+    auto-allowed. shlex.split(posix=True) ate the backslashes, making the
+    absolute path look relative/confined; posix=False preserves them so
+    _ABSOLUTE_OPERAND_RE and _SENSITIVE_COMPONENT_RE can match.
+    """
+    assert compression.rewrite(_payload(command)) is None, (
+        f"{command!r} was auto-allowed; the confinement gate was bypassed "
+        f"by shlex backslash consumption"
+    )
+
+
+def test_quoted_regex_backslash_still_confined(tmp_path):
+    """Sanity: a legitimate quoted regex with backslashes (e.g. grep '\b')
+    must still be auto-allowed. posix=False preserves quoted backslashes;
+    _operand_confined strips quotes and the pattern positional is skipped.
+    """
+    (tmp_path / 'file.txt').write_text('word boundary\n')
+    result = compression.rewrite(_payload(r"grep '\bword\b' file.txt"))
+    assert result is not None, "quoted regex with backslashes should still be confined"
+
+
+# =========================================================================== #
+# MEDIUM (FIXED): grep -d recurse / --directories=recurse bypassed the
+# recursive-grep scope check (the -r/-R regex only matches flags containing
+# r/R, not -d). This auto-allowed recursive reads of dotfiles in the cwd.
+# =========================================================================== #
+
+@pytest.mark.parametrize('command', [
+    'grep -d recurse API_KEY .',
+    'grep --directories recurse API_KEY .',
+    'grep --directories=recurse API_KEY .',
+])
+def test_grep_d_recurse_not_auto_allowed(command, tmp_path):
+    """MEDIUM (fixed): grep -d recurse is functionally -r and must not be
+    auto-allowed (it reads dotfiles in the cwd).
+    """
+    (tmp_path / 'file.txt').write_text('x\n')  # for the '.' operand
+    assert compression.rewrite(_payload(command)) is None, (
+        f"{command!r} was auto-allowed; grep -d recurse bypassed the "
+        f"recursive-grep scope check"
+    )
+
+
+def test_grep_d_read_still_allowed(tmp_path):
+    """Sanity: grep -d read (non-recursive) must still be auto-allowed."""
+    (tmp_path / 'file.txt').write_text('x\n')
+    assert compression.rewrite(_payload('grep -d read x file.txt')) is not None
+

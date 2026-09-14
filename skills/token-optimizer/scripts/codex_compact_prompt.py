@@ -17,8 +17,8 @@ MANAGED_BEGIN = "# BEGIN token-optimizer compact prompt"
 MANAGED_END = "# END token-optimizer compact prompt"
 COMPACT_FILE_RE = re.compile(r"(?m)^\s*experimental_compact_prompt_file\s*=")
 INLINE_COMPACT_RE = re.compile(r"(?m)^\s*compact_prompt\s*=")
-COMPACT_FILE_LINE_RE = re.compile(r"(?m)^(\s*)experimental_compact_prompt_file\s*=.*$")
-INLINE_COMPACT_LINE_RE = re.compile(r"(?m)^(\s*)compact_prompt\s*=.*$")
+COMPACT_FILE_LINE_RE = re.compile(r"(?m)^(\s*)(experimental_compact_prompt_file)(\s*=.*)$")
+INLINE_COMPACT_LINE_RE = re.compile(r"(?m)^(\s*)(compact_prompt)(\s*=.*)$")
 # Lines Token Optimizer commented out on install (force path). The install
 # writes ``<indent># replaced by Token Optimizer: <original line>``; uninstall
 # restores the original by stripping that prefix. Scoped to compact-prompt
@@ -85,7 +85,12 @@ def json_string(value: str) -> str:
 
 
 def _comment_out_setting(pattern: re.Pattern[str], text: str) -> str:
-    return pattern.sub(r"\1# replaced by Token Optimizer: \g<0>", text)
+    # Capture name + value separately (group 2/3) so the comment body excludes
+    # the leading whitespace captured by group 1. Using \g<0> (the whole match)
+    # would duplicate the indent on restore, breaking the byte-faithful
+    # round-trip promised in the docstring. Mirrors codex_statusline's
+    # _comment_out_existing_settings.
+    return pattern.sub(r"\1# replaced by Token Optimizer: \2\3", text)
 
 
 def _replace_or_append_config(config_text: str, prompt_path: Path, *, force: bool) -> tuple[str, str]:
