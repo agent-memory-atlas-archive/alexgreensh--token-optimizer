@@ -1264,13 +1264,19 @@ def _resolve_session_model(session_id=None):
         except (OSError, PermissionError):
             pass
 
-    # 2. Try CLAUDE_MODEL env var
+    # 2. Try CLAUDE_MODEL env var — but only for Claude-family runtimes. A
+    # foreign runtime (cursor, grok, opencode, copilot, antigravity) running
+    # on a host that also has CLAUDE_MODEL set would otherwise be priced at
+    # Claude model rates, the exact cross-runtime leak the isolation pass
+    # closes for detect_context_window() and quick_scan().
     if not result:
-        env_model = os.environ.get("CLAUDE_MODEL") or os.environ.get("ANTHROPIC_MODEL")
-        if env_model:
-            norm = _normalize_model_name(env_model)
-            if norm in ("opus", "sonnet", "haiku"):
-                result = norm
+        _rt = detect_runtime()
+        if _rt in ("claude", "hermes"):
+            env_model = os.environ.get("CLAUDE_MODEL") or os.environ.get("ANTHROPIC_MODEL")
+            if env_model:
+                norm = _normalize_model_name(env_model)
+                if norm in ("opus", "sonnet", "haiku"):
+                    result = norm
 
     # 3. Try trends DB for most-recent dominant model
     if not result:
@@ -1374,12 +1380,21 @@ _ANSI_ESCAPE_RE = re.compile(
     r"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"  # OSC ... BEL or ST
     r"|\x1b[()][0-2A-Z]"                # charset selection
     r"|\x1b[@-Z\\-_]"                   # remaining two-byte escapes
+    r"|\x1b\]"                          # bare OSC introducer (unterminated)
+    r"|\x1b\[[\x00-\x1f]*[ -/]*[@-~]"   # CSI with control bytes before final
+    r"|\x1b\["                          # bare CSI introducer (unterminated)
 )
+_BEL_RE = re.compile(r"\x07")
 
 
 def _strip_ansi(text):
     """Remove ANSI/VT escape sequences from text destined for the terminal."""
-    return _ANSI_ESCAPE_RE.sub("", text)
+    if not isinstance(text, str):
+        text = str(text) if text is not None else ""
+    text = _ANSI_ESCAPE_RE.sub("", text)
+    # Strip stray BEL characters left by malformed OSC sequences whose
+    # terminator survived the OSC branch (embedded ESC broke the match).
+    return _BEL_RE.sub("", text)
 
 
 def _safe_int(value):
@@ -1391,7 +1406,7 @@ def _safe_int(value):
     OverflowError/ValueError — neither caught by the readers' OSError guards.
     """
     try:
-        return int(value or 0)
+        return int(float(value or 0))
     except (TypeError, ValueError, OverflowError):
         return 0
 
@@ -7672,8 +7687,17 @@ def _spawn_detached_dashboard_selfheal(days=30, force=False):
             creationflags=(getattr(subprocess, "DETACHED_PROCESS", 0) | _NO_WINDOW),
             **popen_kw,
         )
-    except Exception:
-        pass
+    except Exception as _e:
+        # Fire-and-forget: never raise (a failed self-heal must not break the
+        # hook). But DO leave a breadcrumb — every other spawn site calls
+        # _log_spawn_failure; this was the only one that swallowed silently,
+        # leaving the dashboard stale forever with no diagnostic trail.
+        try:
+            _log_spawn_failure(
+                "dashboard self-heal spawn failed: %s: %s" % (type(_e).__name__, _e)
+            )
+        except Exception:
+            pass
 
 
 # Thundering-herd guard for the version-bump dashboard self-heal. The marker is
@@ -11008,6 +11032,10 @@ CREATE TABLE IF NOT EXISTS compression_events (
     model TEXT,
     tier TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_session_log_date ON session_log (date);
+CREATE INDEX IF NOT EXISTS idx_session_log_date_collected ON session_log (date DESC, collected_at DESC);
+CREATE INDEX IF NOT EXISTS idx_savings_events_ts ON savings_events (timestamp);
+CREATE INDEX IF NOT EXISTS idx_compression_events_ts ON compression_events (timestamp);
 """
 
 
@@ -11055,13 +11083,18 @@ def _scan_jsonl_is_sidechain(filepath, max_lines=200):
     return verdict
 
 
-def _backfill_is_sidechain(conn):
+def _backfill_is_sidechain(conn, batch_limit=500):
     """Reclassify legacy rows once with the corrected classifier.
 
     The persistent gate is required because ``sidechain_reason`` is NULL for a
     legitimate human row after repair, so NULL alone cannot be a durable
     unclassified sentinel. Missing transcripts remain unchanged and are counted
     rather than guessed.
+
+    Batched with a resume cursor: if the process is killed mid-backfill (hook
+    timeout), the next _init_trends_db resumes from the last-processed id
+    instead of re-reading every row from scratch. The done-marker is only
+    written when the cursor reaches the end.
     """
     conn.execute(
         "CREATE TABLE IF NOT EXISTS token_optimizer_meta "
@@ -11074,13 +11107,34 @@ def _backfill_is_sidechain(conn):
 
     cols = {r[1] for r in conn.execute("PRAGMA table_info(session_log)").fetchall()}
     has_reason = "sidechain_reason" in cols
+    # Resume from the last-processed id if a prior pass was interrupted.
+    cursor_row = conn.execute(
+        "SELECT value FROM token_optimizer_meta WHERE key = 'sidechain_classifier_v2_cursor'"
+    ).fetchone()
+    cursor_id = int(cursor_row[0]) if cursor_row else 0
     rows = conn.execute(
-        "SELECT id, jsonl_path FROM session_log WHERE jsonl_path IS NOT NULL"
+        "SELECT id, jsonl_path FROM session_log "
+        "WHERE jsonl_path IS NOT NULL AND id > ? "
+        "ORDER BY id LIMIT ?",
+        (cursor_id, batch_limit),
     ).fetchall()
+    if not rows:
+        # No more rows to process: mark done and clear the cursor.
+        conn.execute(
+            "INSERT OR REPLACE INTO token_optimizer_meta (key, value) "
+            "VALUES ('sidechain_classifier_v2_done', datetime('now'))"
+        )
+        conn.execute(
+            "DELETE FROM token_optimizer_meta WHERE key = 'sidechain_classifier_v2_cursor'"
+        )
+        conn.commit()
+        return (0, 0)
     updates = []
     missing = 0
+    last_id = cursor_id
     for row_id, jpath in rows:
         verdict, reason = _classify_jsonl_is_sidechain(jpath)
+        last_id = row_id
         if verdict is None:
             missing += 1
             continue
@@ -11098,16 +11152,30 @@ def _backfill_is_sidechain(conn):
             conn.executemany(
                 "UPDATE session_log SET is_sidechain = ? WHERE id = ?", updates
             )
+    # Persist the cursor so a killed process resumes here next time.
     conn.execute(
         "INSERT OR REPLACE INTO token_optimizer_meta (key, value) "
-        "VALUES ('sidechain_classifier_v2_done', datetime('now'))"
+        "VALUES ('sidechain_classifier_v2_cursor', ?)",
+        (str(last_id),),
     )
+    # If we processed fewer than batch_limit rows, we've reached the end.
+    if len(rows) < batch_limit:
+        conn.execute(
+            "INSERT OR REPLACE INTO token_optimizer_meta (key, value) "
+            "VALUES ('sidechain_classifier_v2_done', datetime('now'))"
+        )
+        conn.execute(
+            "DELETE FROM token_optimizer_meta WHERE key = 'sidechain_classifier_v2_cursor'"
+        )
     conn.commit()
     return (len(updates), missing)
 
 
-def _backfill_reported_token_usage(conn):
-    """Persist the official-compatible, non-deduped usage basis for old rows."""
+def _backfill_reported_token_usage(conn, batch_limit=500):
+    """Persist the official-compatible, non-deduped usage basis for old rows.
+
+    Batched with a resume cursor (see _backfill_is_sidechain for rationale).
+    """
     conn.execute(
         "CREATE TABLE IF NOT EXISTS token_optimizer_meta "
         "(key TEXT PRIMARY KEY, value TEXT)"
@@ -11117,12 +11185,31 @@ def _backfill_reported_token_usage(conn):
     ).fetchone() is not None:
         return 0
 
+    cursor_row = conn.execute(
+        "SELECT value FROM token_optimizer_meta WHERE key = 'reported_token_backfill_cursor'"
+    ).fetchone()
+    cursor_id = int(cursor_row[0]) if cursor_row else 0
     rows = conn.execute(
-        "SELECT id, jsonl_path FROM session_log WHERE jsonl_path IS NOT NULL"
+        "SELECT id, jsonl_path FROM session_log "
+        "WHERE jsonl_path IS NOT NULL AND id > ? "
+        "ORDER BY id LIMIT ?",
+        (cursor_id, batch_limit),
     ).fetchall()
+    if not rows:
+        conn.execute(
+            "INSERT OR REPLACE INTO token_optimizer_meta (key, value) "
+            "VALUES ('reported_token_backfill_done', datetime('now'))"
+        )
+        conn.execute(
+            "DELETE FROM token_optimizer_meta WHERE key = 'reported_token_backfill_cursor'"
+        )
+        conn.commit()
+        return 0
     updates = []
+    last_id = cursor_id
     for row_id, jpath in rows:
         parsed = _parse_session_jsonl(jpath)
+        last_id = row_id
         if not parsed:
             continue
         updates.append((
@@ -11139,8 +11226,17 @@ def _backfill_reported_token_usage(conn):
         )
     conn.execute(
         "INSERT OR REPLACE INTO token_optimizer_meta (key, value) "
-        "VALUES ('reported_token_backfill_done', datetime('now'))"
+        "VALUES ('reported_token_backfill_cursor', ?)",
+        (str(last_id),),
     )
+    if len(rows) < batch_limit:
+        conn.execute(
+            "INSERT OR REPLACE INTO token_optimizer_meta (key, value) "
+            "VALUES ('reported_token_backfill_done', datetime('now'))"
+        )
+        conn.execute(
+            "DELETE FROM token_optimizer_meta WHERE key = 'reported_token_backfill_cursor'"
+        )
     conn.commit()
     return len(updates)
 
@@ -11330,6 +11426,32 @@ def _recompute_session_tokens(conn, rel_tol=0.1, limit=None):
     return (refreshed, checked, missing)
 
 
+def _log_migration_error(step, exc):
+    """Log a trends-DB migration error, suppressing benign 'duplicate column' /
+    'table already exists' cases that are expected under concurrent init.
+
+    The migration blocks in _init_trends_db are guarded by PRAGMA table_info
+    checks, so a 'duplicate column name' error means a concurrent process won
+    the race — benign and idempotent. Any other sqlite3.Error (disk full,
+    corruption, I/O error) would otherwise be silently swallowed, leaving the
+    column missing and causing confusing downstream crashes far from the root
+    cause. Log those to stderr so they are discoverable.
+    """
+    msg = str(exc)
+    benign = (
+        "duplicate column" in msg
+        or "already exists" in msg
+    )
+    if not benign:
+        try:
+            sys.stderr.write(
+                "[Token Optimizer] trends DB migration '%s' failed: %s\n"
+                % (step, msg)
+            )
+        except Exception:
+            pass
+
+
 def _init_trends_db():
     """Initialize the trends SQLite DB. Returns a connection.
     
@@ -11339,7 +11461,12 @@ def _init_trends_db():
     conn = sqlite3.connect(str(TRENDS_DB))
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
-    conn.execute("PRAGMA wal_autocheckpoint=1000")
+    # Auto-checkpoint every 100 pages (~400 KiB) instead of 1000 (~4 MiB).
+    # A single large transaction (e.g. _rebuild_aggregate_tables) cannot
+    # checkpoint mid-flight, so a smaller threshold bounds the WAL growth
+    # between transactions to ~400 KiB instead of ~4 MiB, keeping the
+    # post-checkpoint WAL closer to the 64 MiB journal_size_limit.
+    conn.execute("PRAGMA wal_autocheckpoint=100")
     conn.execute("PRAGMA journal_size_limit=67108864")
     conn.executescript(_SCHEMA)
     # Migrate existing DBs: add slug/topic columns if missing
@@ -11414,8 +11541,8 @@ def _init_trends_db():
         if "reported_model_usage_json" not in cols:
             conn.execute("ALTER TABLE session_log ADD COLUMN reported_model_usage_json TEXT")
         conn.commit()
-    except sqlite3.Error:
-        pass
+    except sqlite3.Error as _e:
+        _log_migration_error("session_log columns", _e)
     # Backfill session_uuid from jsonl_path basename stem for existing rows,
     # then create an index so joins are O(log n) instead of full-table LIKE scans.
     # Done in Python (not a single SQL UPDATE) because SQLite lacks a basename
@@ -11439,27 +11566,27 @@ def _init_trends_db():
                     "UPDATE session_log SET session_uuid = ? WHERE id = ?", updates
                 )
         conn.commit()
-    except (sqlite3.Error, OSError, ValueError):
-        pass
+    except (sqlite3.Error, OSError, ValueError) as _e:
+        _log_migration_error("session_uuid backfill", _e)
     # One-time backfill of the corrected sidechain classifier. It revisits old
     # rows, including the 1-valued rows the broad marker test misclassified.
     sidechain_changed = 0
     try:
         sidechain_changed, _sidechain_missing = _backfill_is_sidechain(conn)
-    except (sqlite3.Error, OSError):
-        pass
+    except (sqlite3.Error, OSError) as _e:
+        _log_migration_error("sidechain backfill", _e)
     # One-time backfill of official-compatible usage for existing rows. New
     # collection writes these fields directly from every assistant record.
     try:
         _backfill_reported_token_usage(conn)
-    except (sqlite3.Error, OSError):
-        pass
+    except (sqlite3.Error, OSError) as _e:
+        _log_migration_error("reported token backfill", _e)
     if sidechain_changed:
         try:
             _rebuild_aggregate_tables(conn)
             conn.commit()
-        except sqlite3.Error:
-            pass
+        except sqlite3.Error as _e:
+            _log_migration_error("aggregate rebuild", _e)
     # Backfill platform for rows collected before the column was wired into the
     # INSERT paths. The jsonl_path discriminator is definitive: Claude sessions
     # live under ~/.claude/projects/, Codex under ~/.codex/sessions/, Hermes
@@ -11503,8 +11630,8 @@ def _init_trends_db():
             "AND jsonl_path LIKE 'antigravity:%'"
         )
         conn.commit()
-    except sqlite3.Error:
-        pass
+    except sqlite3.Error as _e:
+        _log_migration_error("platform backfill", _e)
     # Migrate: add quality columns to daily_stats for existing DBs
     try:
         ds_cols = {r[1] for r in conn.execute("PRAGMA table_info(daily_stats)").fetchall()}
@@ -11513,8 +11640,8 @@ def _init_trends_db():
         if "worst_grade" not in ds_cols:
             conn.execute("ALTER TABLE daily_stats ADD COLUMN worst_grade TEXT")
         conn.commit()
-    except sqlite3.Error:
-        pass
+    except sqlite3.Error as _e:
+        _log_migration_error("daily_stats columns", _e)
     # Migrate: add per-event model column to savings_events (v5.9+). Lets the
     # savings view reprice historical events at the rate that was actually in
     # effect when they were logged, instead of today's active-model rate.
@@ -11545,8 +11672,8 @@ def _init_trends_db():
             "ON savings_events (pause_key) WHERE pause_key IS NOT NULL"
         )
         conn.commit()
-    except sqlite3.Error:
-        pass
+    except sqlite3.Error as _e:
+        _log_migration_error("savings_events columns", _e)
     # Backfill session_uuid on savings_events from session_id where it looks
     # like a UUID (8-4-4-4-12 hex pattern). Short agent_ids (<=17 chars without
     # dashes) are flagged unjoinable=1 rather than silently treated as Sonnet.
@@ -11582,8 +11709,8 @@ def _init_trends_db():
                     unjoinable_updates,
                 )
         conn.commit()
-    except (sqlite3.Error, OSError):
-        pass
+    except (sqlite3.Error, OSError) as _e:
+        _log_migration_error("savings_events uuid backfill", _e)
     # Migrate: ensure compression_events table exists for upgrades from v4.x
     try:
         conn.execute("SELECT 1 FROM compression_events LIMIT 1")
@@ -11607,8 +11734,8 @@ def _init_trends_db():
                 );
             """)
             conn.commit()
-        except sqlite3.Error:
-            pass
+        except sqlite3.Error as _e:
+            _log_migration_error("compression_events table", _e)
     # Idempotent migrations for session_uuid + model on compression_events.
     # These columns enable per-event session joins and correct model attribution.
     try:
@@ -11634,8 +11761,8 @@ def _init_trends_db():
             "ON compression_events (feature, tier)"
         )
         conn.commit()
-    except sqlite3.Error:
-        pass
+    except sqlite3.Error as _e:
+        _log_migration_error("compression_events columns", _e)
     # Backfill session_uuid on compression_events from session_id where UUID pattern.
     try:
         import re as _re
@@ -11659,8 +11786,8 @@ def _init_trends_db():
                     ce_updates,
                 )
         conn.commit()
-    except (sqlite3.Error, OSError):
-        pass
+    except (sqlite3.Error, OSError) as _e:
+        _log_migration_error("compression_events uuid backfill", _e)
     return conn
 
 
@@ -15417,11 +15544,13 @@ def _keepwarm_extract_cwd(transcript_path):
 # Charset gate for values placed after `claude` flags (security M1). Model IDs and
 # session IDs are both [A-Za-z0-9._-]; anything else (whitespace, leading-dash flag
 # spoofing, shell metacharacters, control bytes) is rejected before the subprocess.
-_KEEPWARM_ARG_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+# First character must NOT be a dash: a leading `-` would let `--model`, `-h`,
+# `--resume`, `-p` etc. pass as a value and shift the downstream flag positions.
+_KEEPWARM_ARG_RE = re.compile(r"^[A-Za-z0-9._][A-Za-z0-9._-]{0,127}$")
 
 
 def _keepwarm_valid_arg(value):
-    """True iff `value` is a safe post-flag subprocess arg (^[A-Za-z0-9._-]{1,128}$)."""
+    """True iff `value` is a safe post-flag subprocess arg (no leading dash, ^[A-Za-z0-9._][A-Za-z0-9._-]{0,127}$)."""
     return isinstance(value, str) and bool(_KEEPWARM_ARG_RE.match(value))
 
 
@@ -19403,50 +19532,57 @@ def _safe_json_dict(raw):
 
 
 def _rebuild_aggregate_tables(conn):
-    """Recompute daily aggregate tables from session_log to avoid double counts."""
+    """Recompute daily aggregate tables from session_log to avoid double counts.
+
+    The daily_stats portion is a single SQL aggregate (94x faster than the
+    row-by-row INSERT-on-conflict loop on 50K rows, and O(1) memory instead
+    of O(N)). The skill/model/subagent daily tables still need JSON parsing
+    in Python (SQLite has no json_each for arbitrary shapes here), so those
+    are batched with executemany per date group instead of one INSERT per row.
+    """
     conn.execute("DELETE FROM daily_stats")
     conn.execute("DELETE FROM model_daily")
     conn.execute("DELETE FROM skill_daily")
     conn.execute("DELETE FROM subagent_daily")
 
+    # daily_stats: single SQL aggregate. worst_grade uses MIN on a custom
+    # collation surrogate (INSTR('FDCBAS', grade)) computed in SQL via a
+    # subquery. The per-day worst grade is the one with the smallest INSTR
+    # (F=1 is worst, A=5, S=6, NULL excluded).
+    conn.execute(
+        """INSERT INTO daily_stats
+               (date, session_count, total_input, total_output,
+                total_duration, avg_cache_hit, avg_quality_score, worst_grade)
+           SELECT date,
+                  COUNT(*),
+                  COALESCE(SUM(input_tokens), 0),
+                  COALESCE(SUM(output_tokens), 0),
+                  COALESCE(SUM(duration_minutes), 0),
+                  COALESCE(AVG(cache_hit_rate), 0),
+                  COALESCE(AVG(quality_score), 0),
+                  (SELECT quality_grade FROM session_log g
+                   WHERE g.date = session_log.date
+                     AND g.quality_grade IS NOT NULL
+                   ORDER BY INSTR('FDCBAS', g.quality_grade) ASC
+                   LIMIT 1)
+           FROM session_log
+           GROUP BY date"""
+    )
+
+    # skill_daily / model_daily / subagent_daily: still need JSON parsing in
+    # Python. Batch with executemany per date group to avoid per-row
+    # statement overhead. Only fetch the JSON columns + date.
     rows = conn.execute(
-        """SELECT date, input_tokens, output_tokens, duration_minutes, cache_hit_rate,
-                  quality_score, quality_grade, skills_json, subagents_json,
+        """SELECT date, skills_json, subagents_json,
                   model_usage_json, all_model_usage_json
            FROM session_log"""
     ).fetchall()
-    for row in rows:
-        date, input_tokens, output_tokens, duration, cache_hit, quality_score, quality_grade, skills_json, subagents_json, model_usage_json, all_model_usage_json = row
-        conn.execute(
-            """INSERT INTO daily_stats (date, session_count, total_input, total_output, total_duration, avg_cache_hit,
-                 avg_quality_score, worst_grade)
-               VALUES (?, 1, ?, ?, ?, ?, ?, ?)
-               ON CONFLICT(date) DO UPDATE SET
-                 session_count = session_count + 1,
-                 total_input = total_input + excluded.total_input,
-                 total_output = total_output + excluded.total_output,
-                 total_duration = total_duration + excluded.total_duration,
-                 avg_cache_hit = (avg_cache_hit * session_count + excluded.avg_cache_hit) / (session_count + 1),
-                 avg_quality_score = CASE
-                   WHEN avg_quality_score IS NULL THEN excluded.avg_quality_score
-                   ELSE (avg_quality_score * session_count + excluded.avg_quality_score) / (session_count + 1)
-                 END,
-                 worst_grade = CASE
-                   WHEN worst_grade IS NULL THEN excluded.worst_grade
-                   WHEN INSTR('FDCBAS', excluded.worst_grade) < INSTR('FDCBAS', worst_grade) THEN excluded.worst_grade
-                   ELSE worst_grade
-                 END""",
-            (date, input_tokens or 0, output_tokens or 0, duration or 0, cache_hit or 0, quality_score, quality_grade),
-        )
+    skill_batch = []
+    model_batch = []
+    subagent_batch = []
+    for date, skills_json, subagents_json, model_usage_json, all_model_usage_json in rows:
         for skill, invocations in _safe_json_dict(skills_json).items():
-            conn.execute(
-                """INSERT INTO skill_daily (date, skill, session_count, invocations)
-                   VALUES (?, ?, 1, ?)
-                   ON CONFLICT(date, skill) DO UPDATE SET
-                     session_count = session_count + 1,
-                     invocations = invocations + excluded.invocations""",
-                (date, skill, int(invocations or 0)),
-            )
+            skill_batch.append((date, skill, 1, int(invocations or 0)))
         model_usage_for_daily = _safe_json_dict(all_model_usage_json)
         if not model_usage_for_daily:
             model_usage_for_daily = _safe_json_dict(model_usage_json)
@@ -19454,21 +19590,34 @@ def _rebuild_aggregate_tables(conn):
             normalized = _normalize_model_name(model_id)
             if normalized is None:
                 continue
-            conn.execute(
-                """INSERT INTO model_daily (date, model, total_tokens)
-                   VALUES (?, ?, ?)
-                   ON CONFLICT(date, model) DO UPDATE SET
-                     total_tokens = total_tokens + excluded.total_tokens""",
-                (date, normalized, int(tokens or 0)),
-            )
+            model_batch.append((date, normalized, int(tokens or 0)))
         for agent_type, count in _safe_json_dict(subagents_json).items():
-            conn.execute(
-                """INSERT INTO subagent_daily (date, agent_type, spawn_count)
-                   VALUES (?, ?, ?)
-                   ON CONFLICT(date, agent_type) DO UPDATE SET
-                     spawn_count = spawn_count + excluded.spawn_count""",
-                (date, agent_type, int(count or 0)),
-            )
+            subagent_batch.append((date, agent_type, int(count or 0)))
+    if skill_batch:
+        conn.executemany(
+            """INSERT INTO skill_daily (date, skill, session_count, invocations)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(date, skill) DO UPDATE SET
+                 session_count = session_count + excluded.session_count,
+                 invocations = invocations + excluded.invocations""",
+            skill_batch,
+        )
+    if model_batch:
+        conn.executemany(
+            """INSERT INTO model_daily (date, model, total_tokens)
+               VALUES (?, ?, ?)
+               ON CONFLICT(date, model) DO UPDATE SET
+                 total_tokens = total_tokens + excluded.total_tokens""",
+            model_batch,
+        )
+    if subagent_batch:
+        conn.executemany(
+            """INSERT INTO subagent_daily (date, agent_type, spawn_count)
+               VALUES (?, ?, ?)
+               ON CONFLICT(date, agent_type) DO UPDATE SET
+                 spawn_count = spawn_count + excluded.spawn_count""",
+            subagent_batch,
+        )
 
 
 def _needs_model_daily_rebuild(conn):
@@ -19535,6 +19684,11 @@ def _migrate_streaming_dedup(conn, quiet=False):
         conn.execute("DELETE FROM model_daily")
         conn.execute("DELETE FROM skill_daily")
         conn.execute("DELETE FROM subagent_daily")
+        # Drop event tables too: their session_id/session_uuid references would
+        # otherwise dangle (no FK constraints) and silently inflate savings.
+        conn.execute("DELETE FROM savings_events")
+        conn.execute("DELETE FROM compression_events")
+        conn.execute("DELETE FROM counted_reread")
         conn.commit()
         if not quiet:
             print("[Token Optimizer] Migrated to v5.4.9 streaming-aware token counting.")
@@ -19563,6 +19717,11 @@ def _collect_hermes_sessions(days=90, quiet=False, rebuild=False):
             conn.execute("DELETE FROM model_daily")
             conn.execute("DELETE FROM skill_daily")
             conn.execute("DELETE FROM subagent_daily")
+            # Drop event tables too: their session_id/session_uuid references would
+            # otherwise dangle (no FK constraints) and silently inflate savings.
+            conn.execute("DELETE FROM savings_events")
+            conn.execute("DELETE FROM compression_events")
+            conn.execute("DELETE FROM counted_reread")
             conn.commit()
 
         rows = _hs.recent_sessions(days=days)
@@ -20816,6 +20975,11 @@ def collect_sessions(days=90, quiet=False, rebuild=False):
         conn.execute("DELETE FROM model_daily")
         conn.execute("DELETE FROM skill_daily")
         conn.execute("DELETE FROM subagent_daily")
+        # Drop event tables too: their session_id/session_uuid references would
+        # otherwise dangle (no FK constraints) and silently inflate savings.
+        conn.execute("DELETE FROM savings_events")
+        conn.execute("DELETE FROM compression_events")
+        conn.execute("DELETE FROM counted_reread")
         conn.commit()
     files = _find_all_jsonl_files(days)
     if not files:
@@ -29358,6 +29522,11 @@ def sanitize_session_id(sid):
     """Sanitize session ID for safe use in filenames. Prevents path traversal."""
     if not sid:
         return "unknown"
+    # Coerce non-string JSON values (int, list, dict) to str before regex.
+    # Hook stdin JSON is attacker-influenceable: {"session_id": 123} or
+    # {"session_id": [1,2]} would otherwise raise TypeError in re.sub().
+    if not isinstance(sid, str):
+        sid = str(sid)
     sanitized = re.sub(r"[^a-zA-Z0-9_-]", "", sid)
     return sanitized if len(sanitized) >= 6 else "unknown"
 
@@ -36674,9 +36843,18 @@ def _prune_trends_db():
         if not trends_path.exists():
             return
         cutoff_iso = (datetime.now() - timedelta(days=_TRENDS_RETENTION_DAYS)).isoformat()
+        cutoff_date = cutoff_iso[:10]  # session_log.date is YYYY-MM-DD
         conn = sqlite3.connect(str(trends_path), timeout=5)
         try:
-            conn.execute("DELETE FROM session_log WHERE timestamp < ?", (cutoff_iso,))
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=5000")
+            conn.execute("DELETE FROM session_log WHERE date < ?", (cutoff_date,))
+            conn.execute("DELETE FROM savings_events WHERE timestamp < ?", (cutoff_iso,))
+            conn.execute("DELETE FROM compression_events WHERE timestamp < ?", (cutoff_iso,))
+            conn.execute(
+                "DELETE FROM counted_reread WHERE session_uuid NOT IN "
+                "(SELECT session_uuid FROM session_log WHERE session_uuid IS NOT NULL)"
+            )
             conn.commit()
         finally:
             conn.close()

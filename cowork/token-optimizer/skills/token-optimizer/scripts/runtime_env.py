@@ -500,14 +500,29 @@ def _non_symlinked_fallback(env_var: str, fallback: Path) -> Path:
                 .replace("_", "-")
             ) or "runtime-home"
             alt = _safe_home() / ".token-optimizer" / slug
+            # Resolve outside the f-string so a diagnostic OSError does not
+            # discard `alt` and fall through to returning the symlink itself.
+            try:
+                resolved = fallback.resolve(strict=False)
+            except OSError:
+                resolved = "<unresolvable>"
             _warn_once(
                 f"[Token Optimizer] Warning: default runtime home {fallback} is a symlink "
-                f"(resolves to {fallback.resolve(strict=False)}); refusing to follow it "
+                f"(resolves to {resolved}); refusing to follow it "
                 f"into a foreign tree. Using {alt} instead."
             )
             return alt
     except OSError:
-        pass
+        # If the symlink check itself raised, we cannot confirm the path is
+        # safe. Fail closed: return the alt dir rather than the unverified
+        # fallback (which may be a symlink we could not inspect).
+        slug = (
+            env_var.lower()
+            .removeprefix("token_optimizer_")
+            .removesuffix("_home").removesuffix("_dir")
+            .replace("_", "-")
+        ) or "runtime-home"
+        return _safe_home() / ".token-optimizer" / slug
     return fallback
 
 
