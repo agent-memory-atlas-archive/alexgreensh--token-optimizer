@@ -1,0 +1,114 @@
+---
+/**
+ * Terminal-Bench 2 floor chart: cost per task and input tokens, plugin on vs
+ * off, on Claude Haiku 4.5. Hollow dots are the all-81 point estimates (their
+ * 95% intervals cross zero and are not drawn); solid dots with bars are the
+ * 57-task non-thrash cohort with its 95% interval. Scale: −30% at x=60,
+ * 0 at x=522.9 (15.43 px per point). Numbers come from
+ * research/findings/2026-09-14-terminal-bench-settled-numbers.md, verbatim.
+ */
+---
+
+<figure class="tb-chart">
+  <svg viewBox="0 0 600 270" role="img" aria-labelledby="tb-chart-title tb-chart-desc">
+    <title id="tb-chart-title">Terminal-Bench 2: change in cost per task and input tokens with Token Optimizer on</title>
+    <desc id="tb-chart-desc">Cost per task: −14.9% over all 81 tasks (interval crosses zero), −14.3% over the 57 non-thrash tasks with a 95% interval from −23.2% to −4.3%. Input tokens: −12.1% over all 81 (interval crosses zero), −17.8% over the 57 non-thrash tasks with a 95% interval from −28.0% to −5.6%. Both sealed intervals stay below zero.</desc>
+
+    <g class="axis-labels">
+      <text x="60" y="260" text-anchor="middle">−30%</text>
+      <text x="214.3" y="260" text-anchor="middle">−20%</text>
+      <text x="368.6" y="260" text-anchor="middle">−10%</text>
+      <text x="522.9" y="260" text-anchor="middle">0</text>
+    </g>
+    <g class="grid">
+      <line x1="60" y1="18" x2="60" y2="240" />
+      <line x1="214.3" y1="18" x2="214.3" y2="240" />
+      <line x1="368.6" y1="18" x2="368.6" y2="240" />
+    </g>
+    <line class="zero" x1="522.9" y1="12" x2="522.9" y2="244" />
+    <text class="zero-label" x="530" y="22">no change</text>
+
+    <text class="measure" x="60" y="36">Cost per task</text>
+    <circle class="hollow" cx="293.0" cy="52" r="6" />
+    <text class="caption" x="293.0" y="72" text-anchor="middle">−14.9% · all 81, interval crosses zero</text>
+    <line class="ci" x1="164.9" y1="94" x2="456.5" y2="94" />
+    <circle class="solid" cx="302.2" cy="94" r="7" />
+    <text class="sealed" x="302.2" y="115" text-anchor="middle">−14.3% · 57 non-thrash, sealed</text>
+
+    <text class="measure" x="60" y="150">Input tokens</text>
+    <circle class="hollow" cx="336.2" cy="166" r="6" />
+    <text class="caption" x="336.2" y="186" text-anchor="middle">−12.1% · all 81, interval crosses zero</text>
+    <line class="ci" x1="90.9" y1="208" x2="436.5" y2="208" />
+    <circle class="solid" cx="248.2" cy="208" r="7" />
+    <text class="sealed" x="248.2" y="229" text-anchor="middle">−17.8% · 57 non-thrash, sealed</text>
+  </svg>
+  <figcaption>
+    Hollow dots are the all-81 point estimates; their intervals cross zero and are not drawn.
+    Solid dots with bars are the 57-task cohort with its 95% interval. Both bars stay left of
+    the "no change" line.
+  </figcaption>
+</figure>
+
+<style>
+  .tb-chart {
+    margin: 1.5rem 0 0;
+  }
+  .tb-chart svg {
+    width: 100%;
+    max-width: 100%;
+    height: auto;
+    display: block;
+    font-family: var(--sl-font-mono);
+  }
+  .tb-chart figcaption {
+    color: var(--sl-color-gray-3);
+    font-size: var(--sl-text-sm);
+    margin-top: 0.5rem;
+  }
+  .axis-labels text {
+    font-size: 11px;
+    fill: var(--sl-color-gray-3);
+  }
+  .grid line {
+    stroke: var(--sl-color-hairline);
+    stroke-width: 1;
+  }
+  .zero {
+    stroke: var(--sl-color-gray-4);
+    stroke-width: 1.5;
+  }
+  .zero-label {
+    font-size: 11px;
+    fill: var(--sl-color-gray-3);
+  }
+  .measure {
+    font-family: var(--sl-font);
+    font-size: 13px;
+    font-weight: 600;
+    fill: var(--sl-color-white);
+  }
+  .hollow {
+    fill: var(--sl-color-bg);
+    stroke: var(--sl-color-accent);
+    stroke-width: 2;
+  }
+  .solid {
+    fill: var(--sl-color-accent);
+    stroke: var(--sl-color-bg);
+    stroke-width: 2;
+  }
+  .ci {
+    stroke: var(--sl-color-accent);
+    stroke-width: 4;
+    stroke-linecap: round;
+  }
+  .caption {
+    font-size: 11.5px;
+    fill: var(--sl-color-gray-3);
+  }
+  .sealed {
+    font-size: 12px;
+    font-weight: 600;
+    fill: var(--sl-color-white);
+  }
+</style>

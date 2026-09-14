@@ -1,0 +1,198 @@
+---
+title: Benchmarks
+description: "How Token Optimizer measures what it saves: three separate lenses (a Terminal-Bench floor, a controlled per-mechanism A/B, and one real month), the safety suite that guards all of them, and the commands to reproduce every figure on your own data."
+---
+
+import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+Every number Token Optimizer publishes comes with its method, its interval where one exists, and a
+command to regenerate it. There are three benchmark stories, and they answer three different
+questions. They are never added together or compared as if they were one claim.
+
+<CardGrid>
+  <LinkCard
+    title="Terminal-Bench floor"
+    href="/reference/benchmarks/terminal-bench/"
+    description="The full 81-task Terminal-Bench 2 suite, plugin on vs off, 373 trials. Cost −14.3% and input tokens −17.8% on the sealed 57-task cohort, intervals excluding zero. Only 1 of 6 levers fires, so it is the least to expect."
+  />
+  <LinkCard
+    title="Controlled A/B"
+    href="/reference/benchmarks/controlled-a-b/"
+    description="One mechanism at a time, same task 20× on and 20× off, comprehension-checked. −11% on command-heavy work, −15.7% on search-heavy work, no tax on a light session."
+  />
+  <LinkCard
+    title="One real month"
+    href="/reference/benchmarks/real-world/"
+    description="The author's last 30 days of real coding with all six levers on: about $1,396 in API-equivalent value and 59.6M tokens never sent, roughly 28% of the workload. Metered and estimated labelled every time."
+  />
+</CardGrid>
+
+## Six levers, and which benchmark sees them
+
+Most of what a coding assistant pays for is not your question. It is the tool output, file contents
+and earlier turns that get resent on every call. Token Optimizer works on that overhead with six
+levers, all automatic. A benchmark can only measure the levers its tasks give something to do.
+
+| Lever | What it does | Terminal-Bench | Controlled A/B | Real month |
+|---|---|:---:|:---:|:---:|
+| Tool-output compression | Long command output is archived to disk and replaced with a short stub; the full text is one call away | fires | fires | fires |
+| Cross-turn dedup | Content that would be resent unchanged on the next turn is sent once | idle | idle | fires |
+| Delta-read | Re-reading a file you just edited returns only what changed | idle | tested, inconclusive | fires |
+| Structure-map skeletons | A very large first read arrives as signatures and imports, full file archived | idle | idle | fires |
+| Checkpoint-restore | When a long session compacts, decisions and files in play are restored instead of re-read | idle | idle | fires |
+| Model routing | Routine turns can run on a lighter model | idle | idle | fires |
+| **Levers active** | | **1 of 6** | **1 of 6** | **6 of 6** |
+
+Terminal-Bench tasks are short, single-shot terminal jobs: the agent rarely re-reads a file, never
+runs long enough to compact, and the model is held fixed. The controlled A/B holds the model fixed
+and runs short sessions by design. Both are floors. Real coding fires all six.
+
+## Trust tiers
+
+Token Optimizer never sums different kinds of evidence into one number. Every table on these pages
+is labelled with its tier.
+
+| Tier | Meaning |
+|---|---|
+| Measured | Directly metered: each saving logged as it happened, with before and after token counts |
+| Estimated | Modelled from what happened, such as repeat reads avoided on later turns; shown separately, never dressed up as metered |
+| Opportunity | Realizable if you act on an audit recommendation; never folded into a headline |
+
+Prompt-cache savings (`cache_read`) are never claimed as standalone Token Optimizer savings; the
+cache is free infrastructure. Where an estimate uses cache-read rates, it is priced at the rate the
+turn actually paid, and it stops at the session's next real compaction.
+
+## What it never breaks
+
+Saving tokens is only worth something if the assistant still knows what it needs to know, your
+prompt cache still works, and nothing sensitive gets mangled. Three checks cover that.
+
+**Your prompt cache stays warm.** Compression that rewrites content already in the cached prefix
+forces the model to re-bill that prefix. Token Optimizer archives to a stable stub instead, so the
+cached prefix stays intact. In long sessions (more than 50 messages) the cache-hit rate is slightly
+higher with archives on than off:
+
+| Long sessions (more than 50 messages) | Cache-hit rate |
+|---|---:|
+| With Token Optimizer archives | 0.969 |
+| Without | 0.958 |
+
+**The full output is always one step away.** Nothing is thrown away. Every compressed result is
+archived first and can be expanded on demand, so a stub is never the only copy.
+
+**87 safety fixtures, all passing.** Each fixture is a real piece of output with a must-preserve
+list, a must-not-contain list (which catches hallucination), and a minimum compression ratio. A
+fixture passes only when all three checks hold. The rules that matter most: credentials such as AWS
+keys, GitHub personal access tokens and Slack tokens are never stripped, and error output and the
+output of failed commands always pass through untouched.
+
+<details>
+<summary>The 87 fixtures by category</summary>
+
+| Category | Fixtures | What it tests |
+|---|---:|---|
+| test_exts | 10 | test-runner variants across file extensions |
+| build | 8 | cargo, make, webpack, tsc, gradle |
+| git | 7 | status, log, diff, merge conflicts |
+| lint | 7 | eslint, ruff, clippy, pylint |
+| logs | 7 | nginx, docker, systemd, application |
+| tee_on_failure | 5 | failed commands keep full output |
+| json | 4 | value-preserving structured compression |
+| csv | 4 | columnar compression |
+| stack_trace | 4 | frame-limited tracebacks |
+| cloud_cli | 4 | aws, gcloud, az output |
+| search_results | 4 | grep and web search condensed to top hits |
+| security | 3 | AWS keys, GitHub PATs, Slack tokens (must NOT be stripped) |
+| tree | 3 | nested directory structures |
+| progress | 3 | download and install progress bars |
+| list | 3 | long listings |
+| k8s | 3 | kubectl output |
+| test_runner | 2 | pytest, jest, go test |
+| error | 2 | non-zero exit, permission denied (must pass through raw) |
+| package_install | 1 | pip and package managers |
+| directory_listing | 1 | large `ls` output |
+| npm_install | 1 | npm ci and install |
+| test | 1 | generic test output |
+
+</details>
+
+## How to read them, in four lines
+
+1. **Three measurements, never combined.** The Terminal-Bench floor and the controlled A/B are
+   controlled experiments with one lever active. The real month is one person's usage with all six.
+   None is used to inflate another.
+2. **Intervals before point estimates.** The whole 81-task suite was run and its point estimates
+   are shown. A saving is claimed only where the 95% interval stays below zero, which is the
+   57-task cohort. Anything wider is called directional and left at that.
+3. **Metered and estimated are labelled every time.** Where a figure is modelled rather than
+   logged, the label says so, on these pages and on the dashboard.
+4. **The parts that touch your data run on your own history.** The savings report and the safety
+   suite ship in the repo. The Terminal-Bench comparison runs on the public Harbor plus
+   Terminal-Bench 2 harness, with the full method documented.
+
+## Reproducing the numbers
+
+Run any of these against your own data. Results will differ based on your usage; that is the point.
+
+```bash
+# Fixture suite (validates compression quality)
+python3 scripts/benchmark.py
+python3 scripts/benchmark.py --json
+
+# Savings ledger (the real-month tiers, from your own sessions)
+python3 scripts/measure.py savings
+python3 scripts/measure.py savings --json
+
+# Live compression stats (from your history database)
+python3 scripts/measure.py compression-stats
+python3 scripts/measure.py compression-stats --days 7 --json
+
+# Historical corpus replay (first-read skeleton analysis)
+python3 scripts/compression_backfill.py
+python3 scripts/compression_backfill.py --limit 100 --json
+
+# Structure-map proof from your own transcripts
+python3 scripts/measure.py structure-proof
+python3 scripts/measure.py structure-proof --torture
+
+# Cohort status and tripwire state
+python3 scripts/measure.py cohorts status --json
+
+# Full dashboard (all layers visualized)
+python3 scripts/measure.py dashboard
+```
+
+The `--write-cohorts` and `--write-events` flags on `compression_backfill.py` promote validated
+cohorts and write events to the history database; without them the backfill is read-only analysis.
+
+## Token counting
+
+Token counts use a `bytes / 4` BPE proxy, which carries roughly 15% error versus actual Claude
+tokenization. The proxy is applied consistently across every measurement, so before/after ratios
+are reliable even where the absolute count is approximate. The Terminal-Bench and controlled A/B
+pages count real billed tokens from the session transcripts instead.
+
+## Known measurement gaps
+
+These are documented because honest measurement says where it is uncertain.
+
+- **Opus fast-mode cost is under-counted by roughly 50%.** Fast mode is billed at 2x the standard
+  rate but is not exposed in session JSONL, the statusline input, or settings. Fast-mode sessions
+  are priced at the standard rate until the transcript exposes the mode, so their real cost is
+  understated.
+- **Cache-health waste is an opportunity-tier estimate.** The cache-report headline is built from a
+  prefix-rewrite heuristic because JSONL does not expose cache-key identity. Run
+  `cache-report --verbose` to break the headline down by affected session, with the widest
+  waste-triggering gap and re-written token count per session, so any disputed figure traces to
+  its source.
+- **Keep-Warm savings are a projection, not realized dollars.** The dollar figure is the shipping
+  policy replayed over real pause history, not a separate model. On a subscription machine
+  Keep-Warm stays off, so no dollars are realized and the figure reads as projected.
+- **Sub-agent savings are a platform gap outside Claude Code.** OpenClaw and OpenCode have no
+  Claude-style sidechain transcripts, so the sub-agent pool reads zero there rather than being
+  estimated.
+- **The re-read mechanism is unproven in isolation.** The controlled A/B's re-read test was
+  inconclusive and is reported as a gap, not a claim.
+
+For the full methodology including the per-provider cache profile registry and the Keep-Warm
+honesty rules, see the repository's `BENCHMARK.md`.
