@@ -1317,7 +1317,7 @@ def _simulate_model_switch(session_data, target_model="sonnet"):
     total_input = session_data.get("total_input_tokens", 0)
     total_output = session_data.get("total_output_tokens", 0)
     cache_hit = session_data.get("cache_hit_rate", 0)
-    cache_read = int(total_input * cache_hit)
+    cache_read = _safe_int(total_input * cache_hit)
     uncached = max(0, total_input - cache_read)
 
     dom_model = max(model_usage, key=model_usage.get) if model_usage else "unknown"
@@ -1380,6 +1380,20 @@ _ANSI_ESCAPE_RE = re.compile(
 def _strip_ansi(text):
     """Remove ANSI/VT escape sequences from text destined for the terminal."""
     return _ANSI_ESCAPE_RE.sub("", text)
+
+
+def _safe_int(value):
+    """Coerce to int, mapping non-finite/garbage input to 0.
+
+    Claude-path equivalent of codex_session._safe_int: json.loads accepts the
+    non-standard Infinity/NaN literals, so a corrupt or hostile transcript can
+    put float("inf")/nan into usage fields where int() then raises
+    OverflowError/ValueError — neither caught by the readers' OSError guards.
+    """
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError, OverflowError):
+        return 0
 
 
 def estimate_tokens_from_file(filepath):
@@ -3075,7 +3089,9 @@ def _codex_config_int(name: str) -> int | None:
     value = _read_codex_config().get(name)
     try:
         parsed = int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
+        # TOML allows `inf`/`nan` literals: int(inf) raises OverflowError,
+        # int(nan) ValueError — both mean "no usable value", skip the key.
         return None
     return parsed if parsed > 0 else None
 
@@ -3183,7 +3199,9 @@ def detect_context_window():
         configured_window = _codex_config_int("model_context_window")
         if configured_window:
             return remember((configured_window, "codex config: model_context_window"))
-        model = os.environ.get("CODEX_MODEL") or os.environ.get("OPENAI_MODEL") or _codex_config_model()
+        model = ((os.environ.get("CODEX_MODEL") or "").strip()
+                 or (os.environ.get("OPENAI_MODEL") or "").strip()
+                 or _codex_config_model())
         model_note = f" for {model}" if model else ""
         return remember((CODEX_DEFAULT_EFFECTIVE_CONTEXT_WINDOW, f"Codex conservative effective window{model_note} (override: TOKEN_OPTIMIZER_CONTEXT_SIZE)"))
     # Hermes: Hermes does not expose a model field in
@@ -3197,6 +3215,13 @@ def detect_context_window():
             if _is_1m_model(model):
                 return remember((1_000_000, f"hermes env: {model} (1M)"))
         return remember((200_000, "hermes default (200K. Override: TOKEN_OPTIMIZER_CONTEXT_SIZE)"))
+    # Foreign runtimes (cursor, antigravity, grok, opencode, copilot) must not
+    # inherit Claude's model env vars, ~/.claude config, or the 1M Claude
+    # default — a conservative labeled default, always overridable via
+    # TOKEN_OPTIMIZER_CONTEXT_SIZE.
+    _rt = detect_runtime()
+    if _rt != "claude":
+        return remember((200_000, f"{_rt} default (200K conservative. Override: TOKEN_OPTIMIZER_CONTEXT_SIZE)"))
     # Detect from model string in environment
     model = os.environ.get("CLAUDE_MODEL", "").lower()
     if not model:
@@ -3452,8 +3477,12 @@ def quick_scan(as_json=False):
         _qmodel = ((os.environ.get("CODEX_MODEL") or "").strip()
                    or (os.environ.get("OPENAI_MODEL") or "").strip()
                    or _codex_config_model() or "codex")
-    else:
+    elif _rt in ("claude", "hermes"):
         _qmodel = os.environ.get("CLAUDE_MODEL") or os.environ.get("ANTHROPIC_MODEL")
+    else:
+        # Foreign runtimes have no Claude-model settings to read — leave the
+        # model unresolved rather than inherit another runtime's env vars.
+        _qmodel = None
     quality_est, _qcurve = _estimate_quality_with_curve(fill_pct, model=_qmodel, context_window=ctx_window)
     if _rt == "codex" and _qcurve == "anthropic-default":
         # Custom/unknown Codex model string (o3, gpt-4.1, custom-provider
@@ -3462,6 +3491,11 @@ def quick_scan(as_json=False):
         # documented Codex default.
         quality_est, _qcurve = _estimate_quality_with_curve(
             fill_pct, model="codex", context_window=ctx_window)
+    elif _rt not in ("claude", "hermes", "codex") and _qcurve == "anthropic-default":
+        # No model-family knowledge for this runtime — the estimate came from
+        # the generic fill-fraction curve, so label it honestly instead of
+        # implying an Anthropic curve scored a foreign runtime.
+        _qcurve = "generic-fill"
     band_name, band_color = _degradation_band(fill_pct)
 
     # Top offenders
@@ -4465,11 +4499,13 @@ def print_snapshot_summary(snapshot):
     print(f"  {core_label:<35s} {core.get('tokens', 0):>6,} tokens")
 
     print(f"  {'=' * 53}")
+    # Minimal/external snapshots may carry only `total_overhead`.
+    est_total = t.get("estimated_total", t.get("total_overhead", 0))
     total_label = "LOCAL FOOTPRINT (measurable)" if _cowork else "ESTIMATED TOTAL"
-    print(f"  {total_label:<35s} {t['estimated_total']:>6,} tokens")
+    print(f"  {total_label:<35s} {est_total:>6,} tokens")
     ctx_window, ctx_source = detect_context_window()
     ctx_label = _fmt_context_window(ctx_window)
-    pct_of_ctx = t['estimated_total'] / ctx_window * 100
+    pct_of_ctx = est_total / ctx_window * 100 if ctx_window else 0
     if _cowork:
         # The denominator (context window) is real, but the numerator is ONLY the
         # locally-controllable slice: platform overhead is not counted, so this %
@@ -4529,10 +4565,11 @@ def print_snapshot_summary(snapshot):
     truncated_descs = [s for s in all_verbose if s.get("truncated")]
     verbose_descs = [s for s in all_verbose if not s.get("truncated")]
     if truncated_descs:
-        names = [s["name"] for s in truncated_descs]
+        # Skill names come from SKILL.md frontmatter — attacker-influenceable.
+        names = [_strip_ansi(str(s["name"])) for s in truncated_descs]
         print(f"  TRUNCATED skill descriptions (>1,536 chars): {len(truncated_descs)} ({', '.join(names[:5])}{'...' if len(truncated_descs) > 5 else ''})")
     if verbose_descs:
-        names = [s["name"] for s in verbose_descs]
+        names = [_strip_ansi(str(s["name"])) for s in verbose_descs]
         print(f"  Verbose skill descriptions (>200 chars): {len(verbose_descs)} ({', '.join(names[:5])}{'...' if len(verbose_descs) > 5 else ''})")
 
     # Calibration gap
@@ -7870,7 +7907,8 @@ def _generate_codex_auto_recommendations(components, trends=None, days=30):
     # descriptions here, not a silent-truncation claim.
     very_verbose = verbose
     if very_verbose:
-        names = ", ".join(s["name"] for s in very_verbose[:8])
+        # Frontmatter names are attacker-influenceable — strip escapes.
+        names = ", ".join(_strip_ansi(str(s["name"])) for s in very_verbose[:8])
         quick.append(
             f"**Tighten {len(very_verbose)} Codex skill descriptions (>200 chars)**: "
             f"{names}{'...' if len(very_verbose) > 8 else ''}. "
@@ -7927,6 +7965,121 @@ def _generate_codex_auto_recommendations(components, trends=None, days=30):
         "**Start fresh between unrelated Codex tasks**: "
         "Session continuity is valuable inside a task, but stale tool outputs and old plans hurt quality. Use a new thread or compact/checkpoint when the objective changes."
     )
+
+    sections = []
+    if quick:
+        sections.append("## Quick Wins\n\n" + "\n\n".join(f"- [ ] {item}" for item in quick))
+    if medium:
+        sections.append("## Medium Effort\n\n" + "\n\n".join(f"- [ ] {item}" for item in medium))
+    if deep:
+        sections.append("## Deep Optimization\n\n" + "\n\n".join(f"- [ ] {item}" for item in deep))
+    if habits:
+        sections.append("## Behavioral Habits\n\n" + "\n\n".join(f"- [ ] {item}" for item in habits))
+
+    plan_md = "\n\n".join(sections) if sections else ""
+    total_count = len(quick) + len(medium) + len(deep) + len(habits)
+    return plan_md, total_count
+
+
+def _generate_foreign_auto_recommendations(components, trends=None, days=30):
+    """Optimization plan for runtimes with no Claude/Codex instruction-file
+    surface (cursor, antigravity, grok, opencode, copilot, hermes).
+
+    The Claude rules (CLAUDE.md/MEMORY.md trimming, ~/.claude paths, Anthropic
+    line guidance) must never reach these users, and we do not fabricate
+    runtime-specific knobs we cannot verify. Only runtime-neutral advice is
+    emitted; when no measurable surface exists, the plan says so plainly.
+    """
+    quick = []
+    medium = []
+    deep = []
+    habits = []
+
+    rt_label = runtime_name_for_humans()
+
+    skills = components.get("skills", {})
+    if skills.get("count", 0) > 0 and skills.get("tokens", 0) > 0:
+        medium.append(
+            f"**Audit the installed skill surface ({skills['count']} skills, ~{skills['tokens']:,} metadata tokens)**: "
+            f"Skill names and descriptions shape tool discovery before the first prompt. "
+            f"Disable or remove skills you do not use via {rt_label}'s own configuration."
+        )
+    verbose = components.get("skill_frontmatter_quality", {}).get("verbose_skills", [])
+    if verbose:
+        names = ", ".join(_strip_ansi(str(s["name"])) for s in verbose[:8])
+        medium.append(
+            f"**Tighten {len(verbose)} verbose skill descriptions (>200 chars)**: "
+            f"{names}{'...' if len(verbose) > 8 else ''}. "
+            "Descriptions should be trigger text, not documentation; keep usage detail in the skill body."
+        )
+
+    mcp = components.get("mcp_tools", {})
+    mcp_servers = int(mcp.get("server_count", 0) or 0)
+    if mcp_servers > 8:
+        medium.append(
+            f"**Audit MCP servers ({mcp_servers} configured)**: "
+            "Each server can expand the active tool surface with names, descriptions, and schemas. "
+            f"Disable duplicate or rarely used servers in {rt_label}'s MCP configuration."
+        )
+
+    # Unused skills — same review shape as the Claude rule but with
+    # runtime-neutral grep/archive wording and the runtime's own slim clause
+    # (no name-only / disable-model-invocation claims outside Claude Code).
+    if trends:
+        never_used = [
+            s for s in trends.get("skills", {}).get("never_used", [])
+            if not _is_own_tool_skill(s)
+        ]
+        _si = components.get("skills", {})
+        _actual_avg = (_si.get("tokens", 0) // max(_si.get("count", 1), 1)
+                       if _si.get("count", 0) > 0 else TOKENS_PER_SKILL_APPROX)
+        installed_count = trends.get("skills", {}).get("installed_count", 0)
+        if len(never_used) >= 5:
+            overhead = len(never_used) * _actual_avg
+            show_count = min(len(never_used), 8)
+            skill_list = ", ".join(_strip_ansi(str(s)) for s in sorted(never_used)[:show_count])
+            remaining = len(never_used) - show_count
+            quick.append(
+                f"**Review {show_count} skills not invoked in {days} days ({len(never_used)} of {installed_count})**: "
+                f"Each installed skill can cost ~{_actual_avg} tokens in the startup listing, every session, whether you use it or not.\n"
+                f"  Start with these: {skill_list}"
+                + (f"\n  ({remaining} more will surface after you archive these and re-run.)" if remaining > 0 else "") +
+                f"\n  For each skill, ask: do I use this? Is it seasonal? Does anything depend on it? "
+                f"(grep for the skill name in {rt_label}'s instruction, rules, and skills files)"
+                + _skill_slim_clause(_actual_avg, detect_runtime()) +
+                f"  Archive (harder step, for truly-dead skills) by moving the skill directory to a backup folder OUTSIDE {rt_label}'s skills directory. "
+                f"Restore any skill by moving it back. "
+                f"~{overhead:,} tokens recoverable across all {len(never_used)}."
+            )
+        elif len(never_used) >= 2:
+            overhead = len(never_used) * _actual_avg
+            skill_list = ", ".join(_strip_ansi(str(s)) for s in sorted(never_used))
+            medium.append(
+                f"**Review {len(never_used)} skills not invoked in {days} days**: "
+                f"{skill_list}."
+                + _skill_slim_clause(_actual_avg, detect_runtime()) +
+                f"  Or archive truly-dead skills by moving them to a backup folder OUTSIDE {rt_label}'s skills directory. "
+                f"~{overhead:,} tokens recoverable."
+            )
+
+    habits.append(
+        "**Scope sessions to one task**: Every runtime degrades as transcripts grow — "
+        "start a fresh session between unrelated tasks rather than letting one "
+        "conversation accumulate stale context."
+    )
+    habits.append(
+        "**Keep the stable prompt prefix stable**: Prompt caching across runtimes "
+        "rewards an unchanged instruction/tool prefix — avoid churning enabled "
+        "skills, servers, or instructions mid-session."
+    )
+
+    if not (quick or medium or deep):
+        quick.append(
+            f"**No locally measurable startup overhead for {rt_label}**: "
+            "This runtime does not expose a Claude/Codex-style instruction file or "
+            "skill manifest to Token Optimizer, so there is nothing to trim. The "
+            "habits below still apply."
+        )
 
     sections = []
     if quick:
@@ -8025,8 +8178,15 @@ def generate_auto_recommendations(components, trends=None, days=30):
 
     Returns (plan_markdown_string, recommendation_count).
     """
-    if detect_runtime() == "codex":
+    _rec_rt = detect_runtime()
+    if _rec_rt == "codex":
         return _generate_codex_auto_recommendations(components, trends=trends, days=days)
+    if _rec_rt != "claude":
+        # Foreign runtimes (hermes, cursor, antigravity, grok, opencode,
+        # copilot): the rules below emit Claude-only content — CLAUDE.md,
+        # MEMORY.md, ~/.claude paths, Anthropic line guidance — so they get a
+        # runtime-neutral plan instead of the Claude rule set.
+        return _generate_foreign_auto_recommendations(components, trends=trends, days=days)
 
     quick = []
     medium = []
@@ -8127,7 +8287,7 @@ def generate_auto_recommendations(components, trends=None, days=30):
         if len(never_used) >= 5:
             overhead = len(never_used) * _actual_avg
             show_count = min(len(never_used), 8)
-            skill_list = ", ".join(sorted(never_used)[:show_count])
+            skill_list = ", ".join(_strip_ansi(str(s)) for s in sorted(never_used)[:show_count])
             remaining = len(never_used) - show_count
             quick.append(
                 f"**Review {show_count} skills not invoked in {days} days ({len(never_used)} of {installed_count}, counting Skill calls and slash commands)**: "
@@ -8143,7 +8303,7 @@ def generate_auto_recommendations(components, trends=None, days=30):
             )
         elif len(never_used) >= 2:
             overhead = len(never_used) * _actual_avg
-            skill_list = ", ".join(sorted(never_used))
+            skill_list = ", ".join(_strip_ansi(str(s)) for s in sorted(never_used))
             medium.append(
                 f"**Review {len(never_used)} skills not invoked in {days} days**: "
                 f"No Skill call or slash command for these in {days} days: {skill_list}."
@@ -8205,7 +8365,7 @@ def generate_auto_recommendations(components, trends=None, days=30):
     very_verbose = [s for s in verbose if not s.get("truncated")]
     moderate_verbose = [s for s in verbose if 120 < s.get("description_chars", 0) <= 200]
     if truncated:
-        names = [s["name"] for s in truncated[:10]]
+        names = [_strip_ansi(str(s["name"])) for s in truncated[:10]]
         est_waste = sum(int((s["description_chars"] - _SKILL_DESC_TRUNCATION_LIMIT) / CHARS_PER_TOKEN) for s in truncated)
         quick.append(
             f"**{len(truncated)} skill descriptions TRUNCATED by Claude Code (>1,536 chars)**: "
@@ -8216,7 +8376,7 @@ def generate_auto_recommendations(components, trends=None, days=30):
             f"~{est_waste:,} tokens wasted."
         )
     if very_verbose:
-        names = [s["name"] for s in very_verbose[:10]]
+        names = [_strip_ansi(str(s["name"])) for s in very_verbose[:10]]
         est_waste = sum(int((s["description_chars"] - 80) / CHARS_PER_TOKEN) for s in very_verbose)
         quick.append(
             f"**Tighten {len(very_verbose)} verbose skill descriptions (>200 chars)**: "
@@ -8226,7 +8386,7 @@ def generate_auto_recommendations(components, trends=None, days=30):
             f"~{est_waste:,} tokens recoverable."
         )
     if moderate_verbose:
-        names = [s["name"] for s in moderate_verbose[:10]]
+        names = [_strip_ansi(str(s["name"])) for s in moderate_verbose[:10]]
         est_waste = sum(int((s["description_chars"] - 80) / CHARS_PER_TOKEN) for s in moderate_verbose)
         medium.append(
             f"**Tighten {len(moderate_verbose)} verbose skill descriptions (120-200 chars, target 80)**: "
@@ -8327,7 +8487,7 @@ def generate_auto_recommendations(components, trends=None, days=30):
     plugin_suspicious = components.get("plugin_skills", {}).get("suspicious_paths", [])
     if plugin_dupes:
         dupe_count = sum(len(v) - 1 for v in plugin_dupes.values())
-        dupe_names = list(plugin_dupes.keys())
+        dupe_names = [_strip_ansi(str(n)) for n in plugin_dupes.keys()]
         # Estimate wasted tokens: each duplicate copy loads the same skill frontmatter again
         avg_tokens = TOKENS_PER_SKILL_APPROX
         ps_data = components.get("plugin_skills", {})
@@ -8527,9 +8687,24 @@ def generate_coach_data(focus=None, components=None, trends=None):
         components = measure_components()
     totals = calculate_totals(components)
     context_window = detect_context_window()[0]
-    is_codex = detect_runtime() == "codex"
-    instruction_label = "AGENTS.md" if is_codex else "CLAUDE.md"
-    memory_label = "Codex memories" if is_codex else "MEMORY.md"
+    _rt = detect_runtime()
+    is_codex = _rt == "codex"
+    is_claude = _rt == "claude"
+    # Claude-family = Claude-model runtimes where Sonnet/Haiku routing advice
+    # is valid. File surfaces (CLAUDE.md, ~/.claude paths) are Claude-only —
+    # hermes runs Claude models but has no CLAUDE.md.
+    is_claude_family = _rt in ("claude", "hermes")
+    if is_codex:
+        instruction_label = "AGENTS.md"
+        memory_label = "Codex memories"
+    elif is_claude:
+        instruction_label = "CLAUDE.md"
+        memory_label = "MEMORY.md"
+    else:
+        # Foreign runtimes (cursor, antigravity, grok, opencode, copilot,
+        # hermes) have no CLAUDE.md/MEMORY.md surface — label generically.
+        instruction_label = "agent instructions"
+        memory_label = "agent memory"
 
     # Collect trends if not provided
     if trends is None:
@@ -8633,7 +8808,7 @@ def generate_coach_data(focus=None, components=None, trends=None):
     claude_lines = 0
     for key in components:
         if (
-            (not is_codex and key.startswith("claude_md"))
+            (is_claude and key.startswith("claude_md"))
             or (is_codex and key.startswith("agents_md"))
         ) and components[key].get("exists"):
             claude_tokens += components[key].get("tokens", 0)
@@ -8674,8 +8849,10 @@ def generate_coach_data(focus=None, components=None, trends=None):
         })
         score += 5
 
-    # Check MEMORY.md
-    mem = components.get("memory_md", {})
+    # Check MEMORY.md — a Claude/Codex-only surface. Foreign runtimes have no
+    # auto-load memory file and never produce this component; do not evaluate
+    # an injected/foreign one under a Claude label.
+    mem = components.get("memory_md", {}) if (is_claude or is_codex) else {}
     mem_lines = mem.get("lines", 0)
     if mem_lines > 200:
         patterns_bad.append({
@@ -8720,9 +8897,10 @@ def generate_coach_data(focus=None, components=None, trends=None):
             "detail": f"{mcp_servers} servers ({mcp_tokens:,} tokens, {mcp_pct:.1f}% of context)",
         })
 
-    # Check file exclusion rules (permissions.deny)
+    # Check file exclusion rules (permissions.deny) — .claude/settings.json is
+    # a Claude-only config surface, so the advice is Claude-only too.
     exclusion = components.get("file_exclusion", {})
-    if not is_codex and not exclusion.get("has_rules"):
+    if is_claude and not exclusion.get("has_rules"):
         patterns_bad.append({
             "name": "Missing file exclusion rules",
             "severity": "medium",
@@ -8767,14 +8945,16 @@ def generate_coach_data(focus=None, components=None, trends=None):
             "earned": True,
         })
         score += 5
-    elif hooks.get("configured") and "SessionEnd" in hooks.get("names", []):
+    elif is_claude and hooks.get("configured") and "SessionEnd" in hooks.get("names", []):
         patterns_good.append({
             "name": "SessionEnd Hook Installed",
             "detail": "Usage tracking active",
             "earned": True,
         })
         score += 5
-    else:
+    elif is_claude or is_codex:
+        # Hook-install advice exists only for runtimes TO can install into;
+        # foreign runtimes get no hook pattern at all.
         patterns_bad.append({
             "name": "No Codex Stop Hook" if is_codex else "No SessionEnd Hook",
             "severity": "low",
@@ -8794,7 +8974,7 @@ def generate_coach_data(focus=None, components=None, trends=None):
             opus_pct = model_mix.get("opus", 0) / total_model_tokens * 100
             haiku_pct = model_mix.get("haiku", 0) / total_model_tokens * 100
             _opus_addiction_fired = False
-            if not is_codex and opus_pct > 85:
+            if is_claude_family and opus_pct > 85:
                 fix_msg = "Route data-gathering agents to Haiku, analysis to Sonnet"
                 if default_model and "opus" in str(default_model).lower():
                     fix_msg += f". Root cause: settings.json has \"model\": \"{default_model}\" which may override routing"
@@ -8819,16 +8999,17 @@ def generate_coach_data(focus=None, components=None, trends=None):
     verbose = [s for s in quality.get("verbose_skills", [])
                if not _is_own_tool_skill(s.get("name"))
                and s.get("description_chars", 0) > 200]
-    if is_codex:
-        # The 1,536-char silent truncation is a Claude Code behavior — Codex
-        # does not cut descriptions at that limit. A truncated-flagged entry
-        # under Codex is simply a very long description: keep it in the verbose
-        # set so it still surfaces instead of vanishing from every warning.
-        verbose_only = verbose
-        truncated_skills = []
-    else:
+    if is_claude:
         truncated_skills = [s for s in verbose if s.get("truncated")]
         verbose_only = [s for s in verbose if not s.get("truncated")]
+    else:
+        # The 1,536-char silent truncation is a Claude Code behavior — Codex
+        # and every other runtime do not cut descriptions at that limit. A
+        # truncated-flagged entry off-Claude is simply a very long
+        # description: keep it in the verbose set so it still surfaces instead
+        # of vanishing from every warning.
+        verbose_only = verbose
+        truncated_skills = []
     if truncated_skills:
         patterns_bad.append({
             "name": "Truncated Skill Descriptions",
@@ -8859,7 +9040,7 @@ def generate_coach_data(focus=None, components=None, trends=None):
     # Check settings env vars for optimization opportunities. Resolve across
     # process env + all settings files so a project-level opt-out is honoured.
     claudeai_val = _resolve_feature_env("ENABLE_CLAUDEAI_MCP_SERVERS") or ""
-    if not is_codex and str(claudeai_val).lower() != "false" and mcp_servers > 3:
+    if is_claude and str(claudeai_val).lower() != "false" and mcp_servers > 3:
         questions.append("Cloud-synced MCP servers from claude.ai may be adding overhead. Have you reviewed which servers are cloud-synced vs local?")
 
     # WebSearch routing nudge (post-hoc detector)
@@ -8893,7 +9074,7 @@ def generate_coach_data(focus=None, components=None, trends=None):
             if md_comp.get("exists") and md_comp.get("content"):
                 _claude_md_content = md_comp["content"]
                 break
-        if not _claude_md_content and not is_codex:
+        if not _claude_md_content and is_claude:
             for path in (CLAUDE_DIR / "CLAUDE.md", Path.home() / "CLAUDE.md", Path.cwd() / "CLAUDE.md"):
                 if path.exists():
                     try:
@@ -8945,9 +9126,12 @@ def generate_coach_data(focus=None, components=None, trends=None):
 
             # Enrich overpowered findings with counterfactual (Claude model
             # ladder only — under Codex a "switch to Sonnet" estimate would be
-            # foreign-runtime advice)
-            detail = f["evidence"]
-            if f["name"] == "overpowered" and recent_files and not is_codex:
+            # foreign-runtime advice). Detector evidence interpolates raw
+            # session-log strings (e.g. a model_usage key), which are
+            # attacker-influenceable — strip terminal escapes before the text
+            # reaches patterns_bad detail/fix and the coach print.
+            detail = _strip_ansi(str(f["evidence"]))
+            if f["name"] == "overpowered" and recent_files and is_claude_family:
                 try:
                     latest = _parse_session_jsonl(str(recent_files[0][0]))
                     if latest:
@@ -8964,10 +9148,10 @@ def generate_coach_data(focus=None, components=None, trends=None):
                 else f"~{f.get('savings_tokens', 0):,} tokens"
             )
             patterns_bad.append({
-                "name": f["name"].replace("_", " ").title(),
+                "name": _strip_ansi(str(f["name"].replace("_", " ").title())),
                 "severity": severity,
                 "detail": detail,
-                "fix": f["suggestion"],
+                "fix": _strip_ansi(str(f["suggestion"])),
                 "savings": savings,
             })
             score -= 3
@@ -9076,7 +9260,9 @@ def generate_coach_data(focus=None, components=None, trends=None):
                             "detail": f"Cache hit rate fell from {older_avg_chr:.0%} to {recent_avg_chr:.0%}, but {multi_model_pct:.0f}% of recent sessions switched models mid-session. Model switches invalidate the prompt cache (expected behavior)",
                             "fix": ("Set the session model up front (config.toml `model`) instead of switching mid-session. Codex subagents run in separate contexts, so a smaller model for them does not disturb the main session's cache"
                                     if is_codex else
-                                    "Pick one model per session when possible. Use /model at session start, not mid-conversation. Subagent model routing (Haiku/Sonnet) is fine, it runs in separate contexts"),
+                                    "Pick one model per session when possible. Use /model at session start, not mid-conversation. Subagent model routing (Haiku/Sonnet) is fine, it runs in separate contexts"
+                                    if is_claude_family else
+                                    "Pick one model per session when possible — mid-session switches invalidate the cached prefix"),
                             "savings": "Avoiding mid-session model switches can recover 10-20% cache hit rate",
                         })
                         score -= 2
@@ -9106,7 +9292,9 @@ def generate_coach_data(focus=None, components=None, trends=None):
                     "detail": f"{d_pct:.0f}% of recent sessions scored D or below",
                     "fix": ("Run a full audit (token-optimizer skill or `measure.py coach --json`). Common causes: bloated tool outputs, stale reads, long sessions without compaction"
                             if is_codex else
-                            "Run /token-optimizer for a full audit. Common causes: bloated tool outputs, stale reads, long sessions without compaction"),
+                            "Run /token-optimizer for a full audit. Common causes: bloated tool outputs, stale reads, long sessions without compaction"
+                            if is_claude_family else
+                            "Run a full audit (`measure.py coach --json`). Common causes: bloated tool outputs, stale reads, long sessions without compaction"),
                     "savings": "Improving average grade from D to B typically saves 15-30% of session cost",
                 })
                 score -= 8
@@ -9136,7 +9324,9 @@ def generate_coach_data(focus=None, components=None, trends=None):
                     "detail": f"Estimated API-equivalent cost: ${cost_per_session:.2f}/session (${total_cost:.2f} across {session_count_t} sessions in {period} days); not a billing statement",
                     "fix": ("Choose a lower reasoning effort or a smaller Codex model for simple tasks. Compact long sessions when needed"
                             if is_codex else
-                            "Route simple tasks to Sonnet/Haiku. Use /compact in long sessions. Review unused skills"),
+                            "Route simple tasks to Sonnet/Haiku. Use /compact in long sessions. Review unused skills"
+                            if is_claude_family else
+                            "Route simple tasks to a cheaper model tier. Restart or compact long sessions. Review unused skills"),
                     "savings": "Not estimated: requires a measured model-routing or compression comparison",
                 })
                 score -= 3
@@ -9188,13 +9378,24 @@ def generate_coach_data(focus=None, components=None, trends=None):
                 "detail": f"{multi_model_pct:.0f}% of recent sessions used multiple models. Each switch invalidates the prompt cache and can cause context quality drops",
                 "fix": ("Set the session model up front (config.toml `model`) instead of switching mid-session; each switch invalidates the cached prefix"
                         if is_codex else
-                        "Set your preferred model at session start with /model. Route subagents to cheaper models via agent() opts instead of switching the main session model"),
+                        "Set your preferred model at session start with /model. Route subagents to cheaper models via agent() opts instead of switching the main session model"
+                        if is_claude_family else
+                        "Set the session model up front instead of switching mid-session; each switch invalidates the cached prefix"),
                 "savings": "Consistent model usage improves cache hit rate by 10-20% and avoids quality grade drops",
             })
             score -= 4
 
     # Clamp score
     score = max(0, min(100, score))
+
+    # Session logs, skill frontmatter, and detector evidence are all
+    # attacker-influenceable; nothing carrying terminal control sequences may
+    # reach the coach's printed output or the --json payload.
+    for _p in patterns_bad + patterns_good:
+        for _k in ("name", "detail", "fix", "savings"):
+            if isinstance(_p.get(_k), str):
+                _p[_k] = _strip_ansi(_p[_k])
+    questions = [_strip_ansi(str(q)) for q in questions]
 
     # Build result
     overhead_pct = (totals["estimated_total"] / context_window * 100) if context_window else 0
@@ -9279,7 +9480,9 @@ def generate_coach_data(focus=None, components=None, trends=None):
         dom_model = max(parsed["model_usage"], key=parsed["model_usage"].get) if parsed["model_usage"] else "unknown"
         total_input = parsed["total_input_tokens"]
         chr_val = parsed.get("cache_hit_rate", 0)
-        cache_read = int(total_input * chr_val)
+        # _safe_int: a non-finite product (corrupt cache_hit_rate) degrades to
+        # 0 instead of raising ValueError/OverflowError and killing the coach.
+        cache_read = _safe_int(total_input * chr_val)
         session_cost = _get_model_cost(dom_model, max(0, total_input - cache_read),
                                         parsed["total_output_tokens"], cache_read, 0, tier=tier)
         total_session_cost += session_cost
@@ -9598,15 +9801,27 @@ def _extract_skills_and_agents_from_subagent(filepath):
     skills = {}
     subagents = {}
     try:
+        if os.stat(filepath).st_size > codex_session.MAX_PARSE_FILE_BYTES:
+            return skills, subagents
+    except OSError:
+        return skills, subagents
+    try:
         with open(filepath, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
+                if len(line) > codex_session.MAX_JSONL_LINE_CHARS:
+                    continue
                 try:
                     record = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                if not isinstance(record, dict):
+                    continue
                 if record.get("type") != "assistant":
                     continue
-                content = record.get("message", {}).get("content", [])
+                msg = record.get("message", {})
+                if not isinstance(msg, dict):
+                    continue
+                content = msg.get("content", [])
                 if not isinstance(content, list):
                     continue
                 for block in content:
@@ -9614,6 +9829,8 @@ def _extract_skills_and_agents_from_subagent(filepath):
                         continue
                     tool_name = block.get("name", "")
                     inp = block.get("input", {})
+                    if not isinstance(inp, dict):
+                        inp = {}
                     if tool_name == "Skill":
                         skill = inp.get("skill", "unknown")
                         skills[skill] = skills.get(skill, 0) + 1
@@ -9674,7 +9891,7 @@ def _analyze_subagent_costs(session_jsonl_path, tier=None):
         dom_model = max(parsed["model_usage"], key=parsed["model_usage"].get) if parsed["model_usage"] else "unknown"
         total_input = parsed["total_input_tokens"]
         chr_val = parsed.get("cache_hit_rate", 0)
-        cache_read = int(total_input * chr_val)
+        cache_read = _safe_int(total_input * chr_val)
         cost = _get_model_cost(dom_model, max(0, total_input - cache_read),
                                parsed["total_output_tokens"], cache_read, 0, tier=tier)
 
@@ -9719,11 +9936,21 @@ def _extract_costly_prompts(jsonl_path, tier=None, top_n=5):
     pending_prompt = None
 
     try:
+        if os.stat(jsonl_path).st_size > codex_session.MAX_PARSE_FILE_BYTES:
+            return prompts
+    except OSError:
+        return prompts
+
+    try:
         with open(jsonl_path, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
+                if len(line) > codex_session.MAX_JSONL_LINE_CHARS:
+                    continue
                 try:
                     record = json.loads(line)
                 except json.JSONDecodeError:
+                    continue
+                if not isinstance(record, dict):
                     continue
 
                 rec_type = record.get("type")
@@ -9758,12 +9985,14 @@ def _extract_costly_prompts(jsonl_path, tier=None, top_n=5):
 
                 elif rec_type == "assistant" and pending_prompt:
                     msg = record.get("message", {})
+                    if not isinstance(msg, dict):
+                        msg = {}
                     usage = msg.get("usage", {})
-                    if usage:
-                        inp = usage.get("input_tokens", 0)
-                        out = usage.get("output_tokens", 0)
-                        cr = usage.get("cache_read_input_tokens", 0)
-                        cc = usage.get("cache_creation_input_tokens", 0)
+                    if usage and isinstance(usage, dict):
+                        inp = _safe_int(usage.get("input_tokens", 0))
+                        out = _safe_int(usage.get("output_tokens", 0))
+                        cr = _safe_int(usage.get("cache_read_input_tokens", 0))
+                        cc = _safe_int(usage.get("cache_creation_input_tokens", 0))
                         model = msg.get("model", "unknown")
                         cost = _get_model_cost(model, inp, out, cr, cc, tier=tier)
                         pending_prompt["tokens_in"] = inp + cr + cc
@@ -9997,12 +10226,25 @@ def _parse_session_jsonl(filepath, window_start=None, window_end=None):
     is_sidechain = sidechain_reason is not None
     first_user_record_seen = False
 
+    # Bound the work like the Codex adapter's _iter_json_records: a multi-GB
+    # transcript or one pathological line must not dominate a parse. st is set
+    # when the initial os.stat above succeeded; skip oversized files outright
+    # and oversized lines individually.
+    if cache_key is not None and st.st_size > codex_session.MAX_PARSE_FILE_BYTES:
+        return None
+
     try:
         with open(filepath, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
+                if len(line) > codex_session.MAX_JSONL_LINE_CHARS:
+                    continue
                 try:
                     record = json.loads(line)
                 except json.JSONDecodeError:
+                    continue
+                if not isinstance(record, dict):
+                    # Valid JSON but not an object (42, "x", true, null, [...])
+                    # — a truncated/corrupt transcript line, not a record.
                     continue
 
                 # A subagent sidechain transcript is flagged on its records; any
@@ -10068,7 +10310,7 @@ def _parse_session_jsonl(filepath, window_start=None, window_end=None):
 
                 # Extract timestamp
                 ts_str = record.get("timestamp")
-                if ts_str:
+                if ts_str and isinstance(ts_str, str):
                     try:
                         ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
                         if first_ts is None:
@@ -10160,6 +10402,8 @@ def _parse_session_jsonl(filepath, window_start=None, window_end=None):
                 # Extract tool usage from assistant messages
                 if rec_type == "assistant":
                     msg = record.get("message", {})
+                    if not isinstance(msg, dict):
+                        msg = {}
                     content = msg.get("content", [])
 
                     if isinstance(content, list):
@@ -10173,6 +10417,8 @@ def _parse_session_jsonl(filepath, window_start=None, window_end=None):
                             tool_calls[tool_name] = tool_calls.get(tool_name, 0) + 1
 
                             inp = block.get("input", {})
+                            if not isinstance(inp, dict):
+                                inp = {}
                             if tool_name == "Skill":
                                 skill = inp.get("skill", "unknown")
                                 skills_used[skill] = skills_used.get(skill, 0) + 1
@@ -10196,35 +10442,37 @@ def _parse_session_jsonl(filepath, window_start=None, window_end=None):
                     # MAX usage and apply it at end of file.
                     req_id = record.get("requestId")
                     usage = msg.get("usage", {})
-                    if usage:
-                        inp_tok = usage.get("input_tokens", 0) or 0
-                        out_tok = usage.get("output_tokens", 0) or 0
-                        cr = usage.get("cache_read_input_tokens", 0) or 0
+                    if usage and isinstance(usage, dict):
+                        # _safe_int, not raw int(): json.loads accepts the
+                        # non-standard Infinity/NaN literals, and int(inf) /
+                        # int(nan) raise OverflowError/ValueError — a hostile
+                        # or corrupt transcript must degrade to 0, not crash.
+                        inp_tok = _safe_int(usage.get("input_tokens", 0))
+                        out_tok = _safe_int(usage.get("output_tokens", 0))
+                        cr = _safe_int(usage.get("cache_read_input_tokens", 0))
                         cache_creation = usage.get("cache_creation", {})
                         if not isinstance(cache_creation, dict):
                             cache_creation = {}
-                        cc_1h = (
+                        cc_1h = _safe_int(
                             cache_creation.get("ephemeral_1h_input_tokens", 0)
                             or usage.get("ephemeral_1h_input_tokens", 0)
-                            or 0
                         )
-                        cc_5m = (
+                        cc_5m = _safe_int(
                             cache_creation.get("ephemeral_5m_input_tokens", 0)
                             or usage.get("ephemeral_5m_input_tokens", 0)
-                            or 0
                         )
-                        cc = usage.get("cache_creation_input_tokens", 0) or (cc_1h + cc_5m)
+                        cc = _safe_int(usage.get("cache_creation_input_tokens", 0)) or (cc_1h + cc_5m)
                         model = msg.get("model", "unknown")
                         # Claude Code's /stats basis sums every assistant usage
                         # record, including streamed chunks, and excludes cache
                         # read/write classes. Keep it beside the deduped billed
                         # basis used for pricing and cost analysis.
-                        reported_input += int(inp_tok)
-                        reported_output += int(out_tok)
+                        reported_input += inp_tok
+                        reported_output += out_tok
                         reported_model_usage[model] = (
                             reported_model_usage.get(model, 0)
-                            + int(inp_tok)
-                            + int(out_tok)
+                            + inp_tok
+                            + out_tok
                         )
                         # Records without requestId must never collapse with
                         # each other — use the map's own size as a monotonic
@@ -10278,7 +10526,7 @@ def _parse_session_jsonl(filepath, window_start=None, window_end=None):
         total_cache_create_5m += u["cc_5m"]
         api_calls += 1
         ts_s = u.get("ts")
-        if ts_s:
+        if ts_s and isinstance(ts_s, str):
             try:
                 api_call_timestamps.append(datetime.fromisoformat(ts_s.replace("Z", "+00:00")))
             except (ValueError, TypeError):
@@ -10376,12 +10624,25 @@ def parse_session_turns(filepath):
     tier = _load_pricing_tier()
     prev_call_ts = None
 
+    # Bound the work like the Codex adapter's _iter_json_records (see
+    # _parse_session_jsonl): skip oversized files and oversized lines.
+    try:
+        if os.stat(filepath).st_size > codex_session.MAX_PARSE_FILE_BYTES:
+            return turns
+    except OSError:
+        return turns
+
     try:
         with open(filepath, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
+                if len(line) > codex_session.MAX_JSONL_LINE_CHARS:
+                    continue
                 try:
                     record = json.loads(line)
                 except json.JSONDecodeError:
+                    continue
+                if not isinstance(record, dict):
+                    # Valid JSON but not an object — corrupt transcript line.
                     continue
 
                 rec_type = record.get("type")
@@ -10389,27 +10650,29 @@ def parse_session_turns(filepath):
                     continue
 
                 msg = record.get("message", {})
+                if not isinstance(msg, dict):
+                    continue
                 usage = msg.get("usage", {})
-                if not usage:
+                if not usage or not isinstance(usage, dict):
                     continue
 
-                inp_tok = usage.get("input_tokens", 0)
-                out_tok = usage.get("output_tokens", 0)
-                cr = usage.get("cache_read_input_tokens", 0)
+                # _safe_int: Infinity/NaN usage literals degrade to 0 instead of
+                # raising OverflowError/ValueError out of _get_model_cost's int().
+                inp_tok = _safe_int(usage.get("input_tokens", 0))
+                out_tok = _safe_int(usage.get("output_tokens", 0))
+                cr = _safe_int(usage.get("cache_read_input_tokens", 0))
                 cache_creation = usage.get("cache_creation", {})
                 if not isinstance(cache_creation, dict):
                     cache_creation = {}
-                cc_1h = (
+                cc_1h = _safe_int(
                     cache_creation.get("ephemeral_1h_input_tokens", 0)
                     or usage.get("ephemeral_1h_input_tokens", 0)
-                    or 0
                 )
-                cc_5m = (
+                cc_5m = _safe_int(
                     cache_creation.get("ephemeral_5m_input_tokens", 0)
                     or usage.get("ephemeral_5m_input_tokens", 0)
-                    or 0
                 )
-                cc = usage.get("cache_creation_input_tokens", 0) or (cc_1h + cc_5m)
+                cc = _safe_int(usage.get("cache_creation_input_tokens", 0)) or (cc_1h + cc_5m)
                 model = msg.get("model", "unknown")
 
                 # Extract tools used in this turn
@@ -10422,7 +10685,7 @@ def parse_session_turns(filepath):
 
                 ts_str = record.get("timestamp")
                 gap_since_prev_seconds = None
-                if ts_str:
+                if ts_str and isinstance(ts_str, str):
                     try:
                         call_ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
                         if prev_call_ts is not None:
@@ -21020,7 +21283,7 @@ def _query_trends_db(conn, days):
         inp_total = sr["input_tokens"] or 0
         out_total = sr["output_tokens"] or 0
         chr_val = sr["cache_hit_rate"] or 0
-        cache_read_est = int(inp_total * chr_val)
+        cache_read_est = _safe_int(inp_total * chr_val)
         cache_create_1h = sr["cache_create_1h_tokens"] or 0
         cache_create_5m = sr["cache_create_5m_tokens"] or 0
         cache_create_total = cache_create_1h + cache_create_5m
@@ -32820,6 +33083,45 @@ def _sanitize_trigger(trigger):
     return trigger
 
 
+def _confine_transcript_path(transcript_path):
+    """Resolve a hook-supplied transcript path, confined to the active
+    runtime's session-log directory. Returns the resolved Path, or None when
+    the path must not be read.
+
+    transcript_path arrives via hook stdin JSON — attacker-influenceable.
+    Its contents flow into a checkpoint that SessionStart restores into the
+    NEXT session's context, so an arbitrary path is a prompt-injection and
+    state-tampering channel, not just an information leak. Confine the
+    resolved path to the session-log roots (Claude: ~/.claude/projects, Codex:
+    the codex_session roots) and reject symlinks outright — mirrors
+    detectors' _safe_read_text, which refuses to follow a link that could
+    point outside the tree or at a hostile file.
+    """
+    try:
+        raw = Path(transcript_path).expanduser()
+    except (TypeError, ValueError, RuntimeError):
+        return None
+    try:
+        if raw.is_symlink():
+            return None
+        resolved = raw.resolve()
+    except OSError:
+        return None
+    if _use_codex_session_adapter():
+        try:
+            roots = [r.resolve() for r in codex_session.session_roots()]
+        except Exception:
+            return None
+    else:
+        roots = [(CLAUDE_DIR / "projects").resolve()]
+    try:
+        if not any(resolved.is_relative_to(root) for root in roots):
+            return None
+    except (OSError, ValueError):
+        return None
+    return resolved
+
+
 def compact_capture(transcript_path=None, session_id=None, trigger="auto", cwd=None, fill_pct=None, quality_score=None, backfill_tools=False):
     """Capture structured session state before compaction or session end.
 
@@ -32849,7 +33151,12 @@ def compact_capture(transcript_path=None, session_id=None, trigger="auto", cwd=N
     ts_file = now.strftime("%Y%m%d-%H%M%S")
 
     if transcript_path:
-        filepath = Path(transcript_path)
+        # A supplied path that fails confinement is a forged hook input — do
+        # not checkpoint from it, and do not fall through to inference (which
+        # would let a bad pointer silently capture a different session).
+        filepath = _confine_transcript_path(transcript_path)
+        if filepath is None:
+            return None
     else:
         # Identity before inference. _find_current_session_jsonl() returns the
         # most recently active transcript, which on a new session is somebody
@@ -44756,7 +45063,7 @@ def validate_impact(strategy="auto", days=30, as_json=False):
                 cache_create_1h = parsed.get("total_cache_create_1h", 0) or 0
                 cache_create_5m = parsed.get("total_cache_create_5m", 0) or 0
                 cache_create = cache_create_1h + cache_create_5m
-                cache_read_est = int(total_input * chr_val)
+                cache_read_est = _safe_int(total_input * chr_val)
                 cost = _get_model_cost(
                     dom_model,
                     max(0, total_input - cache_read_est - cache_create),

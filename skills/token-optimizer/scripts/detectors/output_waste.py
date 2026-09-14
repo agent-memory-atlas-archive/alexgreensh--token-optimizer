@@ -43,8 +43,14 @@ def detect_output_waste(session_data):
 
     findings = []
 
-    # Instruction file is runtime-specific; Codex reads AGENTS.md, not CLAUDE.md.
-    _instr = "AGENTS.md" if detect_runtime() == "codex" else "CLAUDE.md"
+    # Instruction file is runtime-specific; Codex reads AGENTS.md, foreign
+    # runtimes (cursor, antigravity, grok, opencode, copilot, hermes) have no
+    # CLAUDE.md surface at all — name it generically rather than print a
+    # Claude-only filename.
+    _rt = detect_runtime()
+    _instr = ("AGENTS.md" if _rt == "codex"
+              else "CLAUDE.md" if _rt == "claude"
+              else "your agent instructions")
 
     # Signal 1: Session-level output/input ratio on simple turns
     simple_turn_output = 0

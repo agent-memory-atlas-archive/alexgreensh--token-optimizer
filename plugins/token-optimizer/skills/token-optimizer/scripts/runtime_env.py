@@ -481,6 +481,36 @@ def _warn_mnt_copilot_home(raw: str) -> None:
     )
 
 
+def _non_symlinked_fallback(env_var: str, fallback: Path) -> Path:
+    """Return *fallback* unless it exists as a symlink.
+
+    ``_is_safe_home_dir`` rejects symlinked env-var values, but the no-env-var
+    fallback was returned unchecked: on a mixed host where ``~/.codex`` is a
+    symlink to ``~/.claude`` (shared config, careless admin, or a symlink
+    attack), every downstream read/write lands in a foreign runtime's tree —
+    a cross-runtime data leak with no env var set and no warning. Degrade to
+    a Token-Optimizer-owned dir under home instead of following the link.
+    """
+    try:
+        if fallback.is_symlink():
+            slug = (
+                env_var.lower()
+                .removeprefix("token_optimizer_")
+                .removesuffix("_home").removesuffix("_dir")
+                .replace("_", "-")
+            ) or "runtime-home"
+            alt = _safe_home() / ".token-optimizer" / slug
+            _warn_once(
+                f"[Token Optimizer] Warning: default runtime home {fallback} is a symlink "
+                f"(resolves to {fallback.resolve(strict=False)}); refusing to follow it "
+                f"into a foreign tree. Using {alt} instead."
+            )
+            return alt
+    except OSError:
+        pass
+    return fallback
+
+
 def _safe_home_from_env(env_var: str, fallback: Path, *, mnt_root: Path | None = None) -> Path:
     """Resolve a runtime-home env var without letting it escape user home.
 
@@ -501,7 +531,7 @@ def _safe_home_from_env(env_var: str, fallback: Path, *, mnt_root: Path | None =
     """
     raw_val = os.environ.get(env_var, "").strip()
     if not raw_val:
-        return fallback
+        return _non_symlinked_fallback(env_var, fallback)
     candidate = Path(raw_val).expanduser()
     if _is_safe_home_dir(candidate):
         return candidate.resolve(strict=False)
@@ -539,7 +569,7 @@ def _safe_home_from_env(env_var: str, fallback: Path, *, mnt_root: Path | None =
     _warn_once(
         f"[Token Optimizer] Warning: {env_var}={raw_val!r} rejected (not a safe directory). Using default.{hint}"
     )
-    return fallback
+    return _non_symlinked_fallback(env_var, fallback)
 
 
 def _opencode_env_signal() -> bool:
