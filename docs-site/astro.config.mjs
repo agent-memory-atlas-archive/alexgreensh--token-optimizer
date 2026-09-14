@@ -10,6 +10,10 @@ const BASE = "";
 // https://astro.build/config
 export default defineConfig({
   site: SITE,
+  // The controlled A/B page moved into the Benchmarks section; keep the old URL alive.
+  redirects: {
+    "/reference/controlled-a-b-benchmark": "/reference/benchmarks/controlled-a-b/",
+  },
   base: BASE,
   trailingSlash: "ignore",
   // Make root-absolute inline links/images in prose base-aware. Starlight only
@@ -183,8 +187,15 @@ export default defineConfig({
             { label: "Capability matrix", slug: "reference/capability-matrix" },
             { label: "Health and diagnostics", slug: "reference/diagnostics" },
             { label: "Your data and privacy", slug: "reference/data-and-privacy" },
-            { label: "Benchmarks", slug: "reference/benchmarks" },
-            { label: "Controlled A/B benchmark", slug: "reference/controlled-a-b-benchmark" },
+            {
+              label: "Benchmarks",
+              items: [
+                { label: "Overview", slug: "reference/benchmarks" },
+                { label: "Terminal-Bench floor", slug: "reference/benchmarks/terminal-bench" },
+                { label: "Controlled A/B", slug: "reference/benchmarks/controlled-a-b" },
+                { label: "One real month", slug: "reference/benchmarks/real-world" },
+              ],
+            },
             { label: "How it compares", slug: "reference/comparison" },
             { label: "License and pricing", slug: "reference/license" },
           ],

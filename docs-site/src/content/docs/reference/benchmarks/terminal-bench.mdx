@@ -1,0 +1,107 @@
+---
+title: Terminal-Bench floor
+description: "The full 81-task Terminal-Bench 2 suite run with Token Optimizer on and off, on Claude Haiku 4.5, multi-trial with confidence intervals. Only one of the six levers fires here, so it is the floor: the least you should expect."
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+import TerminalBenchChart from '../../../../components/TerminalBenchChart.astro';
+
+Terminal-Bench 2 runs an agent through real terminal tasks end to end. We ran the **full 81-task
+suite** with Token Optimizer on and off, on Claude Haiku 4.5, using the public Harbor harness.
+Two views of the same run are shown below. The full suite is the scope: every task, nothing left
+out. The 57 well-behaved tasks are the statistically sealed claim: enough trials per task that each
+result comes with a confidence interval, and both intervals stay below zero.
+
+:::note
+This is a **controlled benchmark**, and a deliberately hostile one. Terminal-Bench tasks give
+exactly one of Token Optimizer's six levers anything to do. For the per-mechanism test see the
+[Controlled A/B](/reference/benchmarks/controlled-a-b/); for what a full setup saved on real work
+see [One real month](/reference/benchmarks/real-world/). The three are never added together.
+:::
+
+## The result
+
+Terminal-Bench 2 · full 81-task suite · plugin on vs off · Claude Haiku 4.5 · 373 trials in total
+
+### All 81 tasks
+
+The whole suite, single run per task, point estimates.
+
+<CardGrid>
+  <Card title="−14.9% cost per task" icon="right-arrow">
+    **Directional.** Point estimate over every task. The 95% interval is wide and crosses zero
+    (−30.3% to +3.6%), because about 24 tasks where the agent thrashes swing 5 to 9× at a single run.
+  </Card>
+  <Card title="−12.1% input tokens" icon="right-arrow">
+    **Directional.** Point estimate over every task. Same caveat: the interval crosses zero, so we
+    report the direction and do not claim the size.
+  </Card>
+</CardGrid>
+
+### 57 non-thrash tasks
+
+The well-behaved subset, 127 trials. The sealed claim.
+
+<CardGrid>
+  <Card title="−14.3% cost per task" icon="approve-check">
+    **Interval excludes zero.** 95% interval from −23.2% to −4.3%. Task pass rate unchanged: the
+    difference is not significant (Fisher exact test, p = 0.76).
+  </Card>
+  <Card title="−17.8% input tokens" icon="approve-check">
+    **Interval excludes zero.** The main result. 95% interval from −28.0% to −5.6%.
+  </Card>
+</CardGrid>
+
+<TerminalBenchChart />
+
+## Why this is a floor, not a forecast
+
+Terminal-Bench tasks are short, single-shot terminal jobs. The agent rarely re-reads a file, never
+runs long enough to compact, and the model is held fixed. That leaves exactly one of the six levers
+with anything to do. The other five carry real multi-file coding work and never get a turn here.
+
+| Lever | On Terminal-Bench | In real coding |
+|---|:---:|:---:|
+| Tool-output compression | fires | fires |
+| Cross-turn dedup | idle | fires |
+| Delta-read | idle | fires |
+| Structure-map skeletons | idle | fires |
+| Checkpoint-restore | idle | fires |
+| Model routing | idle | fires |
+| **Levers active** | **1 of 6** | **6 of 6** |
+
+:::tip[Why two views of one run]
+We ran every one of the 81 tasks. About 24 of them are thrash tasks, where the agent loops or
+retries and a single run can land almost anywhere, so at one run per task the all-81 interval is
+too wide to exclude zero. Removing those leaves 57 well-behaved tasks, run 127 times in total, and
+there the intervals tighten and stay below zero. The full suite is the honest scope. The 57-task
+cohort is the honest claim. Neither is hidden behind the other.
+:::
+
+## How we measured
+
+- **Paired design.** The same tasks run with the plugin on and off. The baseline arm is independent
+  of any Token Optimizer build and is reused across builds by design.
+- **Real billed tokens.** Per-trial token counts come from the session transcripts, de-duplicated by
+  message id so one assistant message is never counted twice. Cost is the harness's own per-trial
+  `cost_usd` field, not a transcript-side reprice.
+- **Pass means pass.** A trial passes only when the verifier reward is exactly 1.0. Trials that
+  failed for infrastructure reasons are excluded from both arms.
+- **Intervals before point estimates.** A saving is claimed only where the 95% interval stays below
+  zero. Anything wider is called directional and left at that.
+- **Build tested:** Token Optimizer 5.13.8, the build with the light-session tax removed.
+
+Thrash-influenced subsets can show much larger point savings at a single run. We do not quote them:
+they are driven by the baseline arm thrashing, not by anything the plugin did.
+
+## What to expect from one lever, per task shape
+
+The [Controlled A/B](/reference/benchmarks/controlled-a-b/) isolates the same lever on specific
+kinds of work, 20 runs per side, with a comprehension check on every run. Its headline rows:
+
+| Kind of work | Tokens | What it means |
+|---|---:|---|
+| A light session with nothing to compress | +\<0.5% | No tax. Light work stays light. |
+| Command-heavy work (git status, diff, log, ls) | **−11%** | Clean saving, every comprehension check passed. −10.7% on Sonnet 5. |
+| Search-heavy work (a grep with 480 matches) | **−15.7%** | Clean saving, correct on both models. |
+| Re-reads (read a file, edit it, read it again) | not settled | Inconclusive. Reported as a gap, not a claim. |
