@@ -1366,6 +1366,22 @@ def _fmt_context_window(size):
     return f"{size // 1000}K"
 
 
+# ANSI/VT escape sequences: CSI (\x1b[ ... final byte), OSC (\x1b] ... BEL or
+# ST), charset/two-byte sequences. Session-log text is attacker-influenceable;
+# strip before echoing it to a terminal (coach previews, subagent names).
+_ANSI_ESCAPE_RE = re.compile(
+    r"\x1b\[[0-9;?]*[ -/]*[@-~]"        # CSI
+    r"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"  # OSC ... BEL or ST
+    r"|\x1b[()][0-2A-Z]"                # charset selection
+    r"|\x1b[@-Z\\-_]"                   # remaining two-byte escapes
+)
+
+
+def _strip_ansi(text):
+    """Remove ANSI/VT escape sequences from text destined for the terminal."""
+    return _ANSI_ESCAPE_RE.sub("", text)
+
+
 def estimate_tokens_from_file(filepath):
     """Estimate tokens by reading file content (character count / 4)."""
     try:
@@ -3149,11 +3165,16 @@ def detect_context_window():
     raw = _ctx_size_override
     if raw:
         try:
-            return remember((int(raw), "env: TOKEN_OPTIMIZER_CONTEXT_SIZE"))
+            _parsed_ctx = int(raw)
         except ValueError:
-            pass
+            _parsed_ctx = 0
+        # Mirror _codex_config_int's >0 guard: "0"/negative/garbage would
+        # otherwise yield ctx_window<=0 and crash every `overhead / ctx_window`
+        # division downstream.
+        if _parsed_ctx > 0:
+            return remember((_parsed_ctx, "env: TOKEN_OPTIMIZER_CONTEXT_SIZE"))
     # CLI override (set by --context-size flag)
-    if _cli_context_size:
+    if _cli_context_size and _cli_context_size > 0:
         return remember((_cli_context_size, "cli: --context-size"))
     if detect_runtime() == "codex":
         logged_window, session_name = _latest_codex_logged_context_window()
@@ -3409,6 +3430,7 @@ def quick_scan(as_json=False):
     components = measure_components()
     totals = calculate_totals(components)
     ctx_window, ctx_source = detect_context_window()
+    ctx_window = max(int(ctx_window or 0), 1)  # every division below needs >0
     ctx_label = _fmt_context_window(ctx_window)
 
     overhead = totals["estimated_total"]
@@ -3427,10 +3449,19 @@ def quick_scan(as_json=False):
     # openai-gpt-5 MRCR curve rather than anthropic-default.
     _rt = detect_runtime()
     if _rt == "codex":
-        _qmodel = os.environ.get("CODEX_MODEL") or os.environ.get("OPENAI_MODEL") or _codex_config_model() or "codex"
+        _qmodel = ((os.environ.get("CODEX_MODEL") or "").strip()
+                   or (os.environ.get("OPENAI_MODEL") or "").strip()
+                   or _codex_config_model() or "codex")
     else:
         _qmodel = os.environ.get("CLAUDE_MODEL") or os.environ.get("ANTHROPIC_MODEL")
     quality_est, _qcurve = _estimate_quality_with_curve(fill_pct, model=_qmodel, context_window=ctx_window)
+    if _rt == "codex" and _qcurve == "anthropic-default":
+        # Custom/unknown Codex model string (o3, gpt-4.1, custom-provider
+        # names) matched no known family — a Codex session must never be
+        # scored or labeled on the Anthropic curve. Fall back to the
+        # documented Codex default.
+        quality_est, _qcurve = _estimate_quality_with_curve(
+            fill_pct, model="codex", context_window=ctx_window)
     band_name, band_color = _degradation_band(fill_pct)
 
     # Top offenders
@@ -3481,8 +3512,11 @@ def quick_scan(as_json=False):
                              f"AGENTS.md chain ({agents_md_lines} lines)"))
     mem = components.get("memory_md", {})
     if mem.get("tokens", 0) > 0:
+        # Under Codex this component holds state_*.sqlite memory, not a
+        # MEMORY.md file — label it for the runtime the user is on.
+        _mem_label = "Codex memories" if _rt == "codex" else "MEMORY.md"
         offenders.append(("memory_md", mem.get("lines", 0), mem.get("tokens", 0),
-                         f"MEMORY.md ({mem.get('lines', 0)} lines)"))
+                         f"{_mem_label} ({mem.get('lines', 0)} lines)"))
 
     # Sort by tokens descending, top 3
     offenders.sort(key=lambda x: -x[2])
@@ -3494,15 +3528,41 @@ def quick_scan(as_json=False):
         trends = _collect_trends_data(days=30)
         if trends and detect_runtime() != "codex":
             never_used = trends.get("skills", {}).get("never_used", [])
+            active_names = set(skills.get("names", []))
+            never_used = sorted({n for n in never_used
+                                 if n in active_names and not _is_own_tool_skill(n)})
             if len(never_used) >= 3:
-                avg_per_skill = skills.get("tokens", 0) // max(skills.get("count", 1), 1)
-                savings = len(never_used) * avg_per_skill
-                quick_win = {
-                    "action": f"Review {len(never_used)} skills not invoked in the window",
-                    "savings": savings,
-                    "detail": f"save ~{savings:,} tokens/session",
-                    "extend": f"Extends peak quality zone by ~{savings:,} tokens",
-                }
+                # Same rule as the coach's unused-skill savings: measured
+                # per-skill frontmatter only — never count x inventory average
+                # (which reports the inventory bound when most skills are
+                # unused) and never count x a flat constant.
+                detail_map = components.get("skills_detail", {})
+                measured = 0
+                unmeasured = 0
+                for _n in never_used:
+                    try:
+                        _t = int((detail_map.get(_n) or {}).get("frontmatter_tokens") or 0)
+                    except (TypeError, ValueError, OverflowError):
+                        _t = 0
+                    if _t > 0:
+                        measured += _t
+                    else:
+                        unmeasured += 1
+                if measured > 0:
+                    _unm = f" ({unmeasured} of {len(never_used)} lack per-skill measurement)" if unmeasured else ""
+                    quick_win = {
+                        "action": f"Review {len(never_used)} skills not invoked in the window",
+                        "savings": measured,
+                        "detail": f"save ~{measured:,} measured tokens/session{_unm}",
+                        "extend": f"Extends peak quality zone by ~{measured:,} tokens",
+                    }
+                else:
+                    quick_win = {
+                        "action": f"Review {len(never_used)} skills not invoked in the window",
+                        "savings": 0,
+                        "detail": "savings unknown: per-skill measurements unavailable",
+                        "extend": "Removing unused skills extends the peak quality zone",
+                    }
     except Exception:
         pass
 
@@ -7804,16 +7864,11 @@ def _generate_codex_auto_recommendations(components, trends=None, days=30):
             "Start with plugin bundles outside your daily work; they are reversible."
         )
     verbose = components.get("skill_frontmatter_quality", {}).get("verbose_skills", [])
-    codex_truncated = [s for s in verbose if s.get("truncated")]
-    very_verbose = [s for s in verbose if not s.get("truncated")]
-    if codex_truncated:
-        names = ", ".join(s["name"] for s in codex_truncated[:8])
-        quick.append(
-            f"**{len(codex_truncated)} Codex skill descriptions exceed 1,536 chars (truncated)**: "
-            f"{names}{'...' if len(codex_truncated) > 8 else ''}. "
-            "The overflow loads every session but is silently cut from the skill listing. "
-            "Move detailed usage instructions into the SKILL.md body."
-        )
+    # The shared scan's `truncated` flag marks >1,536-char descriptions — a
+    # Claude Code listing behavior. Codex does not cut descriptions at that
+    # limit (the coach's W6 invariant), so those entries are simply very long
+    # descriptions here, not a silent-truncation claim.
+    very_verbose = verbose
     if very_verbose:
         names = ", ".join(s["name"] for s in very_verbose[:8])
         quick.append(
@@ -8523,9 +8578,14 @@ def generate_coach_data(focus=None, components=None, trends=None):
     unused_measured_tokens = 0
     unused_unmeasured = 0
     for _name in unused_skills:
-        _toks = (skills_detail.get(_name) or {}).get("frontmatter_tokens")
-        if _toks:
-            unused_measured_tokens += int(_toks)
+        _raw_toks = (skills_detail.get(_name) or {}).get("frontmatter_tokens")
+        try:
+            _toks = int(_raw_toks)
+        except (TypeError, ValueError, OverflowError):
+            # NaN/inf/non-numeric entries are unmeasured, not a coach crash.
+            _toks = 0
+        if _toks > 0:
+            unused_measured_tokens += _toks
         else:
             unused_unmeasured += 1
     if unused_measured_tokens > 0 and unused_unmeasured == 0:
@@ -9178,6 +9238,9 @@ def generate_coach_data(focus=None, components=None, trends=None):
             "installed inventory advertised to the model (user skills + enabled-plugin "
             "skills); per-session prompt inclusion not directly observed"
         )
+        # claude_md_tokens holds AGENTS.md-chain tokens under Codex; keep the
+        # legacy key for existing consumers and add a correctly named alias.
+        result["snapshot"]["agents_md_tokens"] = claude_tokens
 
     # Add compaction timing guide when relevant
     has_compaction_patterns = (
@@ -47591,12 +47654,15 @@ if __name__ == "__main__":
                 sc = data["subagent_costs"]
                 print(f"  Subagent spend: ${sc['total_usd']:.2f} ({sc['pct_of_spend']}% of recent sessions)")
                 for s in sc["top_subagents"][:3]:
-                    print(f"    {s['name']}: ${s['cost_usd']} ({s['tokens']:,} tokens, {s['model']})")
+                    print(f"    {_strip_ansi(str(s['name']))}: ${s['cost_usd']} ({s['tokens']:,} tokens, {s['model']})")
                 print()
             if data.get("costly_prompts"):
                 print("  Most expensive prompts (last 7 days):")
                 for i, p in enumerate(data["costly_prompts"][:5], 1):
-                    preview = p["text"][:70].replace("\n", " ")
+                    # Session-log text is attacker-influenceable — strip ANSI
+                    # escapes before printing so a crafted prompt cannot inject
+                    # terminal control sequences, then truncate the clean text.
+                    preview = _strip_ansi(str(p["text"]))[:70].replace("\n", " ")
                     print(f"    {i}. ${p['cost_usd']} ({p['tokens_in']:,} in) \"{preview}...\"")
                 print()
             if data["questions"]:

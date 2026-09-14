@@ -1,5 +1,6 @@
 """Overpowered model detector: expensive model used for simple tasks."""
 
+from runtime_env import detect_runtime
 
 _TOP_TIER_MODELS = ("fable", "opus", "claude-opus")
 _SIMPLE_TOOLS = frozenset({"Read", "Glob", "Grep", "Edit", "Write", "Bash"})
@@ -37,6 +38,12 @@ def detect_overpowered(session_data):
     Flags when: short output (<5K tokens per turn avg) + mostly simple tools
     + a top-tier model (Fable/Opus) is dominant.
     """
+    if detect_runtime() not in ("claude", "hermes"):
+        # The ladder and the "Sonnet would save" suggestion are Claude-model
+        # routing advice. Under foreign runtimes a Claude-tier key in
+        # model_usage (custom provider entry, crafted log) must not produce
+        # foreign-runtime guidance. Hermes is a Claude runtime and keeps it.
+        return []
     model_usage = session_data.get("model_usage", {})
     if not model_usage:
         return []

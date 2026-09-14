@@ -447,11 +447,13 @@ def detect_cache_instability(session_data):
            model-facing prompt).
       5.   Process-library prompt prefix files in .a5c/processes, .claude/processes.
     """
-    if detect_runtime() == "codex":
+    if detect_runtime() not in ("claude", "hermes"):
         # Every surface here is Claude-runtime-specific (CLAUDE.md prefix,
-        # .mcp.json/.claude.json server sets, .claude/processes). Codex
-        # sessions must not trigger reads or recommendations on foreign-runtime
-        # config paths.
+        # .mcp.json/.claude.json server sets, .claude/processes), and the
+        # MCP server-set state defaults to ~/.claude/token-optimizer/data.
+        # Foreign runtimes (codex, cursor, antigravity, ...) must not trigger
+        # reads, recommendations, or state writes on foreign-runtime paths.
+        # Hermes is a Claude runtime and keeps the scans.
         return []
     claude_md = session_data.get("claude_md_content", "")
     # New surfaces must still run when CLAUDE.md is absent/small. With an empty
