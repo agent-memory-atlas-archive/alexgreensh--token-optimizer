@@ -110,18 +110,29 @@ def test_windows_hook_command_invokes_python_directly(monkeypatch):
     assert "for b in bash" not in command
 
 
+def _decoded_bootstrap(module, command):
+    """The Windows launcher carries its logic as a base64 Python bootstrap;
+    assertions decode it rather than pattern-match the opaque command line."""
+    code = module.decode_launcher_command(command)
+    assert code is not None, f"not a generated launcher command: {command}"
+    return code
+
+
 def test_windows_versioned_marketplace_hook_resolves_newest_install(monkeypatch, tmp_path):
-    """The native-CMD launcher must not retain a pruned version directory."""
+    """The launcher must not retain a pruned version directory: the embedded
+    bootstrap scans the install parent for the newest semver sibling."""
     module = _load_codex_install(monkeypatch, "win32")
     versioned_root = tmp_path / "cache" / "market" / "token-optimizer" / "5.11.75"
     monkeypatch.setattr(module, "_repo_root", lambda: versioned_root)
 
     command = module._hook_command("skills/token-optimizer/scripts/read_cache.py", "--quiet")
+    code = _decoded_bootstrap(module, command)
 
-    assert "TOKEN_OPTIMIZER_RUNTIME_ROOT" in command
-    assert "powershell" in command.lower()
-    assert str(versioned_root.parent) in command
-    assert "hooks" in command and "run.py" in command
+    assert "TOKEN_OPTIMIZER_RUNTIME_ROOT" in code
+    assert "powershell" not in command.lower()
+    assert str(versioned_root) in code  # baked install dir
+    assert "root.parent.iterdir" in code  # newest-version sibling scan
+    assert "hooks" in code and "run.py" in code
 
 
 def test_windows_versioned_hook_avoids_same_line_expansion(monkeypatch):
@@ -129,8 +140,9 @@ def test_windows_versioned_hook_avoids_same_line_expansion(monkeypatch):
     %VAR% expands to the pre-line value, and `setlocal EnableDelayedExpansion`
     only takes effect from the NEXT line, so !VAR! on the same line reaches
     python as the literal text "!TOKEN_OPTIMIZER_RUNTIME_ROOT!" (issue #180).
-    The runner path must be built from the FOR variable %R inside the
-    do-body, with no expansion form of TOKEN_OPTIMIZER_RUNTIME_ROOT."""
+    The launcher resolves the version inside the Python bootstrap, so no
+    expansion form of TOKEN_OPTIMIZER_RUNTIME_ROOT may appear in the emitted
+    command line at all."""
     module = _load_codex_install(monkeypatch, "win32")
     root = PureWindowsPath(
         r"C:\Users\Test User\.codex\plugins\market\token-optimizer\5.11.75"
@@ -138,14 +150,18 @@ def test_windows_versioned_hook_avoids_same_line_expansion(monkeypatch):
     monkeypatch.setattr(module, "_repo_root", lambda: root)
 
     command = module._hook_command("skills/token-optimizer/scripts/read_cache.py")
+    code = _decoded_bootstrap(module, command)
 
     assert "!TOKEN_OPTIMIZER_RUNTIME_ROOT!" not in command
+    assert "TOKEN_OPTIMIZER_RUNTIME_ROOT" not in command
     assert "setlocal" not in command.lower()
-    assert r"%R\hooks\run.py" in command
-    # Fail-open: the resolver prints the baked install directory when the
-    # version scan finds nothing, so the do-body still runs the baked path.
-    # The else-branch may carry debug-gated logging before the baked name.
-    assert re.search(r"else \{ .* '5\.11\.75' \}", command), command
+    assert "for /f" not in command.lower()
+    # Fail-open baked root + in-process version resolution + runner dispatch.
+    # The bootstrap embeds repr(str(root)), so backslashes appear doubled.
+    assert repr(str(root)) in code
+    assert "root.parent.iterdir" in code
+    assert "root / 'hooks' / 'run.py'" in code
+    assert "runpy.run_path" in code
 
 
 def test_legacy_markerless_windows_groups_are_replaced_on_reinstall(monkeypatch):
@@ -236,8 +252,9 @@ def test_generated_command_shape_satisfies_matcher_contract(monkeypatch, tmp_pat
     in the same commit."""
     module = _load_codex_install(monkeypatch, "win32")
 
-    # Versioned marketplace root: the cmd resolver shape (the only shape that
-    # relies on the signature anchors rather than the path marker).
+    # Versioned marketplace root: the base64 launcher shape. Every generated
+    # command carries the literal launcher marker and an embedded bootstrap
+    # naming the target script, so the matcher must claim all of them.
     versioned_root = tmp_path / "plugin cache" / "token-optimizer" / "5.13.12"
     monkeypatch.setattr(module, "_repo_root", lambda: versioned_root)
     for script in (
@@ -247,8 +264,10 @@ def test_generated_command_shape_satisfies_matcher_contract(monkeypatch, tmp_pat
     ):
         command = module._hook_command(script, redirect_quiet=True)
         group = {"hooks": [{"type": "command", "command": command}]}
-        assert "token-optimizer/scripts" not in json.dumps(group) or script.startswith("skills/")
+        assert module._LAUNCHER_MARKER in command
         assert module._is_token_optimizer_group(group), command
+        code = module.decode_launcher_command(command)
+        assert code is not None and script in code
 
     # Non-versioned root: runner path is literal; claimed via the path marker
     # for marker-bearing script args (consolidated-runner args on a
@@ -265,8 +284,8 @@ def test_version_resolver_fallback_debug_log_is_debug_gated(monkeypatch):
     """The baked-install fallback is silent by design; the only observable
     channel is a TOKEN_OPTIMIZER_DEBUG-gated line appended to
     token-optimizer-codex-resolver.log next to the version dirs. Assert the
-    generated command carries that instrumentation, inside the else-branch,
-    with no cmd-hostile metacharacters in the added syntax."""
+    embedded bootstrap carries that instrumentation, scoped to the fallback
+    so a healthy resolve stays quiet even under DEBUG."""
     module = _load_codex_install(monkeypatch, "win32")
     root = PureWindowsPath(
         r"C:\Users\Test User\.codex\plugins\market\token-optimizer\5.11.75"
@@ -274,121 +293,90 @@ def test_version_resolver_fallback_debug_log_is_debug_gated(monkeypatch):
     monkeypatch.setattr(module, "_repo_root", lambda: root)
 
     command = module._hook_command("skills/token-optimizer/scripts/read_cache.py")
+    code = _decoded_bootstrap(module, command)
 
-    assert "$env:TOKEN_OPTIMIZER_DEBUG" in command
-    assert "token-optimizer-codex-resolver.log" in command
-    # The log write must sit inside the else-branch so a healthy resolve
-    # stays quiet, and the baked name must still be the branch's last word.
-    assert re.search(
-        r"else \{ if \(\$env:TOKEN_OPTIMIZER_DEBUG\) .* \}; '5\.11\.75' \}",
-        command,
-    ), command
-    # for /f runs the in-clause via cmd /c: parens, redirects, %, and & in
-    # the added syntax would break the command line. The single-quoted
-    # -Command payload may legitimately contain | and > inside PowerShell
-    # operators we already rely on, so scope the check to the new fragment.
-    fragment = re.search(
-        r"if \(\$env:TOKEN_OPTIMIZER_DEBUG\) \{ (.*?) \}; '", command
-    ).group(1)
-    assert not re.search(r"[()<>%&]", fragment), fragment
+    assert "TOKEN_OPTIMIZER_DEBUG" in code
+    assert "token-optimizer-codex-resolver.log" in code
+    # Gated on retaining the baked root: a healthy semver resolve is not a
+    # fallback and must not log. The payload is opaque to cmd.exe, so no
+    # cmd-metacharacter check applies; the audit channel is --decode-launcher.
+    assert "root == baked" in code
+    assert "os.environ.get('TOKEN_OPTIMIZER_DEBUG')" in code
 
 
-def test_version_resolver_fallback_writes_debug_log_when_enabled(monkeypatch, tmp_path):
-    """Live proof (where PowerShell exists): with TOKEN_OPTIMIZER_DEBUG set,
-    the fallback appends a line to the resolver log; without it, nothing is
-    written. Skips where no PowerShell runtime is available."""
-    pwsh = _pwsh()
-    if not pwsh:
-        pytest.skip("PowerShell (the Windows version-resolver runtime) unavailable")
-    base = tmp_path / "plugin cache" / "token-optimizer"
-    (base / "latest").mkdir(parents=True)
-    argv = _generated_resolver_argv(monkeypatch, base / "5.11.75")
-    # On Windows the log is a real child of the version-dirs parent; under
-    # pwsh-on-POSIX the backslash separator lands in the file NAME, so match
-    # by suffix in the directory listing instead of a fixed child path.
-    def _resolver_logs():
-        return [
-            p for p in base.iterdir()
-            if p.name.endswith("token-optimizer-codex-resolver.log")
-        ]
-
-    env = {**os.environ, "TOKEN_OPTIMIZER_DEBUG": "1"}
-    proc = subprocess.run(
-        [pwsh, *argv[1:]], capture_output=True, text=True, timeout=60, env=env
-    )
-    assert proc.returncode == 0, f"resolver failed: {proc.stderr}"
-    assert proc.stdout.strip() == "5.11.75"
-    logs = _resolver_logs()
-    assert logs, "debug-enabled fallback did not write the resolver log"
-    assert "5.11.75" in logs[0].read_text(encoding="utf-8")
-
-    for p in logs:
-        p.unlink()
-    env_off = {k: v for k, v in os.environ.items() if k != "TOKEN_OPTIMIZER_DEBUG"}
-    proc = subprocess.run(
-        [pwsh, *argv[1:]], capture_output=True, text=True, timeout=60, env=env_off
-    )
-    assert proc.returncode == 0, f"resolver failed: {proc.stderr}"
-    assert proc.stdout.strip() == "5.11.75"
-    assert not _resolver_logs(), "resolver log written without TOKEN_OPTIMIZER_DEBUG"
-
-
-def _generated_resolver_argv(monkeypatch, root):
-    """Capture the exact argv vector the generator hands to cmd for the
-    version resolver (the `powershell -NoProfile -Command ...` inside the
-    for /f in-clause)."""
+def _run_launcher_bootstrap(monkeypatch, base: Path, baked: str, env=None):
+    """Generate the launcher command for ``base/baked``, decode the embedded
+    bootstrap, and execute it with the current interpreter. The bootstrap is
+    platform-agnostic Python, so this exercises the real resolver on any OS;
+    each version dir must carry a fake hooks/run.py (see _make_fake_runner)
+    which records the resolved TOKEN_OPTIMIZER_RUNTIME_ROOT."""
     module = _load_codex_install(monkeypatch, "win32")
-    monkeypatch.setattr(module, "_repo_root", lambda: root)
-    recorded = []
-    real = subprocess.list2cmdline
-    monkeypatch.setattr(
-        module.subprocess,
-        "list2cmdline",
-        lambda argv: (recorded.append(list(argv)), real(argv))[1],
+    monkeypatch.setattr(module, "_repo_root", lambda: base / baked)
+    command = module._hook_command("skills/token-optimizer/scripts/read_cache.py")
+    code = module.decode_launcher_command(command)
+    assert code is not None, command
+    proc = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True, text=True, timeout=30,
+        env={**os.environ, **(env or {})},
     )
-    module._hook_command("skills/token-optimizer/scripts/read_cache.py")
-    return next(a for a in recorded if a[0] == "powershell")
+    assert proc.returncode == 0, f"bootstrap failed: {proc.stderr}"
 
 
-def _pwsh():
-    for name in ("pwsh", "powershell"):
-        found = shutil.which(name)
-        if found:
-            return found
+def _resolved_version(base: Path) -> str | None:
+    """Which fake runner actually executed (its version-dir name)."""
+    for d in sorted(base.iterdir()):
+        if (d / "hooks" / "invoked.json").exists():
+            return d.name
     return None
 
 
-def _run_version_resolver(monkeypatch, base: Path, baked: str) -> str:
-    pwsh = _pwsh()
-    if not pwsh:
-        pytest.skip("PowerShell (the Windows version-resolver runtime) unavailable")
-    argv = _generated_resolver_argv(monkeypatch, base / baked)
-    proc = subprocess.run(
-        [pwsh, *argv[1:]], capture_output=True, text=True, timeout=60
-    )
-    assert proc.returncode == 0, f"version resolver failed: {proc.stderr}"
-    return proc.stdout.strip()
+def test_version_resolver_fallback_writes_debug_log_when_enabled(monkeypatch, tmp_path):
+    """Live proof: with TOKEN_OPTIMIZER_DEBUG set, a fallback resolve appends
+    the kept root to token-optimizer-codex-resolver.log next to the version
+    dirs; without it, nothing is written. Executes the decoded bootstrap with
+    the current interpreter -- no PowerShell dependency."""
+    base = tmp_path / "plugin cache" / "token-optimizer"
+    (base / "latest").mkdir(parents=True)
+    _make_fake_runner(base / "5.11.75")
+    log = base / "token-optimizer-codex-resolver.log"
+
+    _run_launcher_bootstrap(monkeypatch, base, "5.11.75",
+                            env={"TOKEN_OPTIMIZER_DEBUG": "1"})
+    assert _resolved_version(base) == "5.11.75"
+    assert log.exists(), "debug-enabled fallback did not write the resolver log"
+    assert "5.11.75" in log.read_text(encoding="utf-8")
+
+    log.unlink()
+    (base / "5.11.75" / "hooks" / "invoked.json").unlink()
+    env_off = {k: v for k, v in os.environ.items() if k != "TOKEN_OPTIMIZER_DEBUG"}
+    _run_launcher_bootstrap(monkeypatch, base, "5.11.75", env=env_off)
+    assert _resolved_version(base) == "5.11.75"
+    assert not log.exists(), "resolver log written without TOKEN_OPTIMIZER_DEBUG"
 
 
 def test_version_resolver_picks_newest_semver(monkeypatch, tmp_path):
-    """Live resolver proof: numeric [version] sort (5.11.76 > 5.11.9, which
-    lexicographic order would get backwards) and non-semver siblings ignored,
-    under a base path with spaces."""
+    """Live resolver proof through the decoded bootstrap: numeric semver sort
+    (5.11.76 > 5.11.9, which lexicographic order would get backwards) and
+    non-semver siblings ignored, under a base path with spaces."""
     base = tmp_path / "plugin cache" / "token-optimizer"
     for version in ("5.11.9", "5.11.75", "5.11.76", "latest"):
-        (base / version).mkdir(parents=True)
+        _make_fake_runner(base / version)
 
-    assert _run_version_resolver(monkeypatch, base, "5.11.75") == "5.11.76"
+    _run_launcher_bootstrap(monkeypatch, base, "5.11.75")
+    assert _resolved_version(base) == "5.11.76"
 
 
 def test_version_resolver_falls_back_to_baked_install(monkeypatch, tmp_path):
     """When the scan finds no semver sibling (e.g. the marketplace cache is
-    unreadable), the resolver prints the baked install directory so the hook
+    unreadable), the bootstrap keeps the baked install directory so the hook
     still runs the install it was generated from."""
     base = tmp_path / "plugin cache" / "token-optimizer"
     (base / "latest").mkdir(parents=True)
+    _make_fake_runner(base / "5.11.75")
 
-    assert _run_version_resolver(monkeypatch, base, "5.11.75") == "5.11.75"
+    _run_launcher_bootstrap(monkeypatch, base, "5.11.75")
+    assert _resolved_version(base) == "5.11.75"
 
 
 def _make_fake_runner(version_dir: Path) -> None:
