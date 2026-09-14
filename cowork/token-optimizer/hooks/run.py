@@ -32,6 +32,7 @@ import os
 import signal
 import subprocess
 import sys
+import traceback
 from pathlib import Path
 
 # Defense in depth: the launcher script already filters interpreters, but
@@ -108,6 +109,42 @@ def _forward_and_exit(signum, frame):
     if _child_proc is not None:
         _reap(_child_proc, signal.SIGTERM)
     os._exit(0)
+
+
+# Diagnostics log for unexpected errors in the consent gate. Mirrors the
+# pattern in the hook runners: write to SNAPSHOT_DIR (never stderr, which
+# the host captures into the model's session context). Capped at 256 KB.
+_DIAGNOSTICS_LOG_NAME = "consent_diagnostics.log"
+_DIAGNOSTICS_LOG_CAP = 256 * 1024
+
+
+def _consent_diagnostics_log_path():
+    """Resolve the diagnostics log path under measure.SNAPSHOT_DIR, or None."""
+    try:
+        import measure
+        base = getattr(measure, "SNAPSHOT_DIR", None)
+        if base is None:
+            return None
+        from pathlib import Path as _P
+        return _P(base) / _DIAGNOSTICS_LOG_NAME
+    except Exception:
+        return None
+
+
+def _consent_log_diagnostics(message):
+    """Append a diagnostics chunk to the consent diagnostics log, capped."""
+    path = _consent_diagnostics_log_path()
+    if path is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(message)
+        if path.stat().st_size > _DIAGNOSTICS_LOG_CAP:
+            data = path.read_bytes()[-_DIAGNOSTICS_LOG_CAP:]
+            path.write_bytes(data)
+    except OSError:
+        pass
 
 
 def _check_consent(plugin_root: Path | None = None) -> bool:
@@ -227,7 +264,21 @@ def _check_consent(plugin_root: Path | None = None) -> bool:
             return True
 
         return False  # Explicit opt-out (a consent key was written False)
+    except (OSError, json.JSONDecodeError):
+        return True  # Fail-open: expected (missing/corrupt config)
     except Exception:
+        # Unexpected error — make corruption visible without blocking.
+        # Log the traceback to the diagnostics file (never stderr, which
+        # the host captures into the model's session context), then
+        # fail-open so behavior is unchanged.
+        import io
+        try:
+            buf = io.StringIO()
+            buf.write("[Token Optimizer] _check_consent unexpected error, failing open\n")
+            traceback.print_exc(file=buf)
+            _consent_log_diagnostics(buf.getvalue())
+        except Exception:
+            pass
         return True  # Fail-open: never block on errors
 
 

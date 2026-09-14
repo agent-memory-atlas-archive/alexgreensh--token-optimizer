@@ -1314,13 +1314,19 @@ def _resolve_session_model(session_id=None):
         except (OSError, PermissionError):
             pass
 
-    # 2. Try CLAUDE_MODEL env var
+    # 2. Try CLAUDE_MODEL env var — but only for Claude-family runtimes. A
+    # foreign runtime (cursor, grok, opencode, copilot, antigravity) running
+    # on a host that also has CLAUDE_MODEL set would otherwise be priced at
+    # Claude model rates, the exact cross-runtime leak the isolation pass
+    # closes for detect_context_window() and quick_scan().
     if not result:
-        env_model = os.environ.get("CLAUDE_MODEL") or os.environ.get("ANTHROPIC_MODEL")
-        if env_model:
-            norm = _normalize_model_name(env_model)
-            if norm in ("opus", "sonnet", "haiku"):
-                result = norm
+        _rt = detect_runtime()
+        if _rt in ("claude", "hermes"):
+            env_model = os.environ.get("CLAUDE_MODEL") or os.environ.get("ANTHROPIC_MODEL")
+            if env_model:
+                norm = _normalize_model_name(env_model)
+                if norm in ("opus", "sonnet", "haiku"):
+                    result = norm
 
     # 3. Try trends DB for most-recent dominant model
     if not result:
@@ -1367,7 +1373,7 @@ def _simulate_model_switch(session_data, target_model="sonnet"):
     total_input = session_data.get("total_input_tokens", 0)
     total_output = session_data.get("total_output_tokens", 0)
     cache_hit = session_data.get("cache_hit_rate", 0)
-    cache_read = int(total_input * cache_hit)
+    cache_read = _safe_int(total_input * cache_hit)
     uncached = max(0, total_input - cache_read)
 
     dom_model = max(model_usage, key=model_usage.get) if model_usage else "unknown"
@@ -1434,6 +1440,45 @@ def _fmt_context_window(size):
     if size >= 1_000_000:
         return f"{size / 1_000_000:.0f}M" if size % 1_000_000 == 0 else f"{size / 1_000_000:.1f}M"
     return f"{size // 1000}K"
+
+
+# ANSI/VT escape sequences: CSI (\x1b[ ... final byte), OSC (\x1b] ... BEL or
+# ST), charset/two-byte sequences. Session-log text is attacker-influenceable;
+# strip before echoing it to a terminal (coach previews, subagent names).
+_ANSI_ESCAPE_RE = re.compile(
+    r"\x1b\[[0-9;:<=>?]*[ -/]*[@-~]"   # CSI (full ECMA-48 parameter bytes 0x30-0x3f)
+    r"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"  # OSC ... BEL or ST
+    r"|\x1b[()][0-2A-Z]"                # charset selection
+    r"|\x1b[@-Z\\-_]"                   # remaining two-byte escapes
+    r"|\x1b\]"                          # bare OSC introducer (unterminated)
+    r"|\x1b\[[\x00-\x1f]*[ -/]*[@-~]"   # CSI with control bytes before final
+    r"|\x1b\["                          # bare CSI introducer (unterminated)
+)
+_BEL_RE = re.compile(r"\x07")
+
+
+def _strip_ansi(text):
+    """Remove ANSI/VT escape sequences from text destined for the terminal."""
+    if not isinstance(text, str):
+        text = str(text) if text is not None else ""
+    text = _ANSI_ESCAPE_RE.sub("", text)
+    # Strip stray BEL characters left by malformed OSC sequences whose
+    # terminator survived the OSC branch (embedded ESC broke the match).
+    return _BEL_RE.sub("", text)
+
+
+def _safe_int(value):
+    """Coerce to int, mapping non-finite/garbage input to 0.
+
+    Claude-path equivalent of codex_session._safe_int: json.loads accepts the
+    non-standard Infinity/NaN literals, so a corrupt or hostile transcript can
+    put float("inf")/nan into usage fields where int() then raises
+    OverflowError/ValueError — neither caught by the readers' OSError guards.
+    """
+    try:
+        return int(float(value or 0))
+    except (TypeError, ValueError, OverflowError):
+        return 0
 
 
 def estimate_tokens_from_file(filepath):
@@ -3129,7 +3174,9 @@ def _codex_config_int(name: str) -> int | None:
     value = _read_codex_config().get(name)
     try:
         parsed = int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
+        # TOML allows `inf`/`nan` literals: int(inf) raises OverflowError,
+        # int(nan) ValueError — both mean "no usable value", skip the key.
         return None
     return parsed if parsed > 0 else None
 
@@ -3219,11 +3266,16 @@ def detect_context_window():
     raw = _ctx_size_override
     if raw:
         try:
-            return remember((int(raw), "env: TOKEN_OPTIMIZER_CONTEXT_SIZE"))
+            _parsed_ctx = int(raw)
         except ValueError:
-            pass
+            _parsed_ctx = 0
+        # Mirror _codex_config_int's >0 guard: "0"/negative/garbage would
+        # otherwise yield ctx_window<=0 and crash every `overhead / ctx_window`
+        # division downstream.
+        if _parsed_ctx > 0:
+            return remember((_parsed_ctx, "env: TOKEN_OPTIMIZER_CONTEXT_SIZE"))
     # CLI override (set by --context-size flag)
-    if _cli_context_size:
+    if _cli_context_size and _cli_context_size > 0:
         return remember((_cli_context_size, "cli: --context-size"))
     if detect_runtime() == "codex":
         logged_window, session_name = _latest_codex_logged_context_window()
@@ -3232,7 +3284,9 @@ def detect_context_window():
         configured_window = _codex_config_int("model_context_window")
         if configured_window:
             return remember((configured_window, "codex config: model_context_window"))
-        model = os.environ.get("CODEX_MODEL") or os.environ.get("OPENAI_MODEL") or _codex_config_model()
+        model = ((os.environ.get("CODEX_MODEL") or "").strip()
+                 or (os.environ.get("OPENAI_MODEL") or "").strip()
+                 or _codex_config_model())
         import codex_models
         window = codex_models.effective_window(model)
         if window:
@@ -3252,6 +3306,13 @@ def detect_context_window():
             if _is_1m_model(model):
                 return remember((1_000_000, f"hermes env: {model} (1M)"))
         return remember((200_000, "hermes default (200K. Override: TOKEN_OPTIMIZER_CONTEXT_SIZE)"))
+    # Foreign runtimes (cursor, antigravity, grok, opencode, copilot) must not
+    # inherit Claude's model env vars, ~/.claude config, or the 1M Claude
+    # default — a conservative labeled default, always overridable via
+    # TOKEN_OPTIMIZER_CONTEXT_SIZE.
+    _rt = detect_runtime()
+    if _rt != "claude":
+        return remember((200_000, f"{_rt} default (200K conservative. Override: TOKEN_OPTIMIZER_CONTEXT_SIZE)"))
     # Detect from model string in environment
     model = os.environ.get("CLAUDE_MODEL", "").lower()
     if not model:
@@ -3491,6 +3552,7 @@ def quick_scan(as_json=False):
     components = measure_components()
     totals = calculate_totals(components)
     ctx_window, ctx_source = detect_context_window()
+    ctx_window = max(int(ctx_window or 0), 1)  # every division below needs >0
     ctx_label = _fmt_context_window(ctx_window)
 
     overhead = totals["estimated_total"]
@@ -3503,7 +3565,34 @@ def quick_scan(as_json=False):
 
     # Current session fill estimate (overhead only, no session data)
     fill_pct = overhead / ctx_window
-    quality_est = _estimate_quality_from_fill(fill_pct)
+    # Resolve the model so Codex never gets scored on the Anthropic curve.
+    # Codex sessions run gpt-5.x-codex variants; env/config resolution covers
+    # the common cases, and "codex" as fallback maps to the published
+    # openai-gpt-5 MRCR curve rather than anthropic-default.
+    _rt = detect_runtime()
+    if _rt == "codex":
+        _qmodel = ((os.environ.get("CODEX_MODEL") or "").strip()
+                   or (os.environ.get("OPENAI_MODEL") or "").strip()
+                   or _codex_config_model() or "codex")
+    elif _rt in ("claude", "hermes"):
+        _qmodel = os.environ.get("CLAUDE_MODEL") or os.environ.get("ANTHROPIC_MODEL")
+    else:
+        # Foreign runtimes have no Claude-model settings to read — leave the
+        # model unresolved rather than inherit another runtime's env vars.
+        _qmodel = None
+    quality_est, _qcurve = _estimate_quality_with_curve(fill_pct, model=_qmodel, context_window=ctx_window)
+    if _rt == "codex" and _qcurve == "anthropic-default":
+        # Custom/unknown Codex model string (o3, gpt-4.1, custom-provider
+        # names) matched no known family — a Codex session must never be
+        # scored or labeled on the Anthropic curve. Fall back to the
+        # documented Codex default.
+        quality_est, _qcurve = _estimate_quality_with_curve(
+            fill_pct, model="codex", context_window=ctx_window)
+    elif _rt not in ("claude", "hermes", "codex") and _qcurve == "anthropic-default":
+        # No model-family knowledge for this runtime — the estimate came from
+        # the generic fill-fraction curve, so label it honestly instead of
+        # implying an Anthropic curve scored a foreign runtime.
+        _qcurve = "generic-fill"
     band_name, band_color = _degradation_band(fill_pct)
 
     # Top offenders
@@ -3554,8 +3643,11 @@ def quick_scan(as_json=False):
                              f"AGENTS.md chain ({agents_md_lines} lines)"))
     mem = components.get("memory_md", {})
     if mem.get("tokens", 0) > 0:
+        # Under Codex this component holds state_*.sqlite memory, not a
+        # MEMORY.md file — label it for the runtime the user is on.
+        _mem_label = "Codex memories" if _rt == "codex" else "MEMORY.md"
         offenders.append(("memory_md", mem.get("lines", 0), mem.get("tokens", 0),
-                         f"MEMORY.md ({mem.get('lines', 0)} lines)"))
+                         f"{_mem_label} ({mem.get('lines', 0)} lines)"))
 
     # Sort by tokens descending, top 3
     offenders.sort(key=lambda x: -x[2])
@@ -3567,15 +3659,41 @@ def quick_scan(as_json=False):
         trends = _collect_trends_data(days=30)
         if trends and detect_runtime() != "codex":
             never_used = trends.get("skills", {}).get("never_used", [])
+            active_names = set(skills.get("names", []))
+            never_used = sorted({n for n in never_used
+                                 if n in active_names and not _is_own_tool_skill(n)})
             if len(never_used) >= 3:
-                avg_per_skill = skills.get("tokens", 0) // max(skills.get("count", 1), 1)
-                savings = len(never_used) * avg_per_skill
-                quick_win = {
-                    "action": f"Review {len(never_used)} skills not invoked in the window",
-                    "savings": savings,
-                    "detail": f"save ~{savings:,} tokens/session",
-                    "extend": f"Extends peak quality zone by ~{savings:,} tokens",
-                }
+                # Same rule as the coach's unused-skill savings: measured
+                # per-skill frontmatter only — never count x inventory average
+                # (which reports the inventory bound when most skills are
+                # unused) and never count x a flat constant.
+                detail_map = components.get("skills_detail", {})
+                measured = 0
+                unmeasured = 0
+                for _n in never_used:
+                    try:
+                        _t = int((detail_map.get(_n) or {}).get("frontmatter_tokens") or 0)
+                    except (TypeError, ValueError, OverflowError):
+                        _t = 0
+                    if _t > 0:
+                        measured += _t
+                    else:
+                        unmeasured += 1
+                if measured > 0:
+                    _unm = f" ({unmeasured} of {len(never_used)} lack per-skill measurement)" if unmeasured else ""
+                    quick_win = {
+                        "action": f"Review {len(never_used)} skills not invoked in the window",
+                        "savings": measured,
+                        "detail": f"save ~{measured:,} measured tokens/session{_unm}",
+                        "extend": f"Extends peak quality zone by ~{measured:,} tokens",
+                    }
+                else:
+                    quick_win = {
+                        "action": f"Review {len(never_used)} skills not invoked in the window",
+                        "savings": 0,
+                        "detail": "savings unknown: per-skill measurements unavailable",
+                        "extend": "Removing unused skills extends the peak quality zone",
+                    }
     except Exception:
         pass
 
@@ -3659,6 +3777,10 @@ def quick_scan(as_json=False):
             "messages_before_compact": msgs_before_compact,
             "fill_pct": round(fill_pct * 100, 1),
             "quality_estimate": quality_est,
+            "quality_curve": _qcurve,
+            "quality_basis": (
+                f"heuristic: {_qcurve} MRCR curve at current startup fill; not a measured per-session score"
+            ),
             "grade": grade,
             "degradation_band": band_name,
             "top_offenders": [
@@ -3681,7 +3803,7 @@ def quick_scan(as_json=False):
 
     print("\n  DEGRADATION RISK")
     print(f"    Current startup fill:  {fill_pct * 100:.0f}% ({overhead:,}) -- {band_name}")
-    print(f"    Quality estimate:      {grade} ({quality_est}/100) (MRCR-based at this fill level)")
+    print(f"    Quality estimate:      {grade} ({quality_est}/100) ({_qcurve} MRCR curve at this fill level; heuristic, not measured)")
     next_danger = int(ctx_window * 0.50)
     print(f"    Next danger zone:      {next_danger:,} (50%, \"lost in the middle\" begins)")
     compact_at = int(ctx_window * 0.80)
@@ -4474,11 +4596,13 @@ def print_snapshot_summary(snapshot):
     print(f"  {core_label:<35s} {core.get('tokens', 0):>6,} tokens")
 
     print(f"  {'=' * 53}")
+    # Minimal/external snapshots may carry only `total_overhead`.
+    est_total = t.get("estimated_total", t.get("total_overhead", 0))
     total_label = "LOCAL FOOTPRINT (measurable)" if _cowork else "ESTIMATED TOTAL"
-    print(f"  {total_label:<35s} {t['estimated_total']:>6,} tokens")
+    print(f"  {total_label:<35s} {est_total:>6,} tokens")
     ctx_window, ctx_source = detect_context_window()
     ctx_label = _fmt_context_window(ctx_window)
-    pct_of_ctx = t['estimated_total'] / ctx_window * 100
+    pct_of_ctx = est_total / ctx_window * 100 if ctx_window else 0
     if _cowork:
         # The denominator (context window) is real, but the numerator is ONLY the
         # locally-controllable slice: platform overhead is not counted, so this %
@@ -4538,10 +4662,11 @@ def print_snapshot_summary(snapshot):
     truncated_descs = [s for s in all_verbose if s.get("truncated")]
     verbose_descs = [s for s in all_verbose if not s.get("truncated")]
     if truncated_descs:
-        names = [s["name"] for s in truncated_descs]
+        # Skill names come from SKILL.md frontmatter — attacker-influenceable.
+        names = [_strip_ansi(str(s["name"])) for s in truncated_descs]
         print(f"  TRUNCATED skill descriptions (>1,536 chars): {len(truncated_descs)} ({', '.join(names[:5])}{'...' if len(truncated_descs) > 5 else ''})")
     if verbose_descs:
-        names = [s["name"] for s in verbose_descs]
+        names = [_strip_ansi(str(s["name"])) for s in verbose_descs]
         print(f"  Verbose skill descriptions (>200 chars): {len(verbose_descs)} ({', '.join(names[:5])}{'...' if len(verbose_descs) > 5 else ''})")
 
     # Calibration gap
@@ -5987,6 +6112,28 @@ def _collect_codex_skill_inventory(cfg: dict, *, project: Path) -> dict[str, lis
     if plugin_cache.exists():
         candidates.extend((p, "plugin") for p in plugin_cache.rglob("skills/*/SKILL.md"))
 
+    # Plugins disabled in config.toml ([plugins."name@marketplace"] enabled=false)
+    # do not expose their cached skills to the model — they belong in "disabled",
+    # not "active", or the inventory reports an advertised surface larger than
+    # what Codex actually loads.
+    disabled_plugin_keys: set[str] = set()
+    plugins_cfg = cfg.get("plugins")
+    if isinstance(plugins_cfg, dict):
+        for _pkey, _pcfg in plugins_cfg.items():
+            if isinstance(_pcfg, dict) and not _pcfg.get("enabled", True):
+                disabled_plugin_keys.add(str(_pkey))
+
+    def _plugin_key_for(path_str: str) -> str | None:
+        # Cache layout: <cache>/<marketplace>/<plugin>/<version>/skills/<name>/SKILL.md
+        try:
+            rel = Path(path_str).relative_to(plugin_cache.resolve(strict=False))
+        except ValueError:
+            return None
+        parts = rel.parts
+        if len(parts) >= 5 and parts[-3] == "skills":
+            return f"{parts[1]}@{parts[0]}"
+        return None
+
     active = []
     disabled = []
     seen: set[str] = set()
@@ -6007,7 +6154,8 @@ def _collect_codex_skill_inventory(cfg: dict, *, project: Path) -> dict[str, lis
             "disable_cmd": f"TOKEN_OPTIMIZER_RUNTIME=codex python3 {mp_cmd} codex-skill disable --path {shlex.quote(resolved)}",
             "enable_cmd": f"TOKEN_OPTIMIZER_RUNTIME=codex python3 {mp_cmd} codex-skill enable --path {shlex.quote(resolved)}",
         }
-        if resolved in disabled_paths:
+        _pkey = _plugin_key_for(resolved)
+        if resolved in disabled_paths or (_pkey is not None and _pkey in disabled_plugin_keys):
             disabled.append(item)
         else:
             active.append(item)
@@ -7623,8 +7771,17 @@ def _spawn_detached_dashboard_selfheal(days=30, force=False):
             creationflags=(getattr(subprocess, "DETACHED_PROCESS", 0) | _NO_WINDOW),
             **popen_kw,
         )
-    except Exception:
-        pass
+    except Exception as _e:
+        # Fire-and-forget: never raise (a failed self-heal must not break the
+        # hook). But DO leave a breadcrumb — every other spawn site calls
+        # _log_spawn_failure; this was the only one that swallowed silently,
+        # leaving the dashboard stale forever with no diagnostic trail.
+        try:
+            _log_spawn_failure(
+                "dashboard self-heal spawn failed: %s: %s" % (type(_e).__name__, _e)
+            )
+        except Exception:
+            pass
 
 
 # Thundering-herd guard for the version-bump dashboard self-heal. The marker is
@@ -7852,18 +8009,14 @@ def _generate_codex_auto_recommendations(components, trends=None, days=30):
             "Start with plugin bundles outside your daily work; they are reversible."
         )
     verbose = components.get("skill_frontmatter_quality", {}).get("verbose_skills", [])
-    codex_truncated = [s for s in verbose if s.get("truncated")]
-    very_verbose = [s for s in verbose if not s.get("truncated")]
-    if codex_truncated:
-        names = ", ".join(s["name"] for s in codex_truncated[:8])
-        quick.append(
-            f"**{len(codex_truncated)} Codex skill descriptions exceed 1,536 chars (truncated)**: "
-            f"{names}{'...' if len(codex_truncated) > 8 else ''}. "
-            "The overflow loads every session but is silently cut from the skill listing. "
-            "Move detailed usage instructions into the SKILL.md body."
-        )
+    # The shared scan's `truncated` flag marks >1,536-char descriptions — a
+    # Claude Code listing behavior. Codex does not cut descriptions at that
+    # limit (the coach's W6 invariant), so those entries are simply very long
+    # descriptions here, not a silent-truncation claim.
+    very_verbose = verbose
     if very_verbose:
-        names = ", ".join(s["name"] for s in very_verbose[:8])
+        # Frontmatter names are attacker-influenceable — strip escapes.
+        names = ", ".join(_strip_ansi(str(s["name"])) for s in very_verbose[:8])
         quick.append(
             f"**Tighten {len(very_verbose)} Codex skill descriptions (>200 chars)**: "
             f"{names}{'...' if len(very_verbose) > 8 else ''}. "
@@ -7920,6 +8073,121 @@ def _generate_codex_auto_recommendations(components, trends=None, days=30):
         "**Start fresh between unrelated Codex tasks**: "
         "Session continuity is valuable inside a task, but stale tool outputs and old plans hurt quality. Use a new thread or compact/checkpoint when the objective changes."
     )
+
+    sections = []
+    if quick:
+        sections.append("## Quick Wins\n\n" + "\n\n".join(f"- [ ] {item}" for item in quick))
+    if medium:
+        sections.append("## Medium Effort\n\n" + "\n\n".join(f"- [ ] {item}" for item in medium))
+    if deep:
+        sections.append("## Deep Optimization\n\n" + "\n\n".join(f"- [ ] {item}" for item in deep))
+    if habits:
+        sections.append("## Behavioral Habits\n\n" + "\n\n".join(f"- [ ] {item}" for item in habits))
+
+    plan_md = "\n\n".join(sections) if sections else ""
+    total_count = len(quick) + len(medium) + len(deep) + len(habits)
+    return plan_md, total_count
+
+
+def _generate_foreign_auto_recommendations(components, trends=None, days=30):
+    """Optimization plan for runtimes with no Claude/Codex instruction-file
+    surface (cursor, antigravity, grok, opencode, copilot, hermes).
+
+    The Claude rules (CLAUDE.md/MEMORY.md trimming, ~/.claude paths, Anthropic
+    line guidance) must never reach these users, and we do not fabricate
+    runtime-specific knobs we cannot verify. Only runtime-neutral advice is
+    emitted; when no measurable surface exists, the plan says so plainly.
+    """
+    quick = []
+    medium = []
+    deep = []
+    habits = []
+
+    rt_label = runtime_name_for_humans()
+
+    skills = components.get("skills", {})
+    if skills.get("count", 0) > 0 and skills.get("tokens", 0) > 0:
+        medium.append(
+            f"**Audit the installed skill surface ({skills['count']} skills, ~{skills['tokens']:,} metadata tokens)**: "
+            f"Skill names and descriptions shape tool discovery before the first prompt. "
+            f"Disable or remove skills you do not use via {rt_label}'s own configuration."
+        )
+    verbose = components.get("skill_frontmatter_quality", {}).get("verbose_skills", [])
+    if verbose:
+        names = ", ".join(_strip_ansi(str(s["name"])) for s in verbose[:8])
+        medium.append(
+            f"**Tighten {len(verbose)} verbose skill descriptions (>200 chars)**: "
+            f"{names}{'...' if len(verbose) > 8 else ''}. "
+            "Descriptions should be trigger text, not documentation; keep usage detail in the skill body."
+        )
+
+    mcp = components.get("mcp_tools", {})
+    mcp_servers = int(mcp.get("server_count", 0) or 0)
+    if mcp_servers > 8:
+        medium.append(
+            f"**Audit MCP servers ({mcp_servers} configured)**: "
+            "Each server can expand the active tool surface with names, descriptions, and schemas. "
+            f"Disable duplicate or rarely used servers in {rt_label}'s MCP configuration."
+        )
+
+    # Unused skills — same review shape as the Claude rule but with
+    # runtime-neutral grep/archive wording and the runtime's own slim clause
+    # (no name-only / disable-model-invocation claims outside Claude Code).
+    if trends:
+        never_used = [
+            s for s in trends.get("skills", {}).get("never_used", [])
+            if not _is_own_tool_skill(s)
+        ]
+        _si = components.get("skills", {})
+        _actual_avg = (_si.get("tokens", 0) // max(_si.get("count", 1), 1)
+                       if _si.get("count", 0) > 0 else TOKENS_PER_SKILL_APPROX)
+        installed_count = trends.get("skills", {}).get("installed_count", 0)
+        if len(never_used) >= 5:
+            overhead = len(never_used) * _actual_avg
+            show_count = min(len(never_used), 8)
+            skill_list = ", ".join(_strip_ansi(str(s)) for s in sorted(never_used)[:show_count])
+            remaining = len(never_used) - show_count
+            quick.append(
+                f"**Review {show_count} skills not invoked in {days} days ({len(never_used)} of {installed_count})**: "
+                f"Each installed skill can cost ~{_actual_avg} tokens in the startup listing, every session, whether you use it or not.\n"
+                f"  Start with these: {skill_list}"
+                + (f"\n  ({remaining} more will surface after you archive these and re-run.)" if remaining > 0 else "") +
+                f"\n  For each skill, ask: do I use this? Is it seasonal? Does anything depend on it? "
+                f"(grep for the skill name in {rt_label}'s instruction, rules, and skills files)"
+                + _skill_slim_clause(_actual_avg, detect_runtime()) +
+                f"  Archive (harder step, for truly-dead skills) by moving the skill directory to a backup folder OUTSIDE {rt_label}'s skills directory. "
+                f"Restore any skill by moving it back. "
+                f"~{overhead:,} tokens recoverable across all {len(never_used)}."
+            )
+        elif len(never_used) >= 2:
+            overhead = len(never_used) * _actual_avg
+            skill_list = ", ".join(_strip_ansi(str(s)) for s in sorted(never_used))
+            medium.append(
+                f"**Review {len(never_used)} skills not invoked in {days} days**: "
+                f"{skill_list}."
+                + _skill_slim_clause(_actual_avg, detect_runtime()) +
+                f"  Or archive truly-dead skills by moving them to a backup folder OUTSIDE {rt_label}'s skills directory. "
+                f"~{overhead:,} tokens recoverable."
+            )
+
+    habits.append(
+        "**Scope sessions to one task**: Every runtime degrades as transcripts grow — "
+        "start a fresh session between unrelated tasks rather than letting one "
+        "conversation accumulate stale context."
+    )
+    habits.append(
+        "**Keep the stable prompt prefix stable**: Prompt caching across runtimes "
+        "rewards an unchanged instruction/tool prefix — avoid churning enabled "
+        "skills, servers, or instructions mid-session."
+    )
+
+    if not (quick or medium or deep):
+        quick.append(
+            f"**No locally measurable startup overhead for {rt_label}**: "
+            "This runtime does not expose a Claude/Codex-style instruction file or "
+            "skill manifest to Token Optimizer, so there is nothing to trim. The "
+            "habits below still apply."
+        )
 
     sections = []
     if quick:
@@ -8018,8 +8286,15 @@ def generate_auto_recommendations(components, trends=None, days=30):
 
     Returns (plan_markdown_string, recommendation_count).
     """
-    if detect_runtime() == "codex":
+    _rec_rt = detect_runtime()
+    if _rec_rt == "codex":
         return _generate_codex_auto_recommendations(components, trends=trends, days=days)
+    if _rec_rt != "claude":
+        # Foreign runtimes (hermes, cursor, antigravity, grok, opencode,
+        # copilot): the rules below emit Claude-only content — CLAUDE.md,
+        # MEMORY.md, ~/.claude paths, Anthropic line guidance — so they get a
+        # runtime-neutral plan instead of the Claude rule set.
+        return _generate_foreign_auto_recommendations(components, trends=trends, days=days)
 
     quick = []
     medium = []
@@ -8120,7 +8395,7 @@ def generate_auto_recommendations(components, trends=None, days=30):
         if len(never_used) >= 5:
             overhead = len(never_used) * _actual_avg
             show_count = min(len(never_used), 8)
-            skill_list = ", ".join(sorted(never_used)[:show_count])
+            skill_list = ", ".join(_strip_ansi(str(s)) for s in sorted(never_used)[:show_count])
             remaining = len(never_used) - show_count
             quick.append(
                 f"**Review {show_count} skills not invoked in {days} days ({len(never_used)} of {installed_count}, counting Skill calls and slash commands)**: "
@@ -8136,7 +8411,7 @@ def generate_auto_recommendations(components, trends=None, days=30):
             )
         elif len(never_used) >= 2:
             overhead = len(never_used) * _actual_avg
-            skill_list = ", ".join(sorted(never_used))
+            skill_list = ", ".join(_strip_ansi(str(s)) for s in sorted(never_used))
             medium.append(
                 f"**Review {len(never_used)} skills not invoked in {days} days**: "
                 f"No Skill call or slash command for these in {days} days: {skill_list}."
@@ -8198,7 +8473,7 @@ def generate_auto_recommendations(components, trends=None, days=30):
     very_verbose = [s for s in verbose if not s.get("truncated")]
     moderate_verbose = [s for s in verbose if 120 < s.get("description_chars", 0) <= 200]
     if truncated:
-        names = [s["name"] for s in truncated[:10]]
+        names = [_strip_ansi(str(s["name"])) for s in truncated[:10]]
         est_waste = sum(int((s["description_chars"] - _SKILL_DESC_TRUNCATION_LIMIT) / CHARS_PER_TOKEN) for s in truncated)
         quick.append(
             f"**{len(truncated)} skill descriptions TRUNCATED by Claude Code (>1,536 chars)**: "
@@ -8209,7 +8484,7 @@ def generate_auto_recommendations(components, trends=None, days=30):
             f"~{est_waste:,} tokens wasted."
         )
     if very_verbose:
-        names = [s["name"] for s in very_verbose[:10]]
+        names = [_strip_ansi(str(s["name"])) for s in very_verbose[:10]]
         est_waste = sum(int((s["description_chars"] - 80) / CHARS_PER_TOKEN) for s in very_verbose)
         quick.append(
             f"**Tighten {len(very_verbose)} verbose skill descriptions (>200 chars)**: "
@@ -8219,7 +8494,7 @@ def generate_auto_recommendations(components, trends=None, days=30):
             f"~{est_waste:,} tokens recoverable."
         )
     if moderate_verbose:
-        names = [s["name"] for s in moderate_verbose[:10]]
+        names = [_strip_ansi(str(s["name"])) for s in moderate_verbose[:10]]
         est_waste = sum(int((s["description_chars"] - 80) / CHARS_PER_TOKEN) for s in moderate_verbose)
         medium.append(
             f"**Tighten {len(moderate_verbose)} verbose skill descriptions (120-200 chars, target 80)**: "
@@ -8320,7 +8595,7 @@ def generate_auto_recommendations(components, trends=None, days=30):
     plugin_suspicious = components.get("plugin_skills", {}).get("suspicious_paths", [])
     if plugin_dupes:
         dupe_count = sum(len(v) - 1 for v in plugin_dupes.values())
-        dupe_names = list(plugin_dupes.keys())
+        dupe_names = [_strip_ansi(str(n)) for n in plugin_dupes.keys()]
         # Estimate wasted tokens: each duplicate copy loads the same skill frontmatter again
         avg_tokens = TOKENS_PER_SKILL_APPROX
         ps_data = components.get("plugin_skills", {})
@@ -8520,9 +8795,24 @@ def generate_coach_data(focus=None, components=None, trends=None):
         components = measure_components()
     totals = calculate_totals(components)
     context_window = detect_context_window()[0]
-    is_codex = detect_runtime() == "codex"
-    instruction_label = "AGENTS.md" if is_codex else "CLAUDE.md"
-    memory_label = "Codex memories" if is_codex else "MEMORY.md"
+    _rt = detect_runtime()
+    is_codex = _rt == "codex"
+    is_claude = _rt == "claude"
+    # Claude-family = Claude-model runtimes where Sonnet/Haiku routing advice
+    # is valid. File surfaces (CLAUDE.md, ~/.claude paths) are Claude-only —
+    # hermes runs Claude models but has no CLAUDE.md.
+    is_claude_family = _rt in ("claude", "hermes")
+    if is_codex:
+        instruction_label = "AGENTS.md"
+        memory_label = "Codex memories"
+    elif is_claude:
+        instruction_label = "CLAUDE.md"
+        memory_label = "MEMORY.md"
+    else:
+        # Foreign runtimes (cursor, antigravity, grok, opencode, copilot,
+        # hermes) have no CLAUDE.md/MEMORY.md surface — label generically.
+        instruction_label = "agent instructions"
+        memory_label = "agent memory"
 
     # Collect trends if not provided
     if trends is None:
@@ -8547,10 +8837,47 @@ def generate_coach_data(focus=None, components=None, trends=None):
     skills = components.get("skills", {})
     skill_count = skills.get("count", 0)
     skill_tokens = skills.get("tokens", 0)
+    if is_codex:
+        # The Codex scan splits plugin-delivered skills into plugin_skills, but
+        # their name+description metadata is advertised to the model exactly
+        # like user skills — the headline must count both or it under-reports
+        # the real startup surface.
+        plugin_skills = components.get("plugin_skills", {})
+        skill_count += plugin_skills.get("count", 0)
+        skill_tokens += plugin_skills.get("tokens", 0)
     # context_window already set above via detect_context_window() — don't overwrite with stale snapshot value
     skill_pct = skill_tokens / context_window * 100 if context_window else 0
     unused_skills = trends.get("skills", {}).get("never_used", []) if trends else []
-    unused_count = len(unused_skills) if unused_skills else 0
+    active_names = set(skills.get("names", []))
+    if is_codex:
+        active_names.update(components.get("plugin_skills", {}).get("names", []))
+    unused_skills = sorted({name for name in unused_skills
+                            if name in active_names and not _is_own_tool_skill(name)})
+    unused_count = len(unused_skills)
+    # Savings come from per-skill measurement only: sum the unused candidates'
+    # own measured frontmatter tokens. Unmeasured names are reported as such —
+    # never an inventory-wide upper bound and never count x a flat constant.
+    skills_detail = components.get("skills_detail", {})
+    unused_measured_tokens = 0
+    unused_unmeasured = 0
+    for _name in unused_skills:
+        _raw_toks = (skills_detail.get(_name) or {}).get("frontmatter_tokens")
+        try:
+            _toks = int(_raw_toks)
+        except (TypeError, ValueError, OverflowError):
+            # NaN/inf/non-numeric entries are unmeasured, not a coach crash.
+            _toks = 0
+        if _toks > 0:
+            unused_measured_tokens += _toks
+        else:
+            unused_unmeasured += 1
+    if unused_measured_tokens > 0 and unused_unmeasured == 0:
+        unused_savings = f"~{unused_measured_tokens:,} tokens (measured descriptions of the {unused_count} unused skills)"
+    elif unused_measured_tokens > 0:
+        unused_savings = (f"~{unused_measured_tokens:,} tokens measured for the unused set "
+                          f"({unused_unmeasured} of {unused_count} lack per-skill measurement)")
+    else:
+        unused_savings = "Unknown: per-skill token measurements unavailable for the unused set"
     unused_ratio = unused_count / skill_count if skill_count > 0 else 0
     if unused_count > 20 and skill_pct > 2 and unused_ratio > 0.8:
         skill_fix = (
@@ -8565,7 +8892,7 @@ def generate_coach_data(focus=None, components=None, trends=None):
             "severity": "high",
             "detail": f"{unused_count} of {skill_count} skills unused in 30 days ({skill_tokens:,} tokens, {skill_pct:.1f}% of context)",
             "fix": skill_fix,
-            "savings": f"~{unused_count * TOKENS_PER_SKILL_APPROX:,} tokens from unused skills",
+            "savings": unused_savings,
         })
         score -= 7
     elif unused_count > 15 and unused_ratio > 0.6:
@@ -8575,12 +8902,12 @@ def generate_coach_data(focus=None, components=None, trends=None):
             "severity": "low",
             "detail": f"{unused_count} of {skill_count} skills unused in 30 days. Some may be seasonal.",
             "fix": "Review for skills you've truly abandoned vs. ones you use occasionally",
-            "savings": f"~{unused_count * TOKENS_PER_SKILL_APPROX:,} tokens if archived",
+            "savings": unused_savings,
         })
         score -= 3
     elif skill_count > 0:
         patterns_good.append({
-            "name": "Active Skill Set",
+            "name": "Installed Skill Set",
             "detail": f"{skill_count} skills ({skill_tokens:,} tokens, {skill_pct:.1f}% of context)",
         })
 
@@ -8589,7 +8916,7 @@ def generate_coach_data(focus=None, components=None, trends=None):
     claude_lines = 0
     for key in components:
         if (
-            (not is_codex and key.startswith("claude_md"))
+            (is_claude and key.startswith("claude_md"))
             or (is_codex and key.startswith("agents_md"))
         ) and components[key].get("exists"):
             claude_tokens += components[key].get("tokens", 0)
@@ -8630,8 +8957,10 @@ def generate_coach_data(focus=None, components=None, trends=None):
         })
         score += 5
 
-    # Check MEMORY.md
-    mem = components.get("memory_md", {})
+    # Check MEMORY.md — a Claude/Codex-only surface. Foreign runtimes have no
+    # auto-load memory file and never produce this component; do not evaluate
+    # an injected/foreign one under a Claude label.
+    mem = components.get("memory_md", {}) if (is_claude or is_codex) else {}
     mem_lines = mem.get("lines", 0)
     if mem_lines > 200:
         patterns_bad.append({
@@ -8664,7 +8993,9 @@ def generate_coach_data(focus=None, components=None, trends=None):
             "name": "MCP Sprawl",
             "severity": "medium",
             "detail": f"{mcp_servers} MCP servers ({mcp_tokens:,} tokens, {mcp_pct:.1f}% of context)",
-            "fix": "Disable unused servers in settings.json",
+            "fix": ("Disable unused servers in ~/.codex/config.toml ([mcp_servers] sections)"
+                    if is_codex else
+                    "Disable unused servers in settings.json"),
             "savings": "~50-100 tokens per disabled server",
         })
         score -= 5
@@ -8674,9 +9005,10 @@ def generate_coach_data(focus=None, components=None, trends=None):
             "detail": f"{mcp_servers} servers ({mcp_tokens:,} tokens, {mcp_pct:.1f}% of context)",
         })
 
-    # Check file exclusion rules (permissions.deny)
+    # Check file exclusion rules (permissions.deny) — .claude/settings.json is
+    # a Claude-only config surface, so the advice is Claude-only too.
     exclusion = components.get("file_exclusion", {})
-    if not is_codex and not exclusion.get("has_rules"):
+    if is_claude and not exclusion.get("has_rules"):
         patterns_bad.append({
             "name": "Missing file exclusion rules",
             "severity": "medium",
@@ -8721,14 +9053,16 @@ def generate_coach_data(focus=None, components=None, trends=None):
             "earned": True,
         })
         score += 5
-    elif hooks.get("configured") and "SessionEnd" in hooks.get("names", []):
+    elif is_claude and hooks.get("configured") and "SessionEnd" in hooks.get("names", []):
         patterns_good.append({
             "name": "SessionEnd Hook Installed",
             "detail": "Usage tracking active",
             "earned": True,
         })
         score += 5
-    else:
+    elif is_claude or is_codex:
+        # Hook-install advice exists only for runtimes TO can install into;
+        # foreign runtimes get no hook pattern at all.
         patterns_bad.append({
             "name": "No Codex Stop Hook" if is_codex else "No SessionEnd Hook",
             "severity": "low",
@@ -8748,7 +9082,7 @@ def generate_coach_data(focus=None, components=None, trends=None):
             opus_pct = model_mix.get("opus", 0) / total_model_tokens * 100
             haiku_pct = model_mix.get("haiku", 0) / total_model_tokens * 100
             _opus_addiction_fired = False
-            if not is_codex and opus_pct > 85:
+            if is_claude_family and opus_pct > 85:
                 fix_msg = "Route data-gathering agents to Haiku, analysis to Sonnet"
                 if default_model and "opus" in str(default_model).lower():
                     fix_msg += f". Root cause: settings.json has \"model\": \"{default_model}\" which may override routing"
@@ -8766,11 +9100,24 @@ def generate_coach_data(focus=None, components=None, trends=None):
         # proportional "Unused Skill Overhead" / "Some Unused Skills" patterns.
         # Removed duplicate check here to prevent double-penalty.
 
-    # Check verbose skill descriptions
+    # Check verbose skill descriptions. The warning claims ">200 chars", so the
+    # filter applies that stated threshold (the Codex scan also flags a 120-200
+    # band for its own medium-tier nudge — those are not "over 200").
     quality = components.get("skill_frontmatter_quality", {})
-    verbose = quality.get("verbose_skills", [])
-    truncated_skills = [s for s in verbose if s.get("truncated")]
-    verbose_only = [s for s in verbose if not s.get("truncated")]
+    verbose = [s for s in quality.get("verbose_skills", [])
+               if not _is_own_tool_skill(s.get("name"))
+               and s.get("description_chars", 0) > 200]
+    if is_claude:
+        truncated_skills = [s for s in verbose if s.get("truncated")]
+        verbose_only = [s for s in verbose if not s.get("truncated")]
+    else:
+        # The 1,536-char silent truncation is a Claude Code behavior — Codex
+        # and every other runtime do not cut descriptions at that limit. A
+        # truncated-flagged entry off-Claude is simply a very long
+        # description: keep it in the verbose set so it still surfaces instead
+        # of vanishing from every warning.
+        verbose_only = verbose
+        truncated_skills = []
     if truncated_skills:
         patterns_bad.append({
             "name": "Truncated Skill Descriptions",
@@ -8801,7 +9148,7 @@ def generate_coach_data(focus=None, components=None, trends=None):
     # Check settings env vars for optimization opportunities. Resolve across
     # process env + all settings files so a project-level opt-out is honoured.
     claudeai_val = _resolve_feature_env("ENABLE_CLAUDEAI_MCP_SERVERS") or ""
-    if not is_codex and str(claudeai_val).lower() != "false" and mcp_servers > 3:
+    if is_claude and str(claudeai_val).lower() != "false" and mcp_servers > 3:
         questions.append("Cloud-synced MCP servers from claude.ai may be adding overhead. Have you reviewed which servers are cloud-synced vs local?")
 
     # WebSearch routing nudge (post-hoc detector)
@@ -8835,7 +9182,7 @@ def generate_coach_data(focus=None, components=None, trends=None):
             if md_comp.get("exists") and md_comp.get("content"):
                 _claude_md_content = md_comp["content"]
                 break
-        if not _claude_md_content:
+        if not _claude_md_content and is_claude:
             for path in (CLAUDE_DIR / "CLAUDE.md", Path.home() / "CLAUDE.md", Path.cwd() / "CLAUDE.md"):
                 if path.exists():
                     try:
@@ -8885,9 +9232,14 @@ def generate_coach_data(focus=None, components=None, trends=None):
             if f["name"] == "overpowered" and _opus_addiction_fired:
                 continue
 
-            # Enrich overpowered findings with counterfactual
-            detail = f["evidence"]
-            if f["name"] == "overpowered" and recent_files:
+            # Enrich overpowered findings with counterfactual (Claude model
+            # ladder only — under Codex a "switch to Sonnet" estimate would be
+            # foreign-runtime advice). Detector evidence interpolates raw
+            # session-log strings (e.g. a model_usage key), which are
+            # attacker-influenceable — strip terminal escapes before the text
+            # reaches patterns_bad detail/fix and the coach print.
+            detail = _strip_ansi(str(f["evidence"]))
+            if f["name"] == "overpowered" and recent_files and is_claude_family:
                 try:
                     latest = _parse_session_jsonl(str(recent_files[0][0]))
                     if latest:
@@ -8904,10 +9256,10 @@ def generate_coach_data(focus=None, components=None, trends=None):
                 else f"~{f.get('savings_tokens', 0):,} tokens"
             )
             patterns_bad.append({
-                "name": f["name"].replace("_", " ").title(),
+                "name": _strip_ansi(str(f["name"].replace("_", " ").title())),
                 "severity": severity,
                 "detail": detail,
-                "fix": f["suggestion"],
+                "fix": _strip_ansi(str(f["suggestion"])),
                 "savings": savings,
             })
             score -= 3
@@ -8945,7 +9297,7 @@ def generate_coach_data(focus=None, components=None, trends=None):
                         "name": "Quality Declining",
                         "severity": "high",
                         "detail": f"Average quality dropped from {prior_avg_q:.0f} to {recent_avg_q:.0f} over the last week",
-                        "fix": "Check for new MCP servers, growing CLAUDE.md, or longer sessions causing context fill",
+                        "fix": f"Check for new MCP servers, growing {instruction_label}, or longer sessions causing context fill",
                         "savings": "Quality recovery prevents retry waste (typically 5,000-20,000 tokens per failed turn)",
                     })
                     score -= 8
@@ -8969,14 +9321,32 @@ def generate_coach_data(focus=None, components=None, trends=None):
                 history["duration_recent_avg"] = round(recent_avg_dur, 1)
                 history["duration_prior_avg"] = round(older_avg_dur, 1)
                 if recent_avg_dur > older_avg_dur * 1.5 and recent_avg_dur > 60:
-                    patterns_bad.append({
-                        "name": "Session Duration Creep",
-                        "severity": "medium",
-                        "detail": f"Sessions averaging {recent_avg_dur:.0f} min (was {older_avg_dur:.0f} min). Longer sessions fill context faster",
-                        "fix": "Use /compact proactively around the midpoint. Break large tasks into focused sessions",
-                        "savings": f"~{int(recent_avg_dur - older_avg_dur) * 200:,} fewer tokens of context bloat per session",
-                    })
-                    score -= 5
+                    # Elapsed minutes include idle time — duration alone is NOT
+                    # evidence of token waste. The score only moves when real
+                    # per-session token volume grew alongside the duration.
+                    recent_toks = [s.get("input_tokens", 0) for s in recent_sessions if s.get("input_tokens")]
+                    older_toks = [s.get("input_tokens", 0) for s in older_sessions if s.get("input_tokens")]
+                    tokens_grew = (
+                        bool(recent_toks) and bool(older_toks)
+                        and (sum(recent_toks) / len(recent_toks)) > (sum(older_toks) / len(older_toks)) * 1.25
+                    )
+                    if tokens_grew:
+                        patterns_bad.append({
+                            "name": "Session Duration Creep",
+                            "severity": "medium",
+                            "detail": f"Sessions averaging {recent_avg_dur:.0f} min (was {older_avg_dur:.0f} min) with per-session input volume up {((sum(recent_toks) / len(recent_toks)) / (sum(older_toks) / len(older_toks)) - 1) * 100:.0f}% — real context growth, not idle time",
+                            "fix": "Use /compact proactively around the midpoint. Break large tasks into focused sessions",
+                            "savings": "Not estimated: duration is not a token measure; compacting earlier reduces context fill",
+                        })
+                        score -= 5
+                    else:
+                        patterns_bad.append({
+                            "name": "Session Duration Creep",
+                            "severity": "low",
+                            "detail": f"Elapsed sessions averaging {recent_avg_dur:.0f} min (was {older_avg_dur:.0f} min); may include idle time and does not by itself indicate token waste",
+                            "fix": "If sessions are genuinely busier (not just idle), compact proactively around the midpoint",
+                            "savings": "Not estimated: elapsed session duration includes idle time and does not measure token waste",
+                        })
 
         # 3. Cache hit rate degradation (model-switch aware)
         multi_model_recent = sum(1 for s in recent_sessions if s.get("model_count", 1) > 1)
@@ -8996,7 +9366,11 @@ def generate_coach_data(focus=None, components=None, trends=None):
                             "name": "Cache Hit Rate Dropping (Model Switches)",
                             "severity": "low",
                             "detail": f"Cache hit rate fell from {older_avg_chr:.0%} to {recent_avg_chr:.0%}, but {multi_model_pct:.0f}% of recent sessions switched models mid-session. Model switches invalidate the prompt cache (expected behavior)",
-                            "fix": "Pick one model per session when possible. Use /model at session start, not mid-conversation. Subagent model routing (Haiku/Sonnet) is fine, it runs in separate contexts",
+                            "fix": ("Set the session model up front (config.toml `model`) instead of switching mid-session. Codex subagents run in separate contexts, so a smaller model for them does not disturb the main session's cache"
+                                    if is_codex else
+                                    "Pick one model per session when possible. Use /model at session start, not mid-conversation. Subagent model routing (Haiku/Sonnet) is fine, it runs in separate contexts"
+                                    if is_claude_family else
+                                    "Pick one model per session when possible — mid-session switches invalidate the cached prefix"),
                             "savings": "Avoiding mid-session model switches can recover 10-20% cache hit rate",
                         })
                         score -= 2
@@ -9005,8 +9379,8 @@ def generate_coach_data(focus=None, components=None, trends=None):
                             "name": "Cache Hit Rate Dropping",
                             "severity": "medium",
                             "detail": f"Cache hit rate fell from {older_avg_chr:.0%} to {recent_avg_chr:.0%}. Lower cache = higher cost per turn",
-                            "fix": "Check for new MCP servers or CLAUDE.md changes that shift the stable prefix. Avoid tools that rewrite existing context",
-                            "savings": "Each 10% cache drop costs ~$0.50/session at Opus rates",
+                            "fix": f"Check for new MCP servers or {instruction_label} changes that shift the stable prefix. Avoid tools that rewrite existing context",
+                            "savings": "Cost impact depends on the session model and uncached input volume",
                         })
                         score -= 5
 
@@ -9024,7 +9398,11 @@ def generate_coach_data(focus=None, components=None, trends=None):
                     "name": "Majority Low-Grade Sessions",
                     "severity": "high",
                     "detail": f"{d_pct:.0f}% of recent sessions scored D or below",
-                    "fix": "Run /token-optimizer for a full audit. Common causes: bloated tool outputs, stale reads, long sessions without compaction",
+                    "fix": ("Run a full audit (token-optimizer skill or `measure.py coach --json`). Common causes: bloated tool outputs, stale reads, long sessions without compaction"
+                            if is_codex else
+                            "Run /token-optimizer for a full audit. Common causes: bloated tool outputs, stale reads, long sessions without compaction"
+                            if is_claude_family else
+                            "Run a full audit (`measure.py coach --json`). Common causes: bloated tool outputs, stale reads, long sessions without compaction"),
                     "savings": "Improving average grade from D to B typically saves 15-30% of session cost",
                 })
                 score -= 8
@@ -9051,9 +9429,13 @@ def generate_coach_data(focus=None, components=None, trends=None):
                 patterns_bad.append({
                     "name": "High Cost Per Session",
                     "severity": "medium",
-                    "detail": f"${cost_per_session:.2f}/session average (${total_cost:.2f} across {session_count_t} sessions in {period} days)",
-                    "fix": "Route simple tasks to Sonnet/Haiku. Use /compact in long sessions. Archive unused skills",
-                    "savings": f"~${cost_per_session * 0.3:.2f}/session with routing + compression",
+                    "detail": f"Estimated API-equivalent cost: ${cost_per_session:.2f}/session (${total_cost:.2f} across {session_count_t} sessions in {period} days); not a billing statement",
+                    "fix": ("Choose a lower reasoning effort or a smaller Codex model for simple tasks. Compact long sessions when needed"
+                            if is_codex else
+                            "Route simple tasks to Sonnet/Haiku. Use /compact in long sessions. Review unused skills"
+                            if is_claude_family else
+                            "Route simple tasks to a cheaper model tier. Restart or compact long sessions. Review unused skills"),
+                    "savings": "Not estimated: requires a measured model-routing or compression comparison",
                 })
                 score -= 3
 
@@ -9102,13 +9484,26 @@ def generate_coach_data(focus=None, components=None, trends=None):
                 "name": "Frequent Model Switching",
                 "severity": "medium",
                 "detail": f"{multi_model_pct:.0f}% of recent sessions used multiple models. Each switch invalidates the prompt cache and can cause context quality drops",
-                "fix": "Set your preferred model at session start with /model. Route subagents to cheaper models via agent() opts instead of switching the main session model",
+                "fix": ("Set the session model up front (config.toml `model`) instead of switching mid-session; each switch invalidates the cached prefix"
+                        if is_codex else
+                        "Set your preferred model at session start with /model. Route subagents to cheaper models via agent() opts instead of switching the main session model"
+                        if is_claude_family else
+                        "Set the session model up front instead of switching mid-session; each switch invalidates the cached prefix"),
                 "savings": "Consistent model usage improves cache hit rate by 10-20% and avoids quality grade drops",
             })
             score -= 4
 
     # Clamp score
     score = max(0, min(100, score))
+
+    # Session logs, skill frontmatter, and detector evidence are all
+    # attacker-influenceable; nothing carrying terminal control sequences may
+    # reach the coach's printed output or the --json payload.
+    for _p in patterns_bad + patterns_good:
+        for _k in ("name", "detail", "fix", "savings"):
+            if isinstance(_p.get(_k), str):
+                _p[_k] = _strip_ansi(_p[_k])
+    questions = [_strip_ansi(str(q)) for q in questions]
 
     # Build result
     overhead_pct = (totals["estimated_total"] / context_window * 100) if context_window else 0
@@ -9141,6 +9536,20 @@ def generate_coach_data(focus=None, components=None, trends=None):
         "focus_area": focus,
         "history": history,
     }
+
+    if is_codex:
+        # The skill figures above count the installed inventory Codex
+        # advertises to the model (user skills + skills of enabled plugins;
+        # skills under config-disabled plugins are excluded by the scan). What
+        # a given session's prompt actually receives is not directly observed —
+        # the count is the advertised surface, labeled as such.
+        result["snapshot"]["skills_basis"] = (
+            "installed inventory advertised to the model (user skills + enabled-plugin "
+            "skills); per-session prompt inclusion not directly observed"
+        )
+        # claude_md_tokens holds AGENTS.md-chain tokens under Codex; keep the
+        # legacy key for existing consumers and add a correctly named alias.
+        result["snapshot"]["agents_md_tokens"] = claude_tokens
 
     # Add compaction timing guide when relevant
     has_compaction_patterns = (
@@ -9179,7 +9588,9 @@ def generate_coach_data(focus=None, components=None, trends=None):
         dom_model = max(parsed["model_usage"], key=parsed["model_usage"].get) if parsed["model_usage"] else "unknown"
         total_input = parsed["total_input_tokens"]
         chr_val = parsed.get("cache_hit_rate", 0)
-        cache_read = int(total_input * chr_val)
+        # _safe_int: a non-finite product (corrupt cache_hit_rate) degrades to
+        # 0 instead of raising ValueError/OverflowError and killing the coach.
+        cache_read = _safe_int(total_input * chr_val)
         session_cost = _get_model_cost(dom_model, max(0, total_input - cache_read),
                                         parsed["total_output_tokens"], cache_read, 0, tier=tier)
         total_session_cost += session_cost
@@ -9210,8 +9621,12 @@ def generate_coach_data(focus=None, components=None, trends=None):
                 "name": "Heavy Subagent Spend",
                 "severity": "medium",
                 "detail": f"Subagents consumed ${total_subagent_cost:.2f} ({sub_pct}% of recent spend)",
-                "fix": "Route data-gathering subagents to Haiku. Reserve Opus for synthesis.",
-                "savings": f"~${total_subagent_cost * 0.6:.2f} with Haiku routing",
+                "fix": ("Route data-gathering subagents to a smaller Codex model or lower reasoning effort. Reserve the frontier model for synthesis."
+                        if is_codex else
+                        "Route data-gathering subagents to Haiku. Reserve Opus for synthesis."),
+                "savings": ("Not estimated: requires a measured model-routing comparison"
+                            if is_codex else
+                            f"~${total_subagent_cost * 0.6:.2f} with Haiku routing"),
             })
             score = max(0, result["health_score"] - 5)
             result["health_score"] = score
@@ -9282,15 +9697,24 @@ def _cmd_route(args):
         # Positional task: keep every token except the recognized --json flag so
         # task words that happen to start with "--" are not silently dropped.
         task = " ".join(a for a in args[1:] if a != "--json")
+    _rt = detect_runtime()
     try:
         import routing_advisor
-        _rt = detect_runtime()
         rec = routing_advisor.recommend(task, _rt, models=_resolve_platform_models(_rt))
     except Exception as _e:
         # Router module unavailable: a real, non-cheap default with the same
         # keys as a normal recommendation so JSON consumers never KeyError.
+        # Model name comes from the platform's own ladder, never a hardcoded
+        # Claude tier under a non-Claude runtime.
+        _mid = "sonnet"
+        try:
+            _row = routing_advisor.ROUTING_TABLES.get(_rt) or routing_advisor._GENERIC_ROW
+            _mid = _row["models"]["mid"]
+        except Exception:
+            if _rt == "codex":
+                _mid = "gpt-5.6-terra"
         rec = {
-            "model": "sonnet", "effort": "medium", "significance": "standard",
+            "model": _mid, "effort": "medium", "significance": "standard",
             "confidence": "low", "category": "simple", "tier": "mid",
             "effort_kind": "advisory", "effort_knob": "effort",
             "floor": {"min_tier": "mid", "min_effort": "medium"},
@@ -9485,15 +9909,27 @@ def _extract_skills_and_agents_from_subagent(filepath):
     skills = {}
     subagents = {}
     try:
+        if os.stat(filepath).st_size > codex_session.MAX_PARSE_FILE_BYTES:
+            return skills, subagents
+    except OSError:
+        return skills, subagents
+    try:
         with open(filepath, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
+                if len(line) > codex_session.MAX_JSONL_LINE_CHARS:
+                    continue
                 try:
                     record = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+                if not isinstance(record, dict):
+                    continue
                 if record.get("type") != "assistant":
                     continue
-                content = record.get("message", {}).get("content", [])
+                msg = record.get("message", {})
+                if not isinstance(msg, dict):
+                    continue
+                content = msg.get("content", [])
                 if not isinstance(content, list):
                     continue
                 for block in content:
@@ -9501,6 +9937,8 @@ def _extract_skills_and_agents_from_subagent(filepath):
                         continue
                     tool_name = block.get("name", "")
                     inp = block.get("input", {})
+                    if not isinstance(inp, dict):
+                        inp = {}
                     if tool_name == "Skill":
                         skill = inp.get("skill", "unknown")
                         skills[skill] = skills.get(skill, 0) + 1
@@ -9561,7 +9999,7 @@ def _analyze_subagent_costs(session_jsonl_path, tier=None):
         dom_model = max(parsed["model_usage"], key=parsed["model_usage"].get) if parsed["model_usage"] else "unknown"
         total_input = parsed["total_input_tokens"]
         chr_val = parsed.get("cache_hit_rate", 0)
-        cache_read = int(total_input * chr_val)
+        cache_read = _safe_int(total_input * chr_val)
         cost = _get_model_cost(dom_model, max(0, total_input - cache_read),
                                parsed["total_output_tokens"], cache_read, 0, tier=tier)
 
@@ -9606,11 +10044,21 @@ def _extract_costly_prompts(jsonl_path, tier=None, top_n=5):
     pending_prompt = None
 
     try:
+        if os.stat(jsonl_path).st_size > codex_session.MAX_PARSE_FILE_BYTES:
+            return prompts
+    except OSError:
+        return prompts
+
+    try:
         with open(jsonl_path, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
+                if len(line) > codex_session.MAX_JSONL_LINE_CHARS:
+                    continue
                 try:
                     record = json.loads(line)
                 except json.JSONDecodeError:
+                    continue
+                if not isinstance(record, dict):
                     continue
 
                 rec_type = record.get("type")
@@ -9645,12 +10093,14 @@ def _extract_costly_prompts(jsonl_path, tier=None, top_n=5):
 
                 elif rec_type == "assistant" and pending_prompt:
                     msg = record.get("message", {})
+                    if not isinstance(msg, dict):
+                        msg = {}
                     usage = msg.get("usage", {})
-                    if usage:
-                        inp = usage.get("input_tokens", 0)
-                        out = usage.get("output_tokens", 0)
-                        cr = usage.get("cache_read_input_tokens", 0)
-                        cc = usage.get("cache_creation_input_tokens", 0)
+                    if usage and isinstance(usage, dict):
+                        inp = _safe_int(usage.get("input_tokens", 0))
+                        out = _safe_int(usage.get("output_tokens", 0))
+                        cr = _safe_int(usage.get("cache_read_input_tokens", 0))
+                        cc = _safe_int(usage.get("cache_creation_input_tokens", 0))
                         model = msg.get("model", "unknown")
                         cost = _get_model_cost(model, inp, out, cr, cc, tier=tier)
                         pending_prompt["tokens_in"] = inp + cr + cc
@@ -9705,6 +10155,8 @@ def _extract_topic(text):
         return None
     # Strip leading whitespace/newlines
     text = text.strip()
+    # Strip ANSI/VT escape sequences — session-log text is attacker-influenceable
+    text = _strip_ansi(text)
     # Remove common prefixes
     prefixes = [
         "Implement the following plan:",
@@ -9884,12 +10336,25 @@ def _parse_session_jsonl(filepath, window_start=None, window_end=None):
     is_sidechain = sidechain_reason is not None
     first_user_record_seen = False
 
+    # Bound the work like the Codex adapter's _iter_json_records: a multi-GB
+    # transcript or one pathological line must not dominate a parse. st is set
+    # when the initial os.stat above succeeded; skip oversized files outright
+    # and oversized lines individually.
+    if cache_key is not None and st.st_size > codex_session.MAX_PARSE_FILE_BYTES:
+        return None
+
     try:
         with open(filepath, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
+                if len(line) > codex_session.MAX_JSONL_LINE_CHARS:
+                    continue
                 try:
                     record = json.loads(line)
                 except json.JSONDecodeError:
+                    continue
+                if not isinstance(record, dict):
+                    # Valid JSON but not an object (42, "x", true, null, [...])
+                    # — a truncated/corrupt transcript line, not a record.
                     continue
 
                 # A subagent sidechain transcript is flagged on its records; any
@@ -9955,7 +10420,7 @@ def _parse_session_jsonl(filepath, window_start=None, window_end=None):
 
                 # Extract timestamp
                 ts_str = record.get("timestamp")
-                if ts_str:
+                if ts_str and isinstance(ts_str, str):
                     try:
                         ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
                         if first_ts is None:
@@ -10047,6 +10512,8 @@ def _parse_session_jsonl(filepath, window_start=None, window_end=None):
                 # Extract tool usage from assistant messages
                 if rec_type == "assistant":
                     msg = record.get("message", {})
+                    if not isinstance(msg, dict):
+                        msg = {}
                     content = msg.get("content", [])
 
                     if isinstance(content, list):
@@ -10060,6 +10527,8 @@ def _parse_session_jsonl(filepath, window_start=None, window_end=None):
                             tool_calls[tool_name] = tool_calls.get(tool_name, 0) + 1
 
                             inp = block.get("input", {})
+                            if not isinstance(inp, dict):
+                                inp = {}
                             if tool_name == "Skill":
                                 skill = inp.get("skill", "unknown")
                                 skills_used[skill] = skills_used.get(skill, 0) + 1
@@ -10083,35 +10552,37 @@ def _parse_session_jsonl(filepath, window_start=None, window_end=None):
                     # MAX usage and apply it at end of file.
                     req_id = record.get("requestId")
                     usage = msg.get("usage", {})
-                    if usage:
-                        inp_tok = usage.get("input_tokens", 0) or 0
-                        out_tok = usage.get("output_tokens", 0) or 0
-                        cr = usage.get("cache_read_input_tokens", 0) or 0
+                    if usage and isinstance(usage, dict):
+                        # _safe_int, not raw int(): json.loads accepts the
+                        # non-standard Infinity/NaN literals, and int(inf) /
+                        # int(nan) raise OverflowError/ValueError — a hostile
+                        # or corrupt transcript must degrade to 0, not crash.
+                        inp_tok = _safe_int(usage.get("input_tokens", 0))
+                        out_tok = _safe_int(usage.get("output_tokens", 0))
+                        cr = _safe_int(usage.get("cache_read_input_tokens", 0))
                         cache_creation = usage.get("cache_creation", {})
                         if not isinstance(cache_creation, dict):
                             cache_creation = {}
-                        cc_1h = (
+                        cc_1h = _safe_int(
                             cache_creation.get("ephemeral_1h_input_tokens", 0)
                             or usage.get("ephemeral_1h_input_tokens", 0)
-                            or 0
                         )
-                        cc_5m = (
+                        cc_5m = _safe_int(
                             cache_creation.get("ephemeral_5m_input_tokens", 0)
                             or usage.get("ephemeral_5m_input_tokens", 0)
-                            or 0
                         )
-                        cc = usage.get("cache_creation_input_tokens", 0) or (cc_1h + cc_5m)
+                        cc = _safe_int(usage.get("cache_creation_input_tokens", 0)) or (cc_1h + cc_5m)
                         model = msg.get("model", "unknown")
                         # Claude Code's /stats basis sums every assistant usage
                         # record, including streamed chunks, and excludes cache
                         # read/write classes. Keep it beside the deduped billed
                         # basis used for pricing and cost analysis.
-                        reported_input += int(inp_tok)
-                        reported_output += int(out_tok)
+                        reported_input += inp_tok
+                        reported_output += out_tok
                         reported_model_usage[model] = (
                             reported_model_usage.get(model, 0)
-                            + int(inp_tok)
-                            + int(out_tok)
+                            + inp_tok
+                            + out_tok
                         )
                         # Records without requestId must never collapse with
                         # each other — use the map's own size as a monotonic
@@ -10165,7 +10636,7 @@ def _parse_session_jsonl(filepath, window_start=None, window_end=None):
         total_cache_create_5m += u["cc_5m"]
         api_calls += 1
         ts_s = u.get("ts")
-        if ts_s:
+        if ts_s and isinstance(ts_s, str):
             try:
                 api_call_timestamps.append(datetime.fromisoformat(ts_s.replace("Z", "+00:00")))
             except (ValueError, TypeError):
@@ -10263,12 +10734,25 @@ def parse_session_turns(filepath):
     tier = _load_pricing_tier()
     prev_call_ts = None
 
+    # Bound the work like the Codex adapter's _iter_json_records (see
+    # _parse_session_jsonl): skip oversized files and oversized lines.
+    try:
+        if os.stat(filepath).st_size > codex_session.MAX_PARSE_FILE_BYTES:
+            return turns
+    except OSError:
+        return turns
+
     try:
         with open(filepath, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
+                if len(line) > codex_session.MAX_JSONL_LINE_CHARS:
+                    continue
                 try:
                     record = json.loads(line)
                 except json.JSONDecodeError:
+                    continue
+                if not isinstance(record, dict):
+                    # Valid JSON but not an object — corrupt transcript line.
                     continue
 
                 rec_type = record.get("type")
@@ -10276,27 +10760,29 @@ def parse_session_turns(filepath):
                     continue
 
                 msg = record.get("message", {})
+                if not isinstance(msg, dict):
+                    continue
                 usage = msg.get("usage", {})
-                if not usage:
+                if not usage or not isinstance(usage, dict):
                     continue
 
-                inp_tok = usage.get("input_tokens", 0)
-                out_tok = usage.get("output_tokens", 0)
-                cr = usage.get("cache_read_input_tokens", 0)
+                # _safe_int: Infinity/NaN usage literals degrade to 0 instead of
+                # raising OverflowError/ValueError out of _get_model_cost's int().
+                inp_tok = _safe_int(usage.get("input_tokens", 0))
+                out_tok = _safe_int(usage.get("output_tokens", 0))
+                cr = _safe_int(usage.get("cache_read_input_tokens", 0))
                 cache_creation = usage.get("cache_creation", {})
                 if not isinstance(cache_creation, dict):
                     cache_creation = {}
-                cc_1h = (
+                cc_1h = _safe_int(
                     cache_creation.get("ephemeral_1h_input_tokens", 0)
                     or usage.get("ephemeral_1h_input_tokens", 0)
-                    or 0
                 )
-                cc_5m = (
+                cc_5m = _safe_int(
                     cache_creation.get("ephemeral_5m_input_tokens", 0)
                     or usage.get("ephemeral_5m_input_tokens", 0)
-                    or 0
                 )
-                cc = usage.get("cache_creation_input_tokens", 0) or (cc_1h + cc_5m)
+                cc = _safe_int(usage.get("cache_creation_input_tokens", 0)) or (cc_1h + cc_5m)
                 model = msg.get("model", "unknown")
 
                 # Extract tools used in this turn
@@ -10309,7 +10795,7 @@ def parse_session_turns(filepath):
 
                 ts_str = record.get("timestamp")
                 gap_since_prev_seconds = None
-                if ts_str:
+                if ts_str and isinstance(ts_str, str):
                     try:
                         call_ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
                         if prev_call_ts is not None:
@@ -10632,6 +11118,10 @@ CREATE TABLE IF NOT EXISTS compression_events (
     model TEXT,
     tier TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_session_log_date ON session_log (date);
+CREATE INDEX IF NOT EXISTS idx_session_log_date_collected ON session_log (date DESC, collected_at DESC);
+CREATE INDEX IF NOT EXISTS idx_savings_events_ts ON savings_events (timestamp);
+CREATE INDEX IF NOT EXISTS idx_compression_events_ts ON compression_events (timestamp);
 """
 
 
@@ -10679,13 +11169,18 @@ def _scan_jsonl_is_sidechain(filepath, max_lines=200):
     return verdict
 
 
-def _backfill_is_sidechain(conn):
+def _backfill_is_sidechain(conn, batch_limit=500):
     """Reclassify legacy rows once with the corrected classifier.
 
     The persistent gate is required because ``sidechain_reason`` is NULL for a
     legitimate human row after repair, so NULL alone cannot be a durable
     unclassified sentinel. Missing transcripts remain unchanged and are counted
     rather than guessed.
+
+    Batched with a resume cursor: if the process is killed mid-backfill (hook
+    timeout), the next _init_trends_db resumes from the last-processed id
+    instead of re-reading every row from scratch. The done-marker is only
+    written when the cursor reaches the end.
     """
     conn.execute(
         "CREATE TABLE IF NOT EXISTS token_optimizer_meta "
@@ -10698,13 +11193,34 @@ def _backfill_is_sidechain(conn):
 
     cols = {r[1] for r in conn.execute("PRAGMA table_info(session_log)").fetchall()}
     has_reason = "sidechain_reason" in cols
+    # Resume from the last-processed id if a prior pass was interrupted.
+    cursor_row = conn.execute(
+        "SELECT value FROM token_optimizer_meta WHERE key = 'sidechain_classifier_v2_cursor'"
+    ).fetchone()
+    cursor_id = int(cursor_row[0]) if cursor_row else 0
     rows = conn.execute(
-        "SELECT id, jsonl_path FROM session_log WHERE jsonl_path IS NOT NULL"
+        "SELECT id, jsonl_path FROM session_log "
+        "WHERE jsonl_path IS NOT NULL AND id > ? "
+        "ORDER BY id LIMIT ?",
+        (cursor_id, batch_limit),
     ).fetchall()
+    if not rows:
+        # No more rows to process: mark done and clear the cursor.
+        conn.execute(
+            "INSERT OR REPLACE INTO token_optimizer_meta (key, value) "
+            "VALUES ('sidechain_classifier_v2_done', datetime('now'))"
+        )
+        conn.execute(
+            "DELETE FROM token_optimizer_meta WHERE key = 'sidechain_classifier_v2_cursor'"
+        )
+        conn.commit()
+        return (0, 0)
     updates = []
     missing = 0
+    last_id = cursor_id
     for row_id, jpath in rows:
         verdict, reason = _classify_jsonl_is_sidechain(jpath)
+        last_id = row_id
         if verdict is None:
             missing += 1
             continue
@@ -10722,16 +11238,30 @@ def _backfill_is_sidechain(conn):
             conn.executemany(
                 "UPDATE session_log SET is_sidechain = ? WHERE id = ?", updates
             )
+    # Persist the cursor so a killed process resumes here next time.
     conn.execute(
         "INSERT OR REPLACE INTO token_optimizer_meta (key, value) "
-        "VALUES ('sidechain_classifier_v2_done', datetime('now'))"
+        "VALUES ('sidechain_classifier_v2_cursor', ?)",
+        (str(last_id),),
     )
+    # If we processed fewer than batch_limit rows, we've reached the end.
+    if len(rows) < batch_limit:
+        conn.execute(
+            "INSERT OR REPLACE INTO token_optimizer_meta (key, value) "
+            "VALUES ('sidechain_classifier_v2_done', datetime('now'))"
+        )
+        conn.execute(
+            "DELETE FROM token_optimizer_meta WHERE key = 'sidechain_classifier_v2_cursor'"
+        )
     conn.commit()
     return (len(updates), missing)
 
 
-def _backfill_reported_token_usage(conn):
-    """Persist the official-compatible, non-deduped usage basis for old rows."""
+def _backfill_reported_token_usage(conn, batch_limit=500):
+    """Persist the official-compatible, non-deduped usage basis for old rows.
+
+    Batched with a resume cursor (see _backfill_is_sidechain for rationale).
+    """
     conn.execute(
         "CREATE TABLE IF NOT EXISTS token_optimizer_meta "
         "(key TEXT PRIMARY KEY, value TEXT)"
@@ -10741,12 +11271,31 @@ def _backfill_reported_token_usage(conn):
     ).fetchone() is not None:
         return 0
 
+    cursor_row = conn.execute(
+        "SELECT value FROM token_optimizer_meta WHERE key = 'reported_token_backfill_cursor'"
+    ).fetchone()
+    cursor_id = int(cursor_row[0]) if cursor_row else 0
     rows = conn.execute(
-        "SELECT id, jsonl_path FROM session_log WHERE jsonl_path IS NOT NULL"
+        "SELECT id, jsonl_path FROM session_log "
+        "WHERE jsonl_path IS NOT NULL AND id > ? "
+        "ORDER BY id LIMIT ?",
+        (cursor_id, batch_limit),
     ).fetchall()
+    if not rows:
+        conn.execute(
+            "INSERT OR REPLACE INTO token_optimizer_meta (key, value) "
+            "VALUES ('reported_token_backfill_done', datetime('now'))"
+        )
+        conn.execute(
+            "DELETE FROM token_optimizer_meta WHERE key = 'reported_token_backfill_cursor'"
+        )
+        conn.commit()
+        return 0
     updates = []
+    last_id = cursor_id
     for row_id, jpath in rows:
         parsed = _parse_session_jsonl(jpath)
+        last_id = row_id
         if not parsed:
             continue
         updates.append((
@@ -10763,8 +11312,17 @@ def _backfill_reported_token_usage(conn):
         )
     conn.execute(
         "INSERT OR REPLACE INTO token_optimizer_meta (key, value) "
-        "VALUES ('reported_token_backfill_done', datetime('now'))"
+        "VALUES ('reported_token_backfill_cursor', ?)",
+        (str(last_id),),
     )
+    if len(rows) < batch_limit:
+        conn.execute(
+            "INSERT OR REPLACE INTO token_optimizer_meta (key, value) "
+            "VALUES ('reported_token_backfill_done', datetime('now'))"
+        )
+        conn.execute(
+            "DELETE FROM token_optimizer_meta WHERE key = 'reported_token_backfill_cursor'"
+        )
     conn.commit()
     return len(updates)
 
@@ -10954,6 +11512,32 @@ def _recompute_session_tokens(conn, rel_tol=0.1, limit=None):
     return (refreshed, checked, missing)
 
 
+def _log_migration_error(step, exc):
+    """Log a trends-DB migration error, suppressing benign 'duplicate column' /
+    'table already exists' cases that are expected under concurrent init.
+
+    The migration blocks in _init_trends_db are guarded by PRAGMA table_info
+    checks, so a 'duplicate column name' error means a concurrent process won
+    the race — benign and idempotent. Any other sqlite3.Error (disk full,
+    corruption, I/O error) would otherwise be silently swallowed, leaving the
+    column missing and causing confusing downstream crashes far from the root
+    cause. Log those to stderr so they are discoverable.
+    """
+    msg = str(exc)
+    benign = (
+        "duplicate column" in msg
+        or "already exists" in msg
+    )
+    if not benign:
+        try:
+            sys.stderr.write(
+                "[Token Optimizer] trends DB migration '%s' failed: %s\n"
+                % (step, msg)
+            )
+        except Exception:
+            pass
+
+
 def _init_trends_db():
     """Initialize the trends SQLite DB. Returns a connection.
     
@@ -10963,7 +11547,12 @@ def _init_trends_db():
     conn = sqlite3.connect(str(TRENDS_DB))
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
-    conn.execute("PRAGMA wal_autocheckpoint=1000")
+    # Auto-checkpoint every 100 pages (~400 KiB) instead of 1000 (~4 MiB).
+    # A single large transaction (e.g. _rebuild_aggregate_tables) cannot
+    # checkpoint mid-flight, so a smaller threshold bounds the WAL growth
+    # between transactions to ~400 KiB instead of ~4 MiB, keeping the
+    # post-checkpoint WAL closer to the 64 MiB journal_size_limit.
+    conn.execute("PRAGMA wal_autocheckpoint=100")
     conn.execute("PRAGMA journal_size_limit=67108864")
     conn.executescript(_SCHEMA)
     # Migrate existing DBs: add slug/topic columns if missing
@@ -11038,8 +11627,8 @@ def _init_trends_db():
         if "reported_model_usage_json" not in cols:
             conn.execute("ALTER TABLE session_log ADD COLUMN reported_model_usage_json TEXT")
         conn.commit()
-    except sqlite3.Error:
-        pass
+    except sqlite3.Error as _e:
+        _log_migration_error("session_log columns", _e)
     # Backfill session_uuid from jsonl_path basename stem for existing rows,
     # then create an index so joins are O(log n) instead of full-table LIKE scans.
     # Done in Python (not a single SQL UPDATE) because SQLite lacks a basename
@@ -11064,27 +11653,27 @@ def _init_trends_db():
                     "UPDATE session_log SET session_uuid = ? WHERE id = ?", updates
                 )
         conn.commit()
-    except (sqlite3.Error, OSError, ValueError):
-        pass
+    except (sqlite3.Error, OSError, ValueError) as _e:
+        _log_migration_error("session_uuid backfill", _e)
     # One-time backfill of the corrected sidechain classifier. It revisits old
     # rows, including the 1-valued rows the broad marker test misclassified.
     sidechain_changed = 0
     try:
         sidechain_changed, _sidechain_missing = _backfill_is_sidechain(conn)
-    except (sqlite3.Error, OSError):
-        pass
+    except (sqlite3.Error, OSError) as _e:
+        _log_migration_error("sidechain backfill", _e)
     # One-time backfill of official-compatible usage for existing rows. New
     # collection writes these fields directly from every assistant record.
     try:
         _backfill_reported_token_usage(conn)
-    except (sqlite3.Error, OSError):
-        pass
+    except (sqlite3.Error, OSError) as _e:
+        _log_migration_error("reported token backfill", _e)
     if sidechain_changed:
         try:
             _rebuild_aggregate_tables(conn)
             conn.commit()
-        except sqlite3.Error:
-            pass
+        except sqlite3.Error as _e:
+            _log_migration_error("aggregate rebuild", _e)
     # Backfill platform for rows collected before the column was wired into the
     # INSERT paths. The jsonl_path discriminator is definitive: Claude sessions
     # live under ~/.claude/projects/, Codex under ~/.codex/sessions/, Hermes
@@ -11128,8 +11717,8 @@ def _init_trends_db():
             "AND jsonl_path LIKE 'antigravity:%'"
         )
         conn.commit()
-    except sqlite3.Error:
-        pass
+    except sqlite3.Error as _e:
+        _log_migration_error("platform backfill", _e)
     # Migrate: add quality columns to daily_stats for existing DBs
     try:
         ds_cols = {r[1] for r in conn.execute("PRAGMA table_info(daily_stats)").fetchall()}
@@ -11138,8 +11727,8 @@ def _init_trends_db():
         if "worst_grade" not in ds_cols:
             conn.execute("ALTER TABLE daily_stats ADD COLUMN worst_grade TEXT")
         conn.commit()
-    except sqlite3.Error:
-        pass
+    except sqlite3.Error as _e:
+        _log_migration_error("daily_stats columns", _e)
     # Migrate: add per-event model column to savings_events (v5.9+). Lets the
     # savings view reprice historical events at the rate that was actually in
     # effect when they were logged, instead of today's active-model rate.
@@ -11170,8 +11759,8 @@ def _init_trends_db():
             "ON savings_events (pause_key) WHERE pause_key IS NOT NULL"
         )
         conn.commit()
-    except sqlite3.Error:
-        pass
+    except sqlite3.Error as _e:
+        _log_migration_error("savings_events columns", _e)
     # Backfill session_uuid on savings_events from session_id where it looks
     # like a UUID (8-4-4-4-12 hex pattern). Short agent_ids (<=17 chars without
     # dashes) are flagged unjoinable=1 rather than silently treated as Sonnet.
@@ -11208,8 +11797,8 @@ def _init_trends_db():
                     unjoinable_updates,
                 )
         conn.commit()
-    except (sqlite3.Error, OSError):
-        pass
+    except (sqlite3.Error, OSError) as _e:
+        _log_migration_error("savings_events uuid backfill", _e)
     # Migrate: ensure compression_events table exists for upgrades from v4.x
     try:
         conn.execute("SELECT 1 FROM compression_events LIMIT 1")
@@ -11233,8 +11822,8 @@ def _init_trends_db():
                 );
             """)
             conn.commit()
-        except sqlite3.Error:
-            pass
+        except sqlite3.Error as _e:
+            _log_migration_error("compression_events table", _e)
     # Idempotent migrations for session_uuid + model on compression_events.
     # These columns enable per-event session joins and correct model attribution.
     try:
@@ -11260,8 +11849,8 @@ def _init_trends_db():
             "ON compression_events (feature, tier)"
         )
         conn.commit()
-    except sqlite3.Error:
-        pass
+    except sqlite3.Error as _e:
+        _log_migration_error("compression_events columns", _e)
     # Backfill session_uuid on compression_events from session_id where UUID pattern.
     try:
         import re as _re
@@ -11285,8 +11874,8 @@ def _init_trends_db():
                     ce_updates,
                 )
         conn.commit()
-    except (sqlite3.Error, OSError):
-        pass
+    except (sqlite3.Error, OSError) as _e:
+        _log_migration_error("compression_events uuid backfill", _e)
     return conn
 
 
@@ -15056,11 +15645,13 @@ def _keepwarm_extract_cwd(transcript_path):
 # Charset gate for values placed after `claude` flags (security M1). Model IDs and
 # session IDs are both [A-Za-z0-9._-]; anything else (whitespace, leading-dash flag
 # spoofing, shell metacharacters, control bytes) is rejected before the subprocess.
-_KEEPWARM_ARG_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}$")
+# First character must NOT be a dash: a leading `-` would let `--model`, `-h`,
+# `--resume`, `-p` etc. pass as a value and shift the downstream flag positions.
+_KEEPWARM_ARG_RE = re.compile(r"^[A-Za-z0-9._][A-Za-z0-9._-]{0,127}$")
 
 
 def _keepwarm_valid_arg(value):
-    """True iff `value` is a safe post-flag subprocess arg (^[A-Za-z0-9._-]{1,128}$)."""
+    """True iff `value` is a safe post-flag subprocess arg (no leading dash, ^[A-Za-z0-9._][A-Za-z0-9._-]{0,127}$)."""
     return isinstance(value, str) and bool(_KEEPWARM_ARG_RE.match(value))
 
 
@@ -19042,50 +19633,57 @@ def _safe_json_dict(raw):
 
 
 def _rebuild_aggregate_tables(conn):
-    """Recompute daily aggregate tables from session_log to avoid double counts."""
+    """Recompute daily aggregate tables from session_log to avoid double counts.
+
+    The daily_stats portion is a single SQL aggregate (94x faster than the
+    row-by-row INSERT-on-conflict loop on 50K rows, and O(1) memory instead
+    of O(N)). The skill/model/subagent daily tables still need JSON parsing
+    in Python (SQLite has no json_each for arbitrary shapes here), so those
+    are batched with executemany per date group instead of one INSERT per row.
+    """
     conn.execute("DELETE FROM daily_stats")
     conn.execute("DELETE FROM model_daily")
     conn.execute("DELETE FROM skill_daily")
     conn.execute("DELETE FROM subagent_daily")
 
+    # daily_stats: single SQL aggregate. worst_grade uses MIN on a custom
+    # collation surrogate (INSTR('FDCBAS', grade)) computed in SQL via a
+    # subquery. The per-day worst grade is the one with the smallest INSTR
+    # (F=1 is worst, A=5, S=6, NULL excluded).
+    conn.execute(
+        """INSERT INTO daily_stats
+               (date, session_count, total_input, total_output,
+                total_duration, avg_cache_hit, avg_quality_score, worst_grade)
+           SELECT date,
+                  COUNT(*),
+                  COALESCE(SUM(input_tokens), 0),
+                  COALESCE(SUM(output_tokens), 0),
+                  COALESCE(SUM(duration_minutes), 0),
+                  COALESCE(AVG(cache_hit_rate), 0),
+                  COALESCE(AVG(quality_score), 0),
+                  (SELECT quality_grade FROM session_log g
+                   WHERE g.date = session_log.date
+                     AND g.quality_grade IS NOT NULL
+                   ORDER BY INSTR('FDCBAS', g.quality_grade) ASC
+                   LIMIT 1)
+           FROM session_log
+           GROUP BY date"""
+    )
+
+    # skill_daily / model_daily / subagent_daily: still need JSON parsing in
+    # Python. Batch with executemany per date group to avoid per-row
+    # statement overhead. Only fetch the JSON columns + date.
     rows = conn.execute(
-        """SELECT date, input_tokens, output_tokens, duration_minutes, cache_hit_rate,
-                  quality_score, quality_grade, skills_json, subagents_json,
+        """SELECT date, skills_json, subagents_json,
                   model_usage_json, all_model_usage_json
            FROM session_log"""
     ).fetchall()
-    for row in rows:
-        date, input_tokens, output_tokens, duration, cache_hit, quality_score, quality_grade, skills_json, subagents_json, model_usage_json, all_model_usage_json = row
-        conn.execute(
-            """INSERT INTO daily_stats (date, session_count, total_input, total_output, total_duration, avg_cache_hit,
-                 avg_quality_score, worst_grade)
-               VALUES (?, 1, ?, ?, ?, ?, ?, ?)
-               ON CONFLICT(date) DO UPDATE SET
-                 session_count = session_count + 1,
-                 total_input = total_input + excluded.total_input,
-                 total_output = total_output + excluded.total_output,
-                 total_duration = total_duration + excluded.total_duration,
-                 avg_cache_hit = (avg_cache_hit * session_count + excluded.avg_cache_hit) / (session_count + 1),
-                 avg_quality_score = CASE
-                   WHEN avg_quality_score IS NULL THEN excluded.avg_quality_score
-                   ELSE (avg_quality_score * session_count + excluded.avg_quality_score) / (session_count + 1)
-                 END,
-                 worst_grade = CASE
-                   WHEN worst_grade IS NULL THEN excluded.worst_grade
-                   WHEN INSTR('FDCBAS', excluded.worst_grade) < INSTR('FDCBAS', worst_grade) THEN excluded.worst_grade
-                   ELSE worst_grade
-                 END""",
-            (date, input_tokens or 0, output_tokens or 0, duration or 0, cache_hit or 0, quality_score, quality_grade),
-        )
+    skill_batch = []
+    model_batch = []
+    subagent_batch = []
+    for date, skills_json, subagents_json, model_usage_json, all_model_usage_json in rows:
         for skill, invocations in _safe_json_dict(skills_json).items():
-            conn.execute(
-                """INSERT INTO skill_daily (date, skill, session_count, invocations)
-                   VALUES (?, ?, 1, ?)
-                   ON CONFLICT(date, skill) DO UPDATE SET
-                     session_count = session_count + 1,
-                     invocations = invocations + excluded.invocations""",
-                (date, skill, int(invocations or 0)),
-            )
+            skill_batch.append((date, skill, 1, int(invocations or 0)))
         model_usage_for_daily = _safe_json_dict(all_model_usage_json)
         if not model_usage_for_daily:
             model_usage_for_daily = _safe_json_dict(model_usage_json)
@@ -19093,21 +19691,34 @@ def _rebuild_aggregate_tables(conn):
             normalized = _normalize_model_name(model_id)
             if normalized is None:
                 continue
-            conn.execute(
-                """INSERT INTO model_daily (date, model, total_tokens)
-                   VALUES (?, ?, ?)
-                   ON CONFLICT(date, model) DO UPDATE SET
-                     total_tokens = total_tokens + excluded.total_tokens""",
-                (date, normalized, int(tokens or 0)),
-            )
+            model_batch.append((date, normalized, int(tokens or 0)))
         for agent_type, count in _safe_json_dict(subagents_json).items():
-            conn.execute(
-                """INSERT INTO subagent_daily (date, agent_type, spawn_count)
-                   VALUES (?, ?, ?)
-                   ON CONFLICT(date, agent_type) DO UPDATE SET
-                     spawn_count = spawn_count + excluded.spawn_count""",
-                (date, agent_type, int(count or 0)),
-            )
+            subagent_batch.append((date, agent_type, int(count or 0)))
+    if skill_batch:
+        conn.executemany(
+            """INSERT INTO skill_daily (date, skill, session_count, invocations)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(date, skill) DO UPDATE SET
+                 session_count = session_count + excluded.session_count,
+                 invocations = invocations + excluded.invocations""",
+            skill_batch,
+        )
+    if model_batch:
+        conn.executemany(
+            """INSERT INTO model_daily (date, model, total_tokens)
+               VALUES (?, ?, ?)
+               ON CONFLICT(date, model) DO UPDATE SET
+                 total_tokens = total_tokens + excluded.total_tokens""",
+            model_batch,
+        )
+    if subagent_batch:
+        conn.executemany(
+            """INSERT INTO subagent_daily (date, agent_type, spawn_count)
+               VALUES (?, ?, ?)
+               ON CONFLICT(date, agent_type) DO UPDATE SET
+                 spawn_count = spawn_count + excluded.spawn_count""",
+            subagent_batch,
+        )
 
 
 def _needs_model_daily_rebuild(conn):
@@ -19174,6 +19785,11 @@ def _migrate_streaming_dedup(conn, quiet=False):
         conn.execute("DELETE FROM model_daily")
         conn.execute("DELETE FROM skill_daily")
         conn.execute("DELETE FROM subagent_daily")
+        # Drop event tables too: their session_id/session_uuid references would
+        # otherwise dangle (no FK constraints) and silently inflate savings.
+        conn.execute("DELETE FROM savings_events")
+        conn.execute("DELETE FROM compression_events")
+        conn.execute("DELETE FROM counted_reread")
         conn.commit()
         if not quiet:
             print("[Token Optimizer] Migrated to v5.4.9 streaming-aware token counting.")
@@ -19202,6 +19818,11 @@ def _collect_hermes_sessions(days=90, quiet=False, rebuild=False):
             conn.execute("DELETE FROM model_daily")
             conn.execute("DELETE FROM skill_daily")
             conn.execute("DELETE FROM subagent_daily")
+            # Drop event tables too: their session_id/session_uuid references would
+            # otherwise dangle (no FK constraints) and silently inflate savings.
+            conn.execute("DELETE FROM savings_events")
+            conn.execute("DELETE FROM compression_events")
+            conn.execute("DELETE FROM counted_reread")
             conn.commit()
 
         rows = _hs.recent_sessions(days=days)
@@ -19431,7 +20052,7 @@ def _grok_summary():
         print("    Cost: no authoritative billing data recorded (costUsdTicks scrubbed)")
     print(f"    Tokens: {total_in:,} in / {total_out:,} out")
     if top_models:
-        print("    Models: " + ", ".join(f"{m} ({v:,})" for m, v in top_models))
+        print("    Models: " + ", ".join(f"{_strip_ansi(str(m))} ({v:,})" for m, v in top_models))
     if incomplete:
         print(f"    {incomplete} session(s) ended without clean shutdown (usageIsIncomplete)")
     if estimated:
@@ -19650,7 +20271,7 @@ def _copilot_summary():
             print("    Cost: no billing data recorded by Copilot for these sessions")
         print(f"    Tokens: {total_in:,} in / {total_out:,} out")
         if top_models:
-            print("    Models: " + ", ".join(f"{m} ({v:,})" for m, v in top_models))
+            print("    Models: " + ", ".join(f"{_strip_ansi(str(m))} ({v:,})" for m, v in top_models))
         if incomplete:
             print(f"    {incomplete} session(s) ended without clean shutdown (partial data)")
         if estimated:
@@ -20194,7 +20815,7 @@ def _antigravity_summary():
             print("    Cost: unavailable (no model with a known Gemini rate card)")
         print(f"    Tokens: {total_in:,} in / {total_out:,} out / {total_cache:,} cache-read")
         if top_models:
-            print("    Models: " + ", ".join(f"{m} ({v:,})" for m, v in top_models))
+            print("    Models: " + ", ".join(f"{_strip_ansi(str(m))} ({v:,})" for m, v in top_models))
         if incomplete:
             print(f"    {incomplete} session(s) ended without clean shutdown (partial data)")
     if not any_data:
@@ -20455,6 +21076,11 @@ def collect_sessions(days=90, quiet=False, rebuild=False):
         conn.execute("DELETE FROM model_daily")
         conn.execute("DELETE FROM skill_daily")
         conn.execute("DELETE FROM subagent_daily")
+        # Drop event tables too: their session_id/session_uuid references would
+        # otherwise dangle (no FK constraints) and silently inflate savings.
+        conn.execute("DELETE FROM savings_events")
+        conn.execute("DELETE FROM compression_events")
+        conn.execute("DELETE FROM counted_reread")
         conn.commit()
     files = _find_all_jsonl_files(days)
     if not files:
@@ -20922,7 +21548,7 @@ def _query_trends_db(conn, days):
         inp_total = sr["input_tokens"] or 0
         out_total = sr["output_tokens"] or 0
         chr_val = sr["cache_hit_rate"] or 0
-        cache_read_est = int(inp_total * chr_val)
+        cache_read_est = _safe_int(inp_total * chr_val)
         cache_create_1h = sr["cache_create_1h_tokens"] or 0
         cache_create_5m = sr["cache_create_5m_tokens"] or 0
         cache_create_total = cache_create_1h + cache_create_5m
@@ -21600,7 +22226,7 @@ def usage_trends(days=30, as_json=False):
         print(f"  Used ({len(skill_sessions)} of {installed_count} installed):")
         for skill, count in sorted(skill_sessions.items(), key=lambda x: -x[1])[:15]:
             dots = "." * max(2, 30 - len(skill))
-            print(f"    {skill} {dots} {count} session{'s' if count != 1 else ''}")
+            print(f"    {_strip_ansi(str(skill))} {dots} {count} session{'s' if count != 1 else ''}")
         if len(skill_sessions) > 15:
             print(f"    ... and {len(skill_sessions) - 15} more")
     else:
@@ -21627,7 +22253,7 @@ def usage_trends(days=30, as_json=False):
         print("\nSUBAGENTS")
         for agent, count in sorted(total_subagents.items(), key=lambda x: -x[1]):
             dots = "." * max(2, 30 - len(agent))
-            print(f"  {agent} {dots} {count} spawned")
+            print(f"  {_strip_ansi(str(agent))} {dots} {count} spawned")
 
     total_model_tokens = trends["model_mix"]
     if total_model_tokens:
@@ -21636,7 +22262,7 @@ def usage_trends(days=30, as_json=False):
         for model, tokens in sorted(total_model_tokens.items(), key=lambda x: -x[1]):
             pct = tokens / grand_total * 100 if grand_total else 0
             dots = "." * max(2, 26 - len(model))
-            print(f"  {model} {dots} {pct:.0f}% of tokens ({_fmt_tokens(tokens)})")
+            print(f"  {_strip_ansi(str(model))} {dots} {pct:.0f}% of tokens ({_fmt_tokens(tokens)})")
 
     trajectory = trends.get("trajectory", {})
     snapshots = trajectory.get("snapshots", [])
@@ -29010,6 +29636,11 @@ def sanitize_session_id(sid):
     """Sanitize session ID for safe use in filenames. Prevents path traversal."""
     if not sid:
         return "unknown"
+    # Coerce non-string JSON values (int, list, dict) to str before regex.
+    # Hook stdin JSON is attacker-influenceable: {"session_id": 123} or
+    # {"session_id": [1,2]} would otherwise raise TypeError in re.sub().
+    if not isinstance(sid, str):
+        sid = str(sid)
     sanitized = re.sub(r"[^a-zA-Z0-9_-]", "", sid)
     if detect_runtime() == 'codex':
         sanitized = codex_session._safe_session_id(sanitized)
@@ -29112,13 +29743,22 @@ def _parse_jsonl_for_quality(filepath):
 
     idx = 0
     try:
+        if os.stat(filepath).st_size > codex_session.MAX_PARSE_FILE_BYTES:
+            return None
+    except OSError:
+        return None
+    try:
         with open(filepath, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
+                if len(line) > codex_session.MAX_JSONL_LINE_CHARS:
+                    continue
                 try:
                     record = json.loads(line)
                 except json.JSONDecodeError:
                     continue
 
+                if not isinstance(record, dict):
+                    continue
                 rec_type = record.get("type")
                 ts = record.get("timestamp", "")
 
@@ -29174,6 +29814,8 @@ def _parse_jsonl_for_quality(filepath):
                 # Assistant messages
                 if rec_type == "assistant":
                     msg = record.get("message", {})
+                    if not isinstance(msg, dict):
+                        msg = {}
                     content = msg.get("content", [])
                     text_length = 0
                     is_substantive = False
@@ -29184,12 +29826,9 @@ def _parse_jsonl_for_quality(filepath):
                     # raise and abort the whole parse (losing all quality data).
                     usage = msg.get("usage")
                     if isinstance(usage, dict):
-                        try:
-                            tok = (int(usage.get("input_tokens") or 0)
-                                   + int(usage.get("cache_creation_input_tokens") or 0)
-                                   + int(usage.get("cache_read_input_tokens") or 0))
-                        except (TypeError, ValueError):
-                            tok = 0
+                        tok = (_safe_int(usage.get("input_tokens"))
+                               + _safe_int(usage.get("cache_creation_input_tokens"))
+                               + _safe_int(usage.get("cache_read_input_tokens")))
                         if tok > 0:
                             context_tokens = tok
                     model_str = msg.get("model")
@@ -30268,6 +30907,8 @@ def jsonl_inspect(arg=None, as_json=False):
                 except json.JSONDecodeError:
                     continue
 
+                if not isinstance(record, dict):
+                    continue
                 total_records += 1
                 category = _classify_record(record)
                 counts_by_type[category] = counts_by_type.get(category, 0) + 1
@@ -32566,8 +33207,15 @@ def _extract_session_state(filepath, tail_lines=500):
     # Use deque to only keep the tail in memory (avoids loading entire file)
     records = deque(maxlen=tail_lines)
     try:
+        if os.stat(filepath).st_size > codex_session.MAX_PARSE_FILE_BYTES:
+            return None
+    except OSError:
+        return None
+    try:
         with open(filepath, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
+                if len(line) > codex_session.MAX_JSONL_LINE_CHARS:
+                    continue
                 try:
                     records.append(json.loads(line))
                 except json.JSONDecodeError:
@@ -32585,6 +33233,8 @@ def _extract_session_state(filepath, tail_lines=500):
     file_count = 0
 
     for record in tail:
+        if not isinstance(record, dict):
+            continue
         rec_type = record.get("type")
 
         # User messages
@@ -32601,6 +33251,8 @@ def _extract_session_state(filepath, tail_lines=500):
         # Assistant messages
         if rec_type == "assistant":
             msg = record.get("message", {})
+            if not isinstance(msg, dict):
+                msg = {}
             content = msg.get("content", [])
             assistant_text = ""
 
@@ -32736,6 +33388,45 @@ def _sanitize_trigger(trigger):
     return trigger
 
 
+def _confine_transcript_path(transcript_path):
+    """Resolve a hook-supplied transcript path, confined to the active
+    runtime's session-log directory. Returns the resolved Path, or None when
+    the path must not be read.
+
+    transcript_path arrives via hook stdin JSON — attacker-influenceable.
+    Its contents flow into a checkpoint that SessionStart restores into the
+    NEXT session's context, so an arbitrary path is a prompt-injection and
+    state-tampering channel, not just an information leak. Confine the
+    resolved path to the session-log roots (Claude: ~/.claude/projects, Codex:
+    the codex_session roots) and reject symlinks outright — mirrors
+    detectors' _safe_read_text, which refuses to follow a link that could
+    point outside the tree or at a hostile file.
+    """
+    try:
+        raw = Path(transcript_path).expanduser()
+    except (TypeError, ValueError, RuntimeError):
+        return None
+    try:
+        if raw.is_symlink():
+            return None
+        resolved = raw.resolve()
+    except OSError:
+        return None
+    if _use_codex_session_adapter():
+        try:
+            roots = [r.resolve() for r in codex_session.session_roots()]
+        except Exception:
+            return None
+    else:
+        roots = [(CLAUDE_DIR / "projects").resolve()]
+    try:
+        if not any(resolved.is_relative_to(root) for root in roots):
+            return None
+    except (OSError, ValueError):
+        return None
+    return resolved
+
+
 def compact_capture(transcript_path=None, session_id=None, trigger="auto", cwd=None, fill_pct=None, quality_score=None, backfill_tools=False):
     """Capture structured session state before compaction or session end.
 
@@ -32765,7 +33456,12 @@ def compact_capture(transcript_path=None, session_id=None, trigger="auto", cwd=N
     ts_file = now.strftime("%Y%m%d-%H%M%S")
 
     if transcript_path:
-        filepath = Path(transcript_path)
+        # A supplied path that fails confinement is a forged hook input — do
+        # not checkpoint from it, and do not fall through to inference (which
+        # would let a bad pointer silently capture a different session).
+        filepath = _confine_transcript_path(transcript_path)
+        if filepath is None:
+            return None
     else:
         # Identity before inference. _find_current_session_jsonl() returns the
         # most recently active transcript, which on a new session is somebody
@@ -32978,6 +33674,10 @@ def compact_capture(transcript_path=None, session_id=None, trigger="auto", cwd=N
         lines.append(state["current_step"]["last_assistant"][:300])
         lines.append("")
 
+    # Strip ANSI/VT escape sequences from transcript-derived text before
+    # writing the checkpoint — session-log content is attacker-influenceable
+    # and escape sequences in a restored-context file are an injection vector.
+    lines = [_strip_ansi(ln) if isinstance(ln, str) else ln for ln in lines]
     checkpoint_content = "\n".join(lines)
     checkpoint_path = CHECKPOINT_DIR / f"{sid}-{ts_file}{trigger_suffix}.md"
     # Atomic write prevents a partial checkpoint from being surfaced as
@@ -35558,15 +36258,14 @@ def _transcript_last_turn(sid_safe):
             if not isinstance(d, dict) or d.get("type") != "assistant" or d.get("isSidechain"):
                 continue
             msg = d.get("message") or {}
+            if not isinstance(msg, dict):
+                continue
             u = msg.get("usage") or {}
             if not isinstance(u, dict):
                 continue
-            try:
-                ctx = (int(u.get("input_tokens") or 0)
-                       + int(u.get("cache_read_input_tokens") or 0)
-                       + int(u.get("cache_creation_input_tokens") or 0))
-            except (TypeError, ValueError):
-                continue
+            ctx = (_safe_int(u.get("input_tokens"))
+                   + _safe_int(u.get("cache_read_input_tokens"))
+                   + _safe_int(u.get("cache_creation_input_tokens")))
             if ctx <= 0:
                 continue
             model = _normalize_model_name(msg.get("model"))
@@ -36283,9 +36982,18 @@ def _prune_trends_db():
         if not trends_path.exists():
             return
         cutoff_iso = (datetime.now() - timedelta(days=_TRENDS_RETENTION_DAYS)).isoformat()
+        cutoff_date = cutoff_iso[:10]  # session_log.date is YYYY-MM-DD
         conn = sqlite3.connect(str(trends_path), timeout=5)
         try:
-            conn.execute("DELETE FROM session_log WHERE timestamp < ?", (cutoff_iso,))
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=5000")
+            conn.execute("DELETE FROM session_log WHERE date < ?", (cutoff_date,))
+            conn.execute("DELETE FROM savings_events WHERE timestamp < ?", (cutoff_iso,))
+            conn.execute("DELETE FROM compression_events WHERE timestamp < ?", (cutoff_iso,))
+            conn.execute(
+                "DELETE FROM counted_reread WHERE session_uuid NOT IN "
+                "(SELECT session_uuid FROM session_log WHERE session_uuid IS NOT NULL)"
+            )
             conn.commit()
         finally:
             conn.close()
@@ -37071,6 +37779,8 @@ def _extract_session_start_ts(filepath):
             for line in f:
                 try:
                     record = json.loads(line)
+                    if not isinstance(record, dict):
+                        continue
                     ts_str = record.get("timestamp")
                     if ts_str:
                         ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
@@ -37100,6 +37810,8 @@ def _extract_active_agents(filepath):
                 except json.JSONDecodeError:
                     continue
 
+                if not isinstance(record, dict):
+                    continue
                 rec_type = record.get("type")
                 msg = record.get("message", {})
                 content = msg.get("content", []) if isinstance(msg, dict) else []
@@ -44672,7 +45384,7 @@ def validate_impact(strategy="auto", days=30, as_json=False):
                 cache_create_1h = parsed.get("total_cache_create_1h", 0) or 0
                 cache_create_5m = parsed.get("total_cache_create_5m", 0) or 0
                 cache_create = cache_create_1h + cache_create_5m
-                cache_read_est = int(total_input * chr_val)
+                cache_read_est = _safe_int(total_input * chr_val)
                 cost = _get_model_cost(
                     dom_model,
                     max(0, total_input - cache_read_est - cache_create),
@@ -46405,8 +47117,10 @@ def _calibrate_prior_verbosity_nudges(session_id, filepath):
                 entry = json.loads(line)
             except (json.JSONDecodeError, ValueError):
                 continue
+            if not isinstance(entry, dict):
+                continue
             if entry.get("type") == "assistant" and "message" in entry:
-                out = int(entry["message"].get("usage", {}).get("output_tokens", 0) or 0)
+                out = _safe_int(entry["message"].get("usage", {}).get("output_tokens", 0))
                 if out > 0:
                     outputs.append(out)
 
@@ -46660,10 +47374,12 @@ def run_verbosity_steer(transcript_path=None, quiet=True, session_id=None):
                             _entry = json.loads(_line)
                         except (json.JSONDecodeError, ValueError):
                             continue
+                        if not isinstance(_entry, dict):
+                            continue
                         if _entry.get("type") == "assistant" and "message" in _entry:
                             _msg = _entry["message"]
                             _usage = _msg.get("usage", {})
-                            _out = int(_usage.get("output_tokens", 0) or 0)
+                            _out = _safe_int(_usage.get("output_tokens", 0))
                             if _out > 0:
                                 _turn_outputs.append(_out)
                     if _turn_outputs:
@@ -47565,6 +48281,8 @@ if __name__ == "__main__":
             print(f"  Startup overhead: {snap['total_overhead']:,} tokens ({snap['overhead_pct']}% of {snap['context_window'] // 1000}K)")
             print(f"  Usable context: ~{snap['usable_tokens']:,} tokens (after overhead + autocompact buffer)")
             print(f"  Skills: {snap['skill_count']} ({snap['skill_tokens']:,} tokens)")
+            if snap.get("skills_basis"):
+                print(f"          ({snap['skills_basis']})")
             print(f"  {instruction_label}: {snap['claude_md_tokens']:,} tokens")
             print(f"  MCP: {snap['mcp_server_count']} servers ({snap['mcp_tokens']:,} tokens)")
             print()
@@ -47583,12 +48301,15 @@ if __name__ == "__main__":
                 sc = data["subagent_costs"]
                 print(f"  Subagent spend: ${sc['total_usd']:.2f} ({sc['pct_of_spend']}% of recent sessions)")
                 for s in sc["top_subagents"][:3]:
-                    print(f"    {s['name']}: ${s['cost_usd']} ({s['tokens']:,} tokens, {s['model']})")
+                    print(f"    {_strip_ansi(str(s['name']))}: ${s['cost_usd']} ({s['tokens']:,} tokens, {_strip_ansi(str(s['model']))})")
                 print()
             if data.get("costly_prompts"):
                 print("  Most expensive prompts (last 7 days):")
                 for i, p in enumerate(data["costly_prompts"][:5], 1):
-                    preview = p["text"][:70].replace("\n", " ")
+                    # Session-log text is attacker-influenceable — strip ANSI
+                    # escapes before printing so a crafted prompt cannot inject
+                    # terminal control sequences, then truncate the clean text.
+                    preview = _strip_ansi(str(p["text"]))[:70].replace("\n", " ")
                     print(f"    {i}. ${p['cost_usd']} ({p['tokens_in']:,} in) \"{preview}...\"")
                 print()
             if data["questions"]:
@@ -48022,7 +48743,7 @@ if __name__ == "__main__":
                 cp = (f"cp {c['checkpoint_age_min'] // 60}h ago"
                       if c["has_checkpoint"] and c["checkpoint_age_min"] is not None
                       else "thin")
-                topic = c["topic"] or "(no topic)"
+                topic = _strip_ansi(c["topic"] or "(no topic)")
                 print(f"  {i:>2}. [{c['date']}] {topic[:60]:<60} "
                       f"({cp}, {c['session_id'][:8]})")
             print("  Reopen:  measure.py resume-lean <#|session_id> --print")
