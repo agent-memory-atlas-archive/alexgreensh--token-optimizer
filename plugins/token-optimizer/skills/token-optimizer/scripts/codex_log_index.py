@@ -26,8 +26,8 @@ _SCHEMA = '''
 def _open_db(db_path):
     conn = sqlite3.connect(db_path, timeout=5.0)
     try:
-        conn.execute('PRAGMA journal_mode=WAL')
         conn.execute('PRAGMA busy_timeout=5000')
+        conn.execute('PRAGMA journal_mode=WAL')
         conn.executescript(_SCHEMA)
         if 'mtime' not in {row[1] for row in conn.execute('PRAGMA table_info(files)')}:
             try:
@@ -46,12 +46,21 @@ def _connect():
     root = resolve_snapshot_dir()
     root.mkdir(parents=True, exist_ok=True)
     db_path = root / 'codex-log-index.db'
-    try:
-        return _open_db(db_path)
-    except sqlite3.OperationalError:
-        raise  # locked/contended is not corruption: never delete a live index
-    except sqlite3.DatabaseError:
-        pass  # corrupt DB: self-heal by removing and rebuilding
+    # Locked/contended is not corruption: never delete a live index. A burst
+    # of concurrent first-opens races the journal_mode/schema setup and a
+    # writer mid-commit owns the file, so a lock can outlast the in-connection
+    # busy_timeout (and lock-upgrade deadlocks return BUSY without consulting
+    # the busy handler at all). Wait it out on a deadline before giving up.
+    deadline = time.monotonic() + 5
+    while True:
+        try:
+            return _open_db(db_path)
+        except sqlite3.OperationalError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.1)
+        except sqlite3.DatabaseError:
+            break  # corrupt DB: self-heal by removing and rebuilding
     # Windows refuses to unlink a file while any handle is open -- _open_db
     # already closed the broken connection, but an indexer or another process
     # can hold a transient share lock, so retry each file briefly.
@@ -174,14 +183,26 @@ def records(filepath):
                             else:
                                 skipped += 1
                 offset = handle.tell()
-        # Now acquire the write lock for a tight batch commit only.
-        conn.execute('BEGIN IMMEDIATE')
-        if not row or row[0] != identity or row[1] > stat.st_size or row[3] != stat.st_mtime_ns:
-            conn.execute('DELETE FROM records WHERE path=?', (key,))
-        conn.executemany('INSERT OR REPLACE INTO records(path, offset, data) VALUES (?,?,?)', parsed)
-        conn.execute('INSERT OR REPLACE INTO files(path, identity, offset, size, skipped, revision, mtime) VALUES (?,?,?,?,?,?,?)',
-                     (key, identity, offset, stat.st_size, skipped, SCHEMA_VERSION, stat.st_mtime_ns))
-        conn.commit()
+        # Now acquire the write lock for a tight batch commit only. A losing
+        # thread can still outlast busy_timeout under heavy contention (or hit
+        # the no-retry lock-upgrade deadlock path), so retry the transaction
+        # on a deadline instead of surfacing a transient BUSY.
+        deadline = time.monotonic() + 5
+        while True:
+            try:
+                conn.execute('BEGIN IMMEDIATE')
+                if not row or row[0] != identity or row[1] > stat.st_size or row[3] != stat.st_mtime_ns:
+                    conn.execute('DELETE FROM records WHERE path=?', (key,))
+                conn.executemany('INSERT OR REPLACE INTO records(path, offset, data) VALUES (?,?,?)', parsed)
+                conn.execute('INSERT OR REPLACE INTO files(path, identity, offset, size, skipped, revision, mtime) VALUES (?,?,?,?,?,?,?)',
+                             (key, identity, offset, stat.st_size, skipped, SCHEMA_VERSION, stat.st_mtime_ns))
+                conn.commit()
+                break
+            except sqlite3.OperationalError:
+                conn.rollback()
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.1)
         info = {'incomplete': offset < stat.st_size or skipped > 0,
                 'scan_mode': 'indexing' if offset < stat.st_size else 'indexed_full',
                 'indexed_bytes': offset, 'source_bytes': stat.st_size, 'skipped_records': skipped}

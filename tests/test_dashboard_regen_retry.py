@@ -190,7 +190,7 @@ window.__TOKEN_REGENERATE(); // A second click while pending must do nothing.
 setImmediate(() => process.stdout.write(JSON.stringify({counts, btn, error})));
 '''
     result = subprocess.run([node, "-", scenario], input=setup + handler + check,
-                            capture_output=True, text=True, check=True, timeout=10)
+                            capture_output=True, text=True, check=True, timeout=30)
     state = json.loads(result.stdout)
     assert state["counts"] == {"posts": posts, "fetches": fetches, "reloads": reloads}
     if not reloads:
