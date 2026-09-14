@@ -12,7 +12,7 @@ _SIMPLE_TOOLS = frozenset({"Read", "Glob", "Grep", "Edit", "Write", "Bash"})
 # model name is interpolated into evidence/suggestion text that the coach
 # prints verbatim, so strip terminal control sequences first.
 _ANSI_ESCAPE_RE = re.compile(
-    r"\x1b\[[0-9;?]*[ -/]*[@-~]"        # CSI
+    r"\x1b\[[0-9;:<=>?]*[ -/]*[@-~]"   # CSI (full ECMA-48 parameter bytes 0x30-0x3f)
     r"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"  # OSC ... BEL or ST
     r"|\x1b[()][0-2A-Z]"                # charset selection
     r"|\x1b[@-Z\\-_]"                   # remaining two-byte escapes

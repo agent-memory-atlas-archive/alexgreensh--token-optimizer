@@ -1370,7 +1370,7 @@ def _fmt_context_window(size):
 # ST), charset/two-byte sequences. Session-log text is attacker-influenceable;
 # strip before echoing it to a terminal (coach previews, subagent names).
 _ANSI_ESCAPE_RE = re.compile(
-    r"\x1b\[[0-9;?]*[ -/]*[@-~]"        # CSI
+    r"\x1b\[[0-9;:<=>?]*[ -/]*[@-~]"   # CSI (full ECMA-48 parameter bytes 0x30-0x3f)
     r"|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"  # OSC ... BEL or ST
     r"|\x1b[()][0-2A-Z]"                # charset selection
     r"|\x1b[@-Z\\-_]"                   # remaining two-byte escapes
@@ -1379,7 +1379,7 @@ _ANSI_ESCAPE_RE = re.compile(
 
 def _strip_ansi(text):
     """Remove ANSI/VT escape sequences from text destined for the terminal."""
-    return _ANSI_ESCAPE_RE.sub("", text)
+    return _ANSI_ESCAPE_RE.sub("", str(text))
 
 
 def _safe_int(value):
@@ -10047,6 +10047,8 @@ def _extract_topic(text):
         return None
     # Strip leading whitespace/newlines
     text = text.strip()
+    # Strip ANSI/VT escape sequences — session-log text is attacker-influenceable
+    text = _strip_ansi(text)
     # Remove common prefixes
     prefixes = [
         "Implement the following plan:",
@@ -19792,7 +19794,7 @@ def _grok_summary():
         print("    Cost: no authoritative billing data recorded (costUsdTicks scrubbed)")
     print(f"    Tokens: {total_in:,} in / {total_out:,} out")
     if top_models:
-        print("    Models: " + ", ".join(f"{m} ({v:,})" for m, v in top_models))
+        print("    Models: " + ", ".join(f"{_strip_ansi(str(m))} ({v:,})" for m, v in top_models))
     if incomplete:
         print(f"    {incomplete} session(s) ended without clean shutdown (usageIsIncomplete)")
     if estimated:
@@ -20011,7 +20013,7 @@ def _copilot_summary():
             print("    Cost: no billing data recorded by Copilot for these sessions")
         print(f"    Tokens: {total_in:,} in / {total_out:,} out")
         if top_models:
-            print("    Models: " + ", ".join(f"{m} ({v:,})" for m, v in top_models))
+            print("    Models: " + ", ".join(f"{_strip_ansi(str(m))} ({v:,})" for m, v in top_models))
         if incomplete:
             print(f"    {incomplete} session(s) ended without clean shutdown (partial data)")
         if estimated:
@@ -20555,7 +20557,7 @@ def _antigravity_summary():
             print("    Cost: unavailable (no model with a known Gemini rate card)")
         print(f"    Tokens: {total_in:,} in / {total_out:,} out / {total_cache:,} cache-read")
         if top_models:
-            print("    Models: " + ", ".join(f"{m} ({v:,})" for m, v in top_models))
+            print("    Models: " + ", ".join(f"{_strip_ansi(str(m))} ({v:,})" for m, v in top_models))
         if incomplete:
             print(f"    {incomplete} session(s) ended without clean shutdown (partial data)")
     if not any_data:
@@ -21959,7 +21961,7 @@ def usage_trends(days=30, as_json=False):
         print(f"  Used ({len(skill_sessions)} of {installed_count} installed):")
         for skill, count in sorted(skill_sessions.items(), key=lambda x: -x[1])[:15]:
             dots = "." * max(2, 30 - len(skill))
-            print(f"    {skill} {dots} {count} session{'s' if count != 1 else ''}")
+            print(f"    {_strip_ansi(str(skill))} {dots} {count} session{'s' if count != 1 else ''}")
         if len(skill_sessions) > 15:
             print(f"    ... and {len(skill_sessions) - 15} more")
     else:
@@ -21986,7 +21988,7 @@ def usage_trends(days=30, as_json=False):
         print("\nSUBAGENTS")
         for agent, count in sorted(total_subagents.items(), key=lambda x: -x[1]):
             dots = "." * max(2, 30 - len(agent))
-            print(f"  {agent} {dots} {count} spawned")
+            print(f"  {_strip_ansi(str(agent))} {dots} {count} spawned")
 
     total_model_tokens = trends["model_mix"]
     if total_model_tokens:
@@ -21995,7 +21997,7 @@ def usage_trends(days=30, as_json=False):
         for model, tokens in sorted(total_model_tokens.items(), key=lambda x: -x[1]):
             pct = tokens / grand_total * 100 if grand_total else 0
             dots = "." * max(2, 26 - len(model))
-            print(f"  {model} {dots} {pct:.0f}% of tokens ({_fmt_tokens(tokens)})")
+            print(f"  {_strip_ansi(str(model))} {dots} {pct:.0f}% of tokens ({_fmt_tokens(tokens)})")
 
     trajectory = trends.get("trajectory", {})
     snapshots = trajectory.get("snapshots", [])
@@ -29458,13 +29460,22 @@ def _parse_jsonl_for_quality(filepath):
 
     idx = 0
     try:
+        if os.stat(filepath).st_size > codex_session.MAX_PARSE_FILE_BYTES:
+            return None
+    except OSError:
+        return None
+    try:
         with open(filepath, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
+                if len(line) > codex_session.MAX_JSONL_LINE_CHARS:
+                    continue
                 try:
                     record = json.loads(line)
                 except json.JSONDecodeError:
                     continue
 
+                if not isinstance(record, dict):
+                    continue
                 rec_type = record.get("type")
                 ts = record.get("timestamp", "")
 
@@ -29520,6 +29531,8 @@ def _parse_jsonl_for_quality(filepath):
                 # Assistant messages
                 if rec_type == "assistant":
                     msg = record.get("message", {})
+                    if not isinstance(msg, dict):
+                        msg = {}
                     content = msg.get("content", [])
                     text_length = 0
                     is_substantive = False
@@ -29530,12 +29543,9 @@ def _parse_jsonl_for_quality(filepath):
                     # raise and abort the whole parse (losing all quality data).
                     usage = msg.get("usage")
                     if isinstance(usage, dict):
-                        try:
-                            tok = (int(usage.get("input_tokens") or 0)
-                                   + int(usage.get("cache_creation_input_tokens") or 0)
-                                   + int(usage.get("cache_read_input_tokens") or 0))
-                        except (TypeError, ValueError):
-                            tok = 0
+                        tok = (_safe_int(usage.get("input_tokens"))
+                               + _safe_int(usage.get("cache_creation_input_tokens"))
+                               + _safe_int(usage.get("cache_read_input_tokens")))
                         if tok > 0:
                             context_tokens = tok
                     model_str = msg.get("model")
@@ -30615,6 +30625,8 @@ def jsonl_inspect(arg=None, as_json=False):
                 except json.JSONDecodeError:
                     continue
 
+                if not isinstance(record, dict):
+                    continue
                 total_records += 1
                 category = _classify_record(record)
                 counts_by_type[category] = counts_by_type.get(category, 0) + 1
@@ -32913,8 +32925,15 @@ def _extract_session_state(filepath, tail_lines=500):
     # Use deque to only keep the tail in memory (avoids loading entire file)
     records = deque(maxlen=tail_lines)
     try:
+        if os.stat(filepath).st_size > codex_session.MAX_PARSE_FILE_BYTES:
+            return None
+    except OSError:
+        return None
+    try:
         with open(filepath, "r", encoding="utf-8", errors="replace") as f:
             for line in f:
+                if len(line) > codex_session.MAX_JSONL_LINE_CHARS:
+                    continue
                 try:
                     records.append(json.loads(line))
                 except json.JSONDecodeError:
@@ -32932,6 +32951,8 @@ def _extract_session_state(filepath, tail_lines=500):
     file_count = 0
 
     for record in tail:
+        if not isinstance(record, dict):
+            continue
         rec_type = record.get("type")
 
         # User messages
@@ -32948,6 +32969,8 @@ def _extract_session_state(filepath, tail_lines=500):
         # Assistant messages
         if rec_type == "assistant":
             msg = record.get("message", {})
+            if not isinstance(msg, dict):
+                msg = {}
             content = msg.get("content", [])
             assistant_text = ""
 
@@ -33369,6 +33392,10 @@ def compact_capture(transcript_path=None, session_id=None, trigger="auto", cwd=N
         lines.append(state["current_step"]["last_assistant"][:300])
         lines.append("")
 
+    # Strip ANSI/VT escape sequences from transcript-derived text before
+    # writing the checkpoint — session-log content is attacker-influenceable
+    # and escape sequences in a restored-context file are an injection vector.
+    lines = [_strip_ansi(ln) if isinstance(ln, str) else ln for ln in lines]
     checkpoint_content = "\n".join(lines)
     checkpoint_path = CHECKPOINT_DIR / f"{sid}-{ts_file}{trigger_suffix}.md"
     # Atomic write prevents a partial checkpoint from being surfaced as
@@ -35949,15 +35976,14 @@ def _transcript_last_turn(sid_safe):
             if not isinstance(d, dict) or d.get("type") != "assistant" or d.get("isSidechain"):
                 continue
             msg = d.get("message") or {}
+            if not isinstance(msg, dict):
+                continue
             u = msg.get("usage") or {}
             if not isinstance(u, dict):
                 continue
-            try:
-                ctx = (int(u.get("input_tokens") or 0)
-                       + int(u.get("cache_read_input_tokens") or 0)
-                       + int(u.get("cache_creation_input_tokens") or 0))
-            except (TypeError, ValueError):
-                continue
+            ctx = (_safe_int(u.get("input_tokens"))
+                   + _safe_int(u.get("cache_read_input_tokens"))
+                   + _safe_int(u.get("cache_creation_input_tokens")))
             if ctx <= 0:
                 continue
             model = _normalize_model_name(msg.get("model"))
@@ -37462,6 +37488,8 @@ def _extract_session_start_ts(filepath):
             for line in f:
                 try:
                     record = json.loads(line)
+                    if not isinstance(record, dict):
+                        continue
                     ts_str = record.get("timestamp")
                     if ts_str:
                         ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
@@ -37491,6 +37519,8 @@ def _extract_active_agents(filepath):
                 except json.JSONDecodeError:
                     continue
 
+                if not isinstance(record, dict):
+                    continue
                 rec_type = record.get("type")
                 msg = record.get("message", {})
                 content = msg.get("content", []) if isinstance(msg, dict) else []
@@ -46796,8 +46826,10 @@ def _calibrate_prior_verbosity_nudges(session_id, filepath):
                 entry = json.loads(line)
             except (json.JSONDecodeError, ValueError):
                 continue
+            if not isinstance(entry, dict):
+                continue
             if entry.get("type") == "assistant" and "message" in entry:
-                out = int(entry["message"].get("usage", {}).get("output_tokens", 0) or 0)
+                out = _safe_int(entry["message"].get("usage", {}).get("output_tokens", 0))
                 if out > 0:
                     outputs.append(out)
 
@@ -47036,10 +47068,12 @@ def run_verbosity_steer(transcript_path=None, quiet=True, session_id=None):
                             _entry = json.loads(_line)
                         except (json.JSONDecodeError, ValueError):
                             continue
+                        if not isinstance(_entry, dict):
+                            continue
                         if _entry.get("type") == "assistant" and "message" in _entry:
                             _msg = _entry["message"]
                             _usage = _msg.get("usage", {})
-                            _out = int(_usage.get("output_tokens", 0) or 0)
+                            _out = _safe_int(_usage.get("output_tokens", 0))
                             if _out > 0:
                                 _turn_outputs.append(_out)
                     if _turn_outputs:
@@ -47961,7 +47995,7 @@ if __name__ == "__main__":
                 sc = data["subagent_costs"]
                 print(f"  Subagent spend: ${sc['total_usd']:.2f} ({sc['pct_of_spend']}% of recent sessions)")
                 for s in sc["top_subagents"][:3]:
-                    print(f"    {_strip_ansi(str(s['name']))}: ${s['cost_usd']} ({s['tokens']:,} tokens, {s['model']})")
+                    print(f"    {_strip_ansi(str(s['name']))}: ${s['cost_usd']} ({s['tokens']:,} tokens, {_strip_ansi(str(s['model']))})")
                 print()
             if data.get("costly_prompts"):
                 print("  Most expensive prompts (last 7 days):")
@@ -48403,7 +48437,7 @@ if __name__ == "__main__":
                 cp = (f"cp {c['checkpoint_age_min'] // 60}h ago"
                       if c["has_checkpoint"] and c["checkpoint_age_min"] is not None
                       else "thin")
-                topic = c["topic"] or "(no topic)"
+                topic = _strip_ansi(c["topic"] or "(no topic)")
                 print(f"  {i:>2}. [{c['date']}] {topic[:60]:<60} "
                       f"({cp}, {c['session_id'][:8]})")
             print("  Reopen:  measure.py resume-lean <#|session_id> --print")
