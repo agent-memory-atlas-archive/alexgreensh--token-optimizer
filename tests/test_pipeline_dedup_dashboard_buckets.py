@@ -37,7 +37,9 @@ def test_hook_tags_dedup_and_pipeline_distinctly():
     sig = inspect.signature(hook._log_event)
     assert "feature" in sig.parameters
     assert sig.parameters["feature"].default == "bash_compress_pipeline"
-    # The dedup branch flips the tag to the dedicated bucket.
-    src = inspect.getsource(hook.main)
+    # The dedup branch flips the tag to the dedicated bucket. main() delegates
+    # the payload handling to _run() so the CLAUDE_SESSION_ID env marker can
+    # be scoped to the hook run and restored afterward.
+    src = inspect.getsource(hook._run)
     assert '_log_feature = "crossturn_dedup"' in src
     assert "feature=_log_feature" in src
