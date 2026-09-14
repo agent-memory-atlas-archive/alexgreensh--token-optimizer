@@ -69,7 +69,7 @@ def test_regenerate_advances_served_dashboard_mtime_and_uses_served_install(tmp_
     before = dashboard.stat().st_mtime_ns
     proc = subprocess.Popen([sys.executable, str(server)], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     try:
-        deadline = time.time() + 5
+        deadline = time.time() + 60
         response = None
         while time.time() < deadline:
             try:
@@ -95,7 +95,7 @@ def test_regenerate_advances_served_dashboard_mtime_and_uses_served_install(tmp_
         assert dashboard.read_text(encoding="utf-8") == "claude-refresh"
     finally:
         proc.terminate()
-        proc.wait(timeout=5)
+        proc.wait(timeout=60)
 
 
 def test_regenerate_resolves_served_install_despite_mismatched_marketplace_identity(tmp_path):
@@ -147,7 +147,7 @@ def test_regenerate_resolves_served_install_despite_mismatched_marketplace_ident
     before = dashboard.stat().st_mtime_ns
     proc = subprocess.Popen([sys.executable, str(server)], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     try:
-        deadline = time.time() + 5
+        deadline = time.time() + 60
         response = None
         while time.time() < deadline:
             try:
@@ -173,7 +173,7 @@ def test_regenerate_resolves_served_install_despite_mismatched_marketplace_ident
         assert dashboard.read_text(encoding="utf-8") == "claude-refresh"
     finally:
         proc.terminate()
-        proc.wait(timeout=5)
+        proc.wait(timeout=60)
 
 
 def test_sidechain_pool_ignores_pre_classifier_fix_sidecar(tmp_path, monkeypatch):

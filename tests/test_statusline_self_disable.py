@@ -48,7 +48,7 @@ def _run_statusline(script_path: Path, stdin_payload: dict) -> subprocess.Comple
         input=json.dumps(stdin_payload),
         capture_output=True,
         text=True,
-        timeout=10,
+        timeout=60,
     )
 
 

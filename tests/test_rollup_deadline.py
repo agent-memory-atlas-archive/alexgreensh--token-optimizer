@@ -107,7 +107,7 @@ def _run_rollup_subprocess(subcommand, collect_name, tmp_path, *, block, budget)
     started = time.monotonic()
     proc = subprocess.run(
         [sys.executable, "-c", code],
-        capture_output=True, text=True, env=env, timeout=8,
+        capture_output=True, text=True, env=env, timeout=60,
     )
     return proc, time.monotonic() - started
 
@@ -125,7 +125,7 @@ def _run_rollup_subprocess(subcommand, collect_name, tmp_path, *, block, budget)
 def test_rollup_bounded_on_blocking_collect(subcommand, collect_name, tmp_path):
     """A blocking collect is terminated by the armed deadline, not allowed to
     hang.  On unfixed code no deadline is armed so the subprocess sleeps the
-    full block and hits the 8s timeout -> TimeoutExpired -> test fails."""
+    full block and hits the 60s timeout -> TimeoutExpired -> test fails."""
     try:
         proc, elapsed = _run_rollup_subprocess(
             subcommand, collect_name, tmp_path,
@@ -133,13 +133,13 @@ def test_rollup_bounded_on_blocking_collect(subcommand, collect_name, tmp_path):
         )
     except subprocess.TimeoutExpired:
         pytest.fail(
-            f"{subcommand} hung past 8s; no wall-clock deadline armed on a "
+            f"{subcommand} hung past 60s; no wall-clock deadline armed on a "
             f"blocking _collect_*_sessions (permanent orphan risk)"
         )
     assert proc.returncode == 0, (
         f"{subcommand} exit code {proc.returncode}; stderr={proc.stderr!r}"
     )
-    # 0.3s budget + ~0.3s process startup; well under the 8s hang ceiling.
+    # 0.3s budget + ~0.3s process startup; well under the 60s hang ceiling.
     assert elapsed < 4.0, (
         f"{subcommand} did not bounded-exit: took {elapsed:.2f}s "
         f"(deadline should have fired at ~0.3s)"

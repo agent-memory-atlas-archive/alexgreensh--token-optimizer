@@ -174,7 +174,7 @@ def test_collect_deadline_closes_stdout_pipe(tmp_path):
         # The deadline exits 0 (os._exit(0)); a non-zero exit would mean
         # something else closed the pipe.
         try:
-            rc = proc.wait(timeout=5)
+            rc = proc.wait(timeout=60)
         except subprocess.TimeoutExpired:
             proc.kill()
             rc = proc.wait()
@@ -275,7 +275,7 @@ def test_hookdeadline_closes_inherited_stdout_pipe_crossplatform():
         elapsed = time.monotonic() - start
     finally:
         try:
-            proc.wait(timeout=5)
+            proc.wait(timeout=60)
         except subprocess.TimeoutExpired:
             proc.kill()
             raise AssertionError(

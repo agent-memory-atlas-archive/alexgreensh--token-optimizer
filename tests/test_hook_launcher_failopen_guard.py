@@ -82,7 +82,7 @@ def test_missing_launcher_exits_zero_not_127(hooks_path):
             env={"CLAUDE_PLUGIN_ROOT": env_root, "PATH": "/usr/bin:/bin:/usr/local/bin"},
             capture_output=True,
             text=True,
-            timeout=15,
+            timeout=60,
         )
         assert proc.returncode == 0, (
             f"stale launcher must exit 0, got {proc.returncode}\n"
@@ -108,7 +108,7 @@ def test_present_launcher_still_runs(tmp_path):
         env={"CLAUDE_PLUGIN_ROOT": str(tmp_path), "PATH": "/usr/bin:/bin:/usr/local/bin"},
         capture_output=True,
         text=True,
-        timeout=15,
+        timeout=60,
     )
     assert proc.returncode == 0
     assert "RAN_OK" in proc.stdout

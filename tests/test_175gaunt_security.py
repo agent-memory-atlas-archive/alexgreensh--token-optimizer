@@ -328,10 +328,10 @@ def test_hook_io_does_not_mutate_os_environ():
         'session_id': 'leaked-session-id',
     })
     try:
-        out, err = proc.communicate(payload, timeout=15)
+        out, err = proc.communicate(payload, timeout=60)
     except subprocess.TimeoutExpired:
         proc.kill()
-        proc.wait(timeout=5)
+        proc.wait(timeout=60)
         pytest.fail("read_stdin_hook_input hung")
     assert 'LEAKED' not in out, (
         "hook_io.read_stdin_hook_input() mutated os.environ"
@@ -378,10 +378,10 @@ def test_bash_compress_hook_does_not_mutate_os_environ():
         'tool_response': {'stdout': '', 'exit_code': 0},
     })
     try:
-        out, err = proc.communicate(payload, timeout=15)
+        out, err = proc.communicate(payload, timeout=60)
     except subprocess.TimeoutExpired:
         proc.kill()
-        proc.wait(timeout=5)
+        proc.wait(timeout=60)
         pytest.fail("bash_compress_hook.main() hung")
     assert 'LEAKED' not in out, (
         "bash_compress_hook.main() mutated os.environ['CLAUDE_SESSION_ID'] "

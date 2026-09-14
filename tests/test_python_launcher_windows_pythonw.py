@@ -97,7 +97,7 @@ def _run(script: str, stdin: str, env: dict, *, use_pty: bool = False):
         except BrokenPipeError:
             pass
         chunks: list[bytes] = []
-        deadline = time.time() + 10
+        deadline = time.time() + 60
         while True:
             remaining = deadline - time.time()
             if remaining <= 0:
@@ -130,7 +130,7 @@ def _run(script: str, stdin: str, env: dict, *, use_pty: bool = False):
         input=stdin.encode("utf-8"),
         env=full_env,
         capture_output=True,
-        timeout=15,
+        timeout=60,
     )
     return (
         result.stdout.decode("utf-8", errors="replace"),

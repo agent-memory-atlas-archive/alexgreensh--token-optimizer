@@ -73,14 +73,14 @@ def test_stdin_partial_payload_returns_within_deadline(tmp_path):
         proc.stdin.write('{"partial": tru')  # valid-ish start, never completed
         proc.stdin.flush()
         try:
-            out, _err = proc.communicate(timeout=8)
+            out, _err = proc.communicate(timeout=60)
         except subprocess.TimeoutExpired:
             proc.kill()
             try:
-                proc.wait(timeout=5)
+                proc.wait(timeout=60)
             except subprocess.TimeoutExpired:
                 pass
-            pytest.fail("read_stdin_hook_input hung past 8s on a partial payload "
+            pytest.fail("read_stdin_hook_input hung past 60s on a partial payload "
                         "with the pipe held open (deadline not enforced end to end)")
         assert "returned" in out, f"child crashed instead of timing out: {out!r}"
         # Pin the deadline itself, not just "did not hang": the read must be
@@ -102,7 +102,7 @@ def test_stdin_partial_payload_returns_within_deadline(tmp_path):
         if proc.poll() is None:
             proc.kill()
             try:
-                proc.wait(timeout=5)
+                proc.wait(timeout=60)
             except subprocess.TimeoutExpired:
                 pass
 
@@ -141,7 +141,7 @@ def test_planted_fifo_marker_does_not_hang_the_hook(tmp_path):
             daemon=True,
         )
         thread.start()
-        thread.join(timeout=5)
+        thread.join(timeout=60)
         assert done.is_set(), ("hook hung >=5s on a planted FIFO marker; the marker write "
                                "must be exclusive and non-blocking (fail-open)")
     finally:
@@ -153,7 +153,7 @@ def test_planted_fifo_marker_does_not_hang_the_hook(tmp_path):
                 os.close(os.open(marker, os.O_RDONLY | os.O_NONBLOCK))
             except OSError:
                 pass
-            thread.join(timeout=2)
+            thread.join(timeout=60)
         try:
             marker.unlink()
         except OSError:

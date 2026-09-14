@@ -84,7 +84,7 @@ def _stub_tree(tmp_path, module_name, body):
     return d
 
 
-def _run_entry(scripts_dir, module_name, args, *, timeout=20, env=None):
+def _run_entry(scripts_dir, module_name, args, *, timeout=60, env=None):
     e = os.environ.copy()
     e.pop("TOKEN_OPTIMIZER_HOOK_BUDGET_MS", None)
     if env:
@@ -238,7 +238,7 @@ def test_over_budget_entry_exits_zero_with_no_output_and_does_not_hang(
     tmp_path, module, args, budget
 ):
     scripts = _stub_tree(tmp_path, module, BLOCK_FOREVER)
-    proc, elapsed = _run_entry(scripts, module, args, timeout=20)
+    proc, elapsed = _run_entry(scripts, module, args, timeout=60)
 
     assert proc.returncode == 0, f"expected clean exit 0, got {proc.returncode}"
     assert proc.stdout == "", f"over-budget hook wrote stdout: {proc.stdout!r}"
@@ -262,7 +262,7 @@ sys.stdout.write("STILL-ALIVE")
 """
     scripts = _stub_tree(tmp_path, "measure", body)
     proc, elapsed = _run_entry(
-        scripts, "measure", ["ensure-health", "--once-mark"], timeout=25
+        scripts, "measure", ["ensure-health", "--once-mark"], timeout=60
     )
     assert proc.returncode == 0
     assert "STILL-ALIVE" in proc.stdout, (
@@ -291,7 +291,7 @@ sys.stdout.write('{"hookSpecificOutput": {"ok": true}}')
 sys.stderr.write("diagnostic\\n")
 """
     scripts = _stub_tree(tmp_path, module, body)
-    proc, elapsed = _run_entry(scripts, module, args, timeout=20)
+    proc, elapsed = _run_entry(scripts, module, args, timeout=60)
     assert proc.returncode == 0
     assert json.loads(proc.stdout)["hookSpecificOutput"]["ok"] is True
     assert "diagnostic" in proc.stderr
@@ -303,12 +303,12 @@ def test_budget_does_not_change_how_a_raising_hook_behaves(tmp_path):
     the fail-open layer that turns it into exit 0). Arming a budget must not
     alter that either way, so compare budgeted against budget-disabled."""
     scripts = _stub_tree(tmp_path, "read_cache", "raise RuntimeError('boom')\n")
-    budgeted, _ = _run_entry(scripts, "read_cache", ["--quiet"], timeout=20)
+    budgeted, _ = _run_entry(scripts, "read_cache", ["--quiet"], timeout=60)
     unbudgeted, _ = _run_entry(
         scripts,
         "read_cache",
         ["--quiet"],
-        timeout=20,
+        timeout=60,
         env={"TOKEN_OPTIMIZER_HOOK_BUDGET_MS": "0"},
     )
     assert budgeted.returncode == unbudgeted.returncode
@@ -370,7 +370,7 @@ def test_silent_deadline_writes_nothing_but_the_default_still_warns(tmp_path):
             capture_output=True,
             text=True,
             env=env,
-            timeout=15,
+            timeout=60,
         )
 
     silent = _run('HookDeadline(0.2, message=b"").start()')

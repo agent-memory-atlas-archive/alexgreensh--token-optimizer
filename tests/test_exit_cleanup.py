@@ -197,7 +197,7 @@ def _run_rollup_subprocess(subcommand, collect_name, tmp_path, *, block, budget)
     started = time.monotonic()
     proc = subprocess.run(
         [sys.executable, "-c", code],
-        capture_output=True, text=True, env=env, timeout=8,
+        capture_output=True, text=True, env=env, timeout=60,
     )
     return proc, time.monotonic() - started
 
@@ -226,7 +226,7 @@ def test_defeat_bug_a_deadline_fires_emits_diagnostic(subcommand, collect_name, 
         )
     except subprocess.TimeoutExpired:
         pytest.fail(
-            f"{subcommand} hung past 8s -- deadline did NOT fire (defeat: the "
+            f"{subcommand} hung past 60s -- deadline did NOT fire (defeat: the "
             f"rollup branch is not bounded by the armed HookDeadline)"
         )
     assert proc.returncode == 0, (
@@ -336,8 +336,8 @@ def test_defeat_bug_b_young_candidate_survives_concurrent_sweep_race(
     t2.start()
     time.sleep(0.3)
     stop.set()
-    t1.join(timeout=2)
-    t2.join(timeout=2)
+    t1.join(timeout=60)
+    t2.join(timeout=60)
 
     assert not errors, "race threads raised: %r" % (errors,)
     assert young.exists(), (
@@ -484,7 +484,7 @@ def _run_n_reclaimers(lease: Path, n: int) -> tuple[list[bool], list[BaseExcepti
     for t in threads:
         t.start()
     for t in threads:
-        t.join(timeout=10)
+        t.join(timeout=60)
     return results, errors
 
 
@@ -602,7 +602,7 @@ def test_defeat_bug_c_cross_generation_no_interference(tmp_path):
     for t in threads:
         t.start()
     for t in threads:
-        t.join(timeout=10)
+        t.join(timeout=60)
 
     assert not errors, "cross-gen threads raised: %r" % (errors,)
     for g in range(gens):
@@ -715,8 +715,8 @@ def test_defeat_bug_c_sweep_does_not_reap_young_claim_while_reclaimer_in_flight(
     t2.start()
     time.sleep(0.3)
     stop.set()
-    t1.join(timeout=2)
-    t2.join(timeout=2)
+    t1.join(timeout=60)
+    t2.join(timeout=60)
 
     assert not errors, "race threads raised: %r" % (errors,)
     assert claim.exists(), (

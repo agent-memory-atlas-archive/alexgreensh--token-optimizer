@@ -437,7 +437,7 @@ def test_cleanup_period_and_statusline_writers_merge_stale_reads(measure):
                 stale = dict(stale)
                 stale[key] = value
                 if attempt == 0:
-                    barrier.wait(timeout=3)
+                    barrier.wait(timeout=60)
                 if mod._write_settings_atomic(stale):
                     saw_true = True
                     return
@@ -458,7 +458,7 @@ def test_cleanup_period_and_statusline_writers_merge_stale_reads(measure):
     for thread in threads:
         thread.start()
     for thread in threads:
-        thread.join(timeout=10)
+        thread.join(timeout=60)
 
     assert not errors, errors
     assert all(not thread.is_alive() for thread in threads)

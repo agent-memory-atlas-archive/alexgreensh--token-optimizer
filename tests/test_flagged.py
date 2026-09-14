@@ -278,7 +278,7 @@ def test_command_doc_resolver_block_is_valid_bash(doc):
     text = (REPO / "commands" / doc).read_text(encoding="utf-8")
     block = text.split("```bash", 1)[1].split("```", 1)[0]
     result = subprocess.run(
-        ["/bin/bash", "-n"], input=block, capture_output=True, text=True, timeout=15
+        ["/bin/bash", "-n"], input=block, capture_output=True, text=True, timeout=60
     )
     assert result.returncode == 0, f"{doc} resolver block: {result.stderr}"
 

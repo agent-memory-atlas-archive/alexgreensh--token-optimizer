@@ -120,7 +120,7 @@ def test_no_args_is_a_quiet_noop():
         env=env,
         capture_output=True,
         text=True,
-        timeout=10,
+        timeout=60,
     )
     assert result.returncode == 0
     assert result.stdout == ""

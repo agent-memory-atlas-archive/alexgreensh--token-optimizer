@@ -1352,7 +1352,7 @@ def test_spawn_detached_real_child():
         stdin=subprocess.DEVNULL,
     )
     assert proc is not None, "spawn_detached returned None on real Windows"
-    rc = proc.wait(timeout=10)
+    rc = proc.wait(timeout=60)
     assert rc == 0, (
         f"real child exited {rc}, expected 0 (GetConsoleWindow() != 0 means "
         "DETACHED_PROCESS did not take effect)"

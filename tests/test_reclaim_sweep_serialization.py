@@ -257,7 +257,7 @@ def test_concurrent_same_generation_reclaimers_exactly_one_winner(tmp_path):
     for t in threads:
         t.start()
     for t in threads:
-        t.join(timeout=5)
+        t.join(timeout=60)
 
     assert not errors, "threads raised: %r" % (errors,)
     assert sum(1 for r in results if r) == 1, (

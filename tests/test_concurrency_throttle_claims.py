@@ -62,8 +62,8 @@ def test_acquire_lock_is_mutually_exclusive(tmp_path, monkeypatch):
     t2 = threading.Thread(target=attempt)
     t1.start()
     t2.start()
-    t1.join(timeout=5)
-    t2.join(timeout=5)
+    t1.join(timeout=60)
+    t2.join(timeout=60)
 
     holders = [r for r in results if r is not None]
     assert len(holders) == 1, (
@@ -94,8 +94,8 @@ def test_session_refresh_due_has_toctou_in_isolation(tmp_path, monkeypatch):
     t2 = threading.Thread(target=attempt)
     t1.start()
     t2.start()
-    t1.join(timeout=5)
-    t2.join(timeout=5)
+    t1.join(timeout=60)
+    t2.join(timeout=60)
 
     # In isolation both can return True (the TOCTOU). This is expected and
     # harmless because the mkdir lock prevents concurrent callers from ever

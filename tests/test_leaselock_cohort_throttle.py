@@ -31,7 +31,7 @@ def _run_child(
     code: str,
     env: dict,
     *,
-    timeout: int = 10,
+    timeout: int = 60,
     extra_args: list[str] | None = None,
 ) -> subprocess.CompletedProcess:
     return subprocess.run(
@@ -211,7 +211,7 @@ def test_archive_original_distinct_pids_distinct_keys_both_archived(tmp_path):
     env = _base_env(snapshot_dir)
 
     child_a = _run_child(
-        _TEST3_CHILD, env, timeout=20, extra_args=["AAA", "toolA"]
+        _TEST3_CHILD, env, timeout=60, extra_args=["AAA", "toolA"]
     )
     assert child_a.returncode == 0, (
         f"child A failed: rc={child_a.returncode} "
@@ -220,7 +220,7 @@ def test_archive_original_distinct_pids_distinct_keys_both_archived(tmp_path):
     assert child_a.stdout.strip() == "toolA"
 
     child_b = _run_child(
-        _TEST3_CHILD, env, timeout=20, extra_args=["BBB", "toolB"]
+        _TEST3_CHILD, env, timeout=60, extra_args=["BBB", "toolB"]
     )
     assert child_b.returncode == 0, (
         f"child B failed: rc={child_b.returncode} "

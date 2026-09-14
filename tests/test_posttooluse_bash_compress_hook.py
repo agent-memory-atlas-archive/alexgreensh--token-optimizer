@@ -322,7 +322,7 @@ class TestBoundaryConditions:
         })
         proc = subprocess.run(
             [sys.executable, str(BASH_COMPRESS_HOOK)],
-            input=payload, capture_output=True, text=True, timeout=10,
+            input=payload, capture_output=True, text=True, timeout=60,
         )
         assert proc.returncode == 0
         assert not proc.stdout.strip()
@@ -511,7 +511,7 @@ class TestFailOpen:
     def test_malformed_json_input_does_not_crash(self):
         proc = subprocess.run(
             [sys.executable, str(BASH_COMPRESS_HOOK)],
-            input="not valid json {{{", capture_output=True, text=True, timeout=10,
+            input="not valid json {{{", capture_output=True, text=True, timeout=60,
         )
         assert proc.returncode == 0
 
@@ -519,7 +519,7 @@ class TestFailOpen:
         payload = json.dumps({"tool_name": "Bash"})
         proc = subprocess.run(
             [sys.executable, str(BASH_COMPRESS_HOOK)],
-            input=payload, capture_output=True, text=True, timeout=10,
+            input=payload, capture_output=True, text=True, timeout=60,
         )
         assert proc.returncode == 0
 

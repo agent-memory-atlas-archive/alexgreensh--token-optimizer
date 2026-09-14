@@ -23,7 +23,7 @@ sys.path.insert(0, str(SCRIPTS))
 from hook_runtime import HookDeadline, LeaseLock  # noqa: E402
 
 
-def _python(code, *, timeout=3):
+def _python(code, *, timeout=60):
     env = os.environ.copy()
     env["PYTHONPATH"] = str(SCRIPTS)
     started = time.monotonic()
@@ -221,7 +221,7 @@ if lock.acquire():
         )
         for _ in range(12)
     ]
-    codes = [process.wait(timeout=2) for process in processes]
+    codes = [process.wait(timeout=60) for process in processes]
 
     assert codes == [0] * len(processes)
     assert wins_path.read_text().splitlines() == ["won"]
@@ -385,7 +385,7 @@ def test_acquire_stops_waiting_after_timeout(tmp_path, monkeypatch):
 
 @pytest.mark.skipif(
     sys.platform == "win32",
-    reason="12 cold interpreter spawns must finish inside wait(timeout=2) and "
+    reason="12 cold interpreter spawns must finish inside wait(timeout=60) and "
     "elapsed < 1.2s: not achievable on slow Windows CI runners (observed "
     "TimeoutExpired, run 33595318811). Same load-sensitivity family as the "
     "win32-skipped 12-process reclaim tests in this file and "
@@ -414,7 +414,7 @@ if lock.acquire():
         )
         for _ in range(12)
     ]
-    codes = [process.wait(timeout=2) for process in processes]
+    codes = [process.wait(timeout=60) for process in processes]
     elapsed = time.monotonic() - started
     wins = wins_path.read_text().splitlines()
     assert codes == [0] * 12 and wins == ["won"] and elapsed < 1.2

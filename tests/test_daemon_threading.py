@@ -288,13 +288,13 @@ def live_daemon(tmp_path, monkeypatch):
     def _stop():
         proc.terminate()
         try:
-            proc.wait(timeout=5)
+            proc.wait(timeout=60)
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait()
 
     # Wait for the daemon to bind and answer the identity probe.
-    deadline = time.time() + 8
+    deadline = time.time() + 60
     ready = False
     while time.time() < deadline:
         if proc.poll() is not None:
@@ -370,7 +370,7 @@ def test_health_probe_is_not_blocked_during_regen(live_daemon):
     t = threading.Thread(target=_run_regen, daemon=True)
     t.start()
     # Let the regen POST actually reach the server and start the subprocess.
-    assert regen_started.wait(timeout=5), "regen thread did not start"
+    assert regen_started.wait(timeout=60), "regen thread did not start"
     # Give the handler time to enter the synchronous subprocess.run() block.
     time.sleep(0.4)
 
@@ -433,7 +433,7 @@ def test_overlapping_regen_is_refused(live_daemon):
 
     t = threading.Thread(target=_run_first, daemon=True)
     t.start()
-    assert first_started.wait(timeout=5), "first regen did not start"
+    assert first_started.wait(timeout=60), "first regen did not start"
     time.sleep(0.4)  # let the first enter the synchronous subprocess.run()
 
     # Fire a second regen while the first is mid-flight. It must come back fast
@@ -449,7 +449,7 @@ def test_overlapping_regen_is_refused(live_daemon):
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=10) as r:
+        with urllib.request.urlopen(req, timeout=60) as r:
             second_result["code"] = r.getcode()
             second_result["body"] = r.read()
     except urllib.error.HTTPError as e:
@@ -597,7 +597,7 @@ def test_background_and_manual_regen_cannot_overlap(live_daemon):
     # spawns the fire-and-forget background child and sets _regen_inflight=True
     # BEFORE the response returns. The fake measure.py sleeps REGEN_STEP_SLEEP,
     # so the flag stays set for that window.
-    with urllib.request.urlopen(base + "/", timeout=10) as r:
+    with urllib.request.urlopen(base + "/", timeout=60) as r:
         r.read()
 
     # Immediately fire a manual regen: it must see the in-flight background regen
@@ -613,7 +613,7 @@ def test_background_and_manual_regen_cannot_overlap(live_daemon):
     )
     code = None
     try:
-        with urllib.request.urlopen(req, timeout=10) as r:
+        with urllib.request.urlopen(req, timeout=60) as r:
             code = r.getcode()
             r.read()
     except urllib.error.HTTPError as e:

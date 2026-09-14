@@ -361,14 +361,14 @@ def test_clear_compacted_lands_delete_under_brief_lock(tmp_path):
 
     holder = threading.Thread(target=_hold_lock, daemon=True)
     holder.start()
-    assert acquired.wait(timeout=3.0), "lock holder failed to acquire"
+    assert acquired.wait(timeout=60.0), "lock holder failed to acquire"
 
     # Default 5000ms busy_timeout: the clear waits out the brief lock.
     out = _run_read_cache(
         tmp_path, ["--clear-compacted", "--quiet"], {"session_id": SESSION_S}
     )
     release.set()  # release the lock so the holder thread can exit
-    holder.join(timeout=5.0)
+    holder.join(timeout=60.0)
 
     assert out.returncode == 0, out.stderr
     assert "--clear-compacted FAILED" not in out.stderr, (

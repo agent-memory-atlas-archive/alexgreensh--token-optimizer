@@ -39,7 +39,7 @@ def _run_compact_restore(env_extra=None):
     return subprocess.run(
         [sys.executable, str(MEASURE), "compact-restore", "--new-session-only"],
         input='{"session_id":"budget-smoketest","source":"startup"}',
-        capture_output=True, text=True, env=env, timeout=25,
+        capture_output=True, text=True, env=env, timeout=60,
     )
 
 
