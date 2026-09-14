@@ -291,31 +291,25 @@ An em dash means the capability was not verified from first-party material in th
 
 One HTML page, auto-regenerates after every session via the SessionEnd hook, no manual trigger needed. The bookmarkable URL `http://localhost:24842/token-optimizer` is opt-in: it only works after you run `python3 skills/token-optimizer/scripts/measure.py setup-daemon` to start the local server. Until then, open the file path that `measure.py dashboard` prints on the `  Dashboard: ` line.
 
-Per-turn token breakdowns, cost across four pricing tiers, cache analysis with TTL mix and hit rate, quality scores overlaid on every session, subagent cost breakdown, savings tracker with four non-overlapping pools. Zero setup after install. [Full dashboard docs →](https://alexgreensh.github.io/token-optimizer/features/dashboard/)
+Per-turn token breakdowns, cost across four pricing tiers, cache analysis with TTL mix and hit rate, quality scores overlaid on every session, subagent cost breakdown, savings tracker with metered and estimated tiers kept apart. Zero setup after install. [Full dashboard docs →](https://alexgreensh.github.io/token-optimizer/features/dashboard/)
 
 ## What It Saves
 
-Savings come from four non-overlapping pools, tracked in two tiers:
+Six levers, all automatic: tool-output compression, cross-turn dedup, delta-read, structure-map skeletons, checkpoint-restore, and model routing. What they save is tracked in three tiers.
 
-| Pool | What it covers |
-|---|---|
-| Model routing + caching | Leaner prefix, lighter model mix, cache-write as a routing lever |
-| Subagent routing | Sidechain cost optimization (Claude Code only) |
-| Compression add-back | Tokens removed by delta mode, structure map, bash/search compression |
-| Lean-output add-back | Output tokens never produced due to conciseness nudges |
+**Three tiers, labelled by how each is known** (one real month, the author's last 30 days, all six levers on):
 
-**Two numbers, kept separate:**
+- **Logged actions (\~$126)**, metered. Every saving logged as it happened: a result archived, a repeat read skipped, a lean resume, a loop cut short. 2,733 events with before and after token counts.
+- **Repeat reads avoided (\~$1,124)**, estimated. Content Token Optimizer removed would have been re-read on every later turn until the session's next real compaction, modelled per turn at that turn's cache-read rate and capped at the real compaction event.
+- **Other estimates (\~$146)**, estimated. Lean session resumes, compressed sub-agent context, MCP output caps, loops prevented.
 
-- **Counted (\~$313/mo)**, logged action by action. Every time Token Optimizer swapped in a lighter model, trimmed a bulky result, or skipped a repeat read, it added it up: smarter habits \~$260/mo, while-you-work compression \~$53/mo. This is the slice metered event by event, so it is smaller and exact.
-- **Big picture (\~$1,877/mo, \~18%)**, the full counterfactual. Had you worked the way you did before Token Optimizer (\~95% Opus), you would have paid about \~$10,585/mo versus \~$8,708/mo now. The gap is mostly a lighter model mix (95% Opus down to 60%, \~$1,076/mo for main routing + caching), plus cheaper subagents (\~$741/mo) and the metered compression add-back (\~$60/mo).
-
-These numbers are never summed. Counted is the floor with hard receipts. Big picture is a model priced against your frozen pre-Token-Optimizer baseline. [See the full methodology →](BENCHMARK.md)
+About **\~$1,396** in API-equivalent value for the month, and **59.6M tokens never sent to the model**, roughly 28% of the workload (150.8M spent, about 210.4M without Token Optimizer). Tokens are the primary figure; dollars depend on which models you run. Metered and estimated are never dressed up as one number. [See the full methodology →](BENCHMARK.md)
 
 <p align="center">
-  <img src="skills/token-optimizer/assets/real-savings.svg" alt="30-day savings report: ~$313 counted, ~$1,877 big picture" width="900">
+  <img src="skills/token-optimizer/assets/real-savings.svg" alt="30-day savings report: about $1,396 in API-equivalent value and 59.6M tokens never sent, split into $126 logged actions (metered), $1,124 repeat reads avoided (estimated) and $146 other estimates" width="900">
 </p>
 
-Based on 684 sessions over 30 days (snapshot ending 2026-06-15), priced against a frozen pre-Token-Optimizer baseline (\~95% Opus). Your number is your own. [See the methodology →](BENCHMARK.md)
+Based on 1,698 sessions over the last 30 days (snapshot 2026-09-14). Your number is your own: the dashboard computes the same report from your own sessions. [See the methodology →](BENCHMARK.md)
 
 <p align="center">
   <img src="skills/token-optimizer/assets/user-profiles.svg" alt="What happens inside a 1M session" width="800">
