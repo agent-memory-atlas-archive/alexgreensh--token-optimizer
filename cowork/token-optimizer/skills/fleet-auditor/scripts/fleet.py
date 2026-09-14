@@ -148,6 +148,7 @@ DEFAULT_PRICING: dict[str, dict[str, float]] = {
     "gpt-5.4-nano":   {"input": 0.20/1e6, "output": 1.25/1e6, "cache_read": 0.02/1e6, "cache_write": 0},
     "gpt-5.5":        {"input": 5.0/1e6,  "output": 30.0/1e6, "cache_read": 0.50/1e6, "cache_write": 0},
     "gpt-5.5-pro":    {"input": 30.0/1e6, "output": 180.0/1e6, "cache_read": 30.0/1e6, "cache_write": 0},
+    "gpt-6-astra":    {"input": 10.0/1e6, "output": 50.0/1e6, "cache_read": 1.0/1e6, "cache_write": 12.50/1e6},
     "gpt-5.6-sol":    {"input": 5.0/1e6,  "output": 30.0/1e6, "cache_read": 0.50/1e6, "cache_write": 6.25/1e6},
     "gpt-5.6-terra":  {"input": 2.0/1e6,  "output": 12.0/1e6, "cache_read": 0.20/1e6, "cache_write": 2.50/1e6},
     "gpt-5.6-luna":   {"input": 0.20/1e6, "output": 1.20/1e6, "cache_read": 0.02/1e6, "cache_write": 0.25/1e6},
@@ -201,6 +202,36 @@ def _apply_sonnet_intro_pricing(as_of=None):
 
 
 _apply_sonnet_intro_pricing()
+
+# gpt-5.6-sol promotional pricing (date-gated). OpenAI documents the $4/$20 rate
+# as "available at least through November 21, 2026." DEFAULT_PRICING holds the
+# STANDARD card ($5/$30); while the promo window is open we swap the promo card
+# in so fleet cost/waste dollars stay accurate today AND flip back automatically
+# after 2026-11-21. Mirrors measure.py _apply_gpt56_sol_promo_pricing.
+_GPT56_SOL_STANDARD_RATES = {"input": 5.0/1e6, "output": 30.0/1e6, "cache_read": 0.50/1e6, "cache_write": 6.25/1e6}
+_GPT56_SOL_PROMO_RATES = {"input": 4.0/1e6, "output": 20.0/1e6, "cache_read": 0.40/1e6, "cache_write": 5.0/1e6}
+_GPT56_SOL_PROMO_UNTIL = datetime(2026, 11, 21, tzinfo=timezone.utc)
+
+
+def _apply_gpt56_sol_promo_pricing(as_of=None):
+    """Swap the gpt-5.6-sol card to the promotional rate while it is in effect (idempotent)."""
+    override = os.environ.get("TOKEN_OPTIMIZER_PRICING_AS_OF")
+    if as_of is None and override:
+        try:
+            as_of = datetime.strptime(override, "%Y-%m-%d")
+        except ValueError:
+            as_of = None
+    d = as_of or datetime.now(timezone.utc)
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=timezone.utc)
+    if d < _GPT56_SOL_PROMO_UNTIL:
+        DEFAULT_PRICING["gpt-5.6-sol"] = dict(_GPT56_SOL_PROMO_RATES)
+        return True
+    DEFAULT_PRICING["gpt-5.6-sol"] = dict(_GPT56_SOL_STANDARD_RATES)
+    return False
+
+
+_apply_gpt56_sol_promo_pricing()
 
 _pricing_override: dict | None = None
 

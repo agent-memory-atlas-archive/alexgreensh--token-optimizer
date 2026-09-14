@@ -43,7 +43,7 @@ from hook_io import read_stdin_hook_input
 from hook_runtime import LeaseLock
 from plugin_env import resolve_snapshot_dir, snapshot_dir_candidates
 from refetch_fingerprint import ARGS_HASH_KEY, expand_command, tool_fingerprint
-from runtime_env import claude_home
+from runtime_env import claude_home, detect_runtime
 from session_store import SessionStore, _sanitize_session_id as sanitize_sid
 
 # ---------------------------------------------------------------------------
@@ -113,6 +113,7 @@ _SAVINGS_DB_TIMEOUT_SECONDS = 0.05
 _SAVINGS_DB_BUSY_TIMEOUT_MS = 50
 _DEFAULT_SAVINGS_COST_PER_MTOK = 3.0  # Sonnet input rate; safe fallback for hook-only pricing.
 _HOOK_INPUT_COST_PER_MTOK = {
+    "gpt-6-astra": 10.0,
     "gpt-5.6-sol": 5.0,
     "gpt-5.6-terra": 2.0,
     "gpt-5.6-luna": 0.20,
@@ -131,6 +132,36 @@ _HOOK_INPUT_COST_PER_MTOK = {
     "gpt-5.5": 5.0,
     "gpt-4o": 2.5,
 }
+
+# gpt-5.6-sol promotional pricing (date-gated). OpenAI documents the $4/$20 rate
+# as "available at least through November 21, 2026." _HOOK_INPUT_COST_PER_MTOK
+# holds the STANDARD input rate ($5); while the promo window is open we swap the
+# promo rate in so hook savings dollars stay accurate today AND flip back
+# automatically after 2026-11-21. Mirrors measure.py _apply_gpt56_sol_promo_pricing.
+_GPT56_SOL_PROMO_UNTIL = datetime(2026, 11, 21, tzinfo=timezone.utc)
+
+
+def _apply_gpt56_sol_promo_pricing(as_of=None):
+    """Swap the gpt-5.6-sol hook input rate to the promotional rate while active (idempotent)."""
+    override = os.environ.get("TOKEN_OPTIMIZER_PRICING_AS_OF")
+    if as_of is None and override:
+        try:
+            as_of = datetime.strptime(override, "%Y-%m-%d")
+        except ValueError:
+            as_of = None
+    d = as_of or datetime.now(timezone.utc)
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=timezone.utc)
+    if d < _GPT56_SOL_PROMO_UNTIL:
+        _HOOK_INPUT_COST_PER_MTOK["gpt-5.6-sol"] = 4.0
+        _HOOK_INPUT_COST_PER_MTOK["gpt-5.6"] = 4.0
+        return True
+    _HOOK_INPUT_COST_PER_MTOK["gpt-5.6-sol"] = 5.0
+    _HOOK_INPUT_COST_PER_MTOK["gpt-5.6"] = 5.0
+    return False
+
+
+_apply_gpt56_sol_promo_pricing()
 
 _SAVINGS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS savings_events (
@@ -616,6 +647,7 @@ def _estimate_savings_cost_per_mtok() -> float:
         except ValueError:
             pass
 
+    is_codex = detect_runtime() == 'codex'
     model = (
         os.environ.get("CLAUDE_MODEL")
         or os.environ.get("ANTHROPIC_MODEL")
@@ -624,6 +656,8 @@ def _estimate_savings_cost_per_mtok() -> float:
         or os.environ.get("MODEL")
         or ""
     ).lower()
+    if is_codex:
+        model = (os.environ.get('CODEX_MODEL') or os.environ.get('OPENAI_MODEL') or '').lower()
     model = re.sub(r"[\s_]+", "-", model.rsplit("/", 1)[-1].rsplit(":", 1)[-1])
     if "fable" in model:
         return 10.0
@@ -634,7 +668,7 @@ def _estimate_savings_cost_per_mtok() -> float:
     for alias, rate in _HOOK_INPUT_COST_PER_MTOK.items():
         if model == alias or model.startswith(alias + "-"):
             return rate
-    return _DEFAULT_SAVINGS_COST_PER_MTOK
+    return 0.0 if is_codex else _DEFAULT_SAVINGS_COST_PER_MTOK
 
 
 # ---------------------------------------------------------------------------

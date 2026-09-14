@@ -801,6 +801,8 @@ def _apply_sonnet_intro_pricing(as_of=None):
 _apply_sonnet_intro_pricing()
 
 OPENAI_MODEL_PRICING = {
+    # https://developers.openai.com/api/docs/models/gpt-6-astra
+    "gpt-6-astra": {"input": 10.0, "cache_read": 1.0, "cache_write": 12.50, "output": 50.0},
     # Prices per 1M tokens from OpenAI API pricing/model docs.
     # GPT-5.x family
     "gpt-5-codex": {"input": 1.25, "cache_read": 0.125, "output": 10.0},
@@ -835,6 +837,7 @@ OPENAI_MODEL_PRICING = {
     "o4-mini": {"input": 1.10, "cache_read": 0.275, "output": 4.40},
 }
 OPENAI_LONG_CONTEXT_PRICING = {
+    "gpt-6-astra": {"input": 20.0, "cache_read": 2.0, "cache_write": 25.0, "output": 75.0},
     "gpt-5.4": {"input": 5.0, "cache_read": 0.50, "output": 22.5},
     "gpt-5.5": {"input": 10.0, "cache_read": 1.0, "output": 45.0},
     "gpt-5.6-sol": {"input": 10.0, "cache_read": 1.0, "cache_write": 12.50, "output": 45.0},
@@ -842,6 +845,41 @@ OPENAI_LONG_CONTEXT_PRICING = {
     "gpt-5.6-luna": {"input": 0.40, "cache_read": 0.04, "cache_write": 0.50, "output": 1.80},
 }
 OPENAI_LONG_CONTEXT_INPUT_THRESHOLD = 272_000
+
+# --- gpt-5.6-sol promotional pricing (date-gated) -------------------------------
+# OpenAI documents the $4/$20 rate as "available at least through November 21, 2026."
+# The canonical OPENAI_MODEL_PRICING / OPENAI_LONG_CONTEXT_PRICING literals above hold
+# the STANDARD card ($5/$30); while the promo window is open we swap the promo card in
+# so dollar savings stay accurate today AND flip back automatically after 2026-11-21
+# with no manual edit. Mirrors _apply_sonnet_intro_pricing (same _pricing_as_of gate).
+_GPT56_SOL_STANDARD = {"input": 5.0, "cache_read": 0.50, "cache_write": 6.25, "output": 30.0}
+_GPT56_SOL_PROMO = {"input": 4.0, "cache_read": 0.40, "cache_write": 5.0, "output": 20.0}
+_GPT56_SOL_LC_STANDARD = {"input": 10.0, "cache_read": 1.0, "cache_write": 12.50, "output": 45.0}
+_GPT56_SOL_LC_PROMO = {"input": 8.0, "cache_read": 0.80, "cache_write": 10.0, "output": 30.0}
+_GPT56_SOL_PROMO_UNTIL = datetime(2026, 11, 21, tzinfo=timezone.utc)
+
+
+def _apply_gpt56_sol_promo_pricing(as_of=None):
+    """Swap the gpt-5.6-sol card to the promotional rate while it is in effect.
+
+    Idempotent (always recomputes from the canonical standard card, so repeated
+    calls / a date change are safe). Returns True when the promotional rate is
+    active. A naive `as_of` (or env date) is interpreted as UTC so the boundary
+    compares apples to apples.
+    """
+    d = as_of or _pricing_as_of()
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=timezone.utc)
+    if d < _GPT56_SOL_PROMO_UNTIL:
+        OPENAI_MODEL_PRICING["gpt-5.6-sol"] = dict(_GPT56_SOL_PROMO)
+        OPENAI_LONG_CONTEXT_PRICING["gpt-5.6-sol"] = dict(_GPT56_SOL_LC_PROMO)
+        return True
+    OPENAI_MODEL_PRICING["gpt-5.6-sol"] = dict(_GPT56_SOL_STANDARD)
+    OPENAI_LONG_CONTEXT_PRICING["gpt-5.6-sol"] = dict(_GPT56_SOL_LC_STANDARD)
+    return False
+
+
+_apply_gpt56_sol_promo_pricing()
 
 GEMINI_MODEL_PRICING = {
     # Prices per 1M tokens from ai.google.dev/gemini-api/docs/pricing (May 2026).
@@ -1149,6 +1187,7 @@ def _normalize_openai_model_name(model):
     if not value or value in {"codex", "openai", "unknown"}:
         return None
     aliases = (
+        "gpt-6-astra",
         "gpt-5.6-sol",
         "gpt-5.6-terra",
         "gpt-5.6-luna",
@@ -1232,6 +1271,17 @@ def _resolve_session_model(session_id=None):
 
     Never raises. Always returns a normalized name ("opus"|"sonnet"|"haiku"|"sonnet" default).
     """
+    if detect_runtime() == 'codex':
+        # Claude message.model/environment/defaults are not Codex telemetry.
+        # Do not cache across model switches, or borrow another task's model.
+        path = codex_session.find_session_jsonl_by_id(session_id) if session_id else None
+        model = None
+        if path:
+            for record in codex_session._iter_json_records(path):
+                candidate = codex_session._extract_model(codex_session._payload(record))
+                if candidate:
+                    model = candidate
+        return model or (None if session_id else _codex_config_model()) or 'unknown'
     cache_key = session_id or "__env_or_recent__"
     if cache_key in _RESOLVED_MODEL_CACHE:
         return _RESOLVED_MODEL_CACHE[cache_key]
@@ -1340,6 +1390,12 @@ def _cost_from_model_breakdown(model_usage_breakdown, tier=None, cache_create_1h
     total = 0.0
     for model, parts in model_usage_breakdown.items():
         if not isinstance(parts, dict):
+            continue
+        # Long-context pricing applies per request, never to a session sum.
+        requests = parts.get('requests')
+        if isinstance(requests, list) and requests:
+            total += sum(_cost_from_model_breakdown({model: request}, tier=tier)
+                         for request in requests if isinstance(request, dict))
             continue
         part_1h = parts.get("cache_create_1h")
         part_5m = parts.get("cache_create_5m")
@@ -3163,6 +3219,8 @@ def detect_context_window():
         if configured_window:
             return remember((configured_window, "codex config: model_context_window"))
         model = os.environ.get("CODEX_MODEL") or os.environ.get("OPENAI_MODEL") or _codex_config_model()
+        if _normalize_openai_model_name(model) == 'gpt-6-astra':
+            return remember((1_050_000, 'OpenAI published GPT-6 Astra context window'))
         model_note = f" for {model}" if model else ""
         return remember((CODEX_DEFAULT_EFFECTIVE_CONTEXT_WINDOW, f"Codex conservative effective window{model_note} (override: TOKEN_OPTIMIZER_CONTEXT_SIZE)"))
     # Hermes: Hermes does not expose a model field in
@@ -3294,6 +3352,12 @@ def _interpolate_curve(value, curve):
 
 def _quality_curve_for_model(model):
     m = str(model or "").lower()
+    if 'gpt-5.6' in m or 'daybreak' in m or m == 'gpt-reserve':
+        return 'openai-gpt-5.5-proxy (uncalibrated)', _OPENAI_GPT55_MRCR_TOKENS, 'absolute_tokens'
+    if 'gpt-6-astra' in m:
+        # No calibrated Astra retrieval curve is bundled. Label the proxy
+        # explicitly instead of silently treating Astra as an Anthropic model.
+        return 'openai-gpt-5.5-proxy-for-astra (uncalibrated)', _OPENAI_GPT55_MRCR_TOKENS, 'absolute_tokens'
     if "gemini" in m:
         return "google-gemini", _GEMINI_MRCR_TOKENS, "absolute_tokens"
     if "gpt-5.5" in m:
@@ -10966,14 +11030,15 @@ def _init_trends_db():
         )
         rows = conn.execute(
             "SELECT id, jsonl_path FROM session_log "
-            "WHERE session_uuid IS NULL AND jsonl_path IS NOT NULL"
+            "WHERE (session_uuid IS NULL OR session_uuid LIKE 'rollout-%') AND jsonl_path IS NOT NULL"
         ).fetchall()
         if rows:
             updates = []
             for row_id, jpath in rows:
                 stem = Path(jpath).stem  # strips directory and .jsonl suffix
                 if stem and stem != "unknown":
-                    updates.append((stem, row_id))
+                    canonical, _ = _extract_session_uuid(stem)
+                    updates.append((canonical or stem, row_id))
             if updates:
                 conn.executemany(
                     "UPDATE session_log SET session_uuid = ? WHERE id = ?", updates
@@ -11104,8 +11169,9 @@ def _init_trends_db():
             uuid_updates = []
             unjoinable_updates = []
             for row_id, sid in rows:
-                if sid and _UUID_PAT.match(sid):
-                    uuid_updates.append((sid, row_id))
+                canonical, _ = _extract_session_uuid(sid)
+                if canonical:
+                    uuid_updates.append((canonical, row_id))
                 elif sid and len(sid) <= 20 and "-" not in sid and sid not in (
                     "unknown", "test-123", "perf_test", "regtest", "demo"
                 ):
@@ -11189,9 +11255,9 @@ def _init_trends_db():
         ).fetchall()
         if ce_rows:
             ce_updates = [
-                (sid, row_id)
+                (_extract_session_uuid(sid)[0], row_id)
                 for row_id, sid in ce_rows
-                if sid and _UUID_PAT2.match(sid)
+                if _extract_session_uuid(sid)[0]
             ]
             if ce_updates:
                 conn.executemany(
@@ -11362,6 +11428,10 @@ def _extract_session_uuid(session_id):
     )
     if not session_id or session_id in ("unknown", "test-123", "perf_test", "regtest", "demo"):
         return None, False
+    if session_id.startswith('rollout-'):
+        match = re.search(r'([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$', session_id, re.I)
+        if match:
+            return match.group(1), False
     if _UUID_PAT.match(session_id):
         return session_id, False
     # Short opaque hex without dashes (17-char agent_ids from Claude Code)
@@ -11413,14 +11483,20 @@ def _log_savings_event(event_type, tokens_saved, session_id=None, detail=None, m
         # aggregation layer not to use the stored model for reprice attribution.
         tier = _load_pricing_tier()
         tier_data = PRICING_TIERS.get(tier, PRICING_TIERS["anthropic"])
-        if model:
+        if detect_runtime() == 'codex':
+            normalized = model or _resolve_session_model(session_id)
+            rates = _input_and_cached_read_rates(normalized)
+            if cost_per_mtok is None:
+                cost_per_mtok = rates[0] if rates else None
+        elif model:
             normalized = _normalize_model_name(model) or "sonnet"
         else:
             normalized = _resolve_session_model(session_id)
-        rates = tier_data["claude_models"].get(normalized, tier_data["claude_models"].get("sonnet", {}))
-        if cost_per_mtok is None:
-            cost_per_mtok = rates.get("input", 3.0)
-        cost_saved = tokens_saved * cost_per_mtok / 1e6
+        if detect_runtime() != 'codex':
+            rates = tier_data["claude_models"].get(normalized, tier_data["claude_models"].get("sonnet", {}))
+            if cost_per_mtok is None:
+                cost_per_mtok = rates.get("input", 3.0)
+        cost_saved = tokens_saved * cost_per_mtok / 1e6 if cost_per_mtok is not None else None
 
         conn = _init_trends_db()
         try:
@@ -11558,7 +11634,10 @@ def _get_compression_summary(days=30, since=None):
             comp = comp or 0
             cnt = cnt or 0
             # Per-model rate: use stored model if available, else current-session fallback.
-            if model:
+            if detect_runtime() == 'codex':
+                model_rates = _input_and_cached_read_rates(model)
+                rate = model_rates[0] if model_rates else 0.0
+            elif model:
                 norm_m = _normalize_model_name(model) or "sonnet"
                 rate = (
                     tier_data["claude_models"]
@@ -21197,7 +21276,9 @@ def _collect_trends_from_jsonl(days=30):
         uncached = max(0, s["total_input_tokens"] - cr - cc)
         cc_1h = s.get("total_cache_create_1h", 0) or 0
         cc_5m = s.get("total_cache_create_5m", 0) or 0
-        if cc_1h or cc_5m:
+        if s.get('runtime') == 'codex' and s.get('model_usage_breakdown'):
+            session_cost = _cost_from_model_breakdown(s['model_usage_breakdown'], tier=pricing_tier)
+        elif cc_1h or cc_5m:
             session_cost = _get_model_cost(dom_model, uncached, s["total_output_tokens"], cr, cc,
                                            tier=pricing_tier, cache_create_1h=cc_1h, cache_create_5m=cc_5m)
         else:
@@ -28899,6 +28980,8 @@ def sanitize_session_id(sid):
     if not sid:
         return "unknown"
     sanitized = re.sub(r"[^a-zA-Z0-9_-]", "", sid)
+    if detect_runtime() == 'codex':
+        sanitized = codex_session._safe_session_id(sanitized)
     return sanitized if len(sanitized) >= 6 else "unknown"
 
 
@@ -29760,8 +29843,7 @@ def _find_current_session_jsonl():
             current_tid = None
         if current_tid:
             resolved = codex_session.find_session_jsonl_by_id(current_tid)
-            if resolved:
-                return resolved
+            return resolved
         return codex_session.find_current_session_jsonl()
 
     # Hermes: no ~/.claude/projects JSONL to scan (sessions live in state.db).
@@ -46316,6 +46398,19 @@ def _calibrate_prior_verbosity_nudges(session_id, filepath):
         return 0
 
 
+def _canonical_session_id_for_compare(sid: str) -> str:
+    """Canonicalize a session id for the verbosity-steer identity guard.
+
+    Codex cache names retain rollout timestamps while live hook payloads carry
+    the bare UUID, so both sides must be reduced to the same canonical form
+    before the equality check.
+    """
+    if detect_runtime() == 'codex':
+        canonical, _ = _extract_session_uuid(sid)
+        return canonical or sid
+    return sid
+
+
 def run_verbosity_steer(transcript_path=None, quiet=True, session_id=None):
     """Tiered conciseness nudge for UserPromptSubmit.
 
@@ -46387,6 +46482,8 @@ def run_verbosity_steer(transcript_path=None, quiet=True, session_id=None):
                 )
             except (TypeError, ValueError):
                 have_sid = ""
+            have_sid = _canonical_session_id_for_compare(have_sid)
+            want_sid = _canonical_session_id_for_compare(want_sid)
             if not have_sid or have_sid == "unknown" or have_sid != want_sid:
                 # Say so. If this mismatch is structural to the environment
                 # (container path translation, WSL mounts, a runtime emitting a
