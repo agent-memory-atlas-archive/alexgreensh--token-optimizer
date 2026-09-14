@@ -130,7 +130,10 @@ def test_windows_versioned_marketplace_hook_resolves_newest_install(monkeypatch,
 
     assert "TOKEN_OPTIMIZER_RUNTIME_ROOT" in code
     assert "powershell" not in command.lower()
-    assert str(versioned_root) in code  # baked install dir
+    # The bootstrap embeds repr(str(root)), so on Windows backslashes appear
+    # doubled; assert the baked install dir in the form the code actually
+    # carries (same contract as repr(str(root)) below).
+    assert repr(str(versioned_root)) in code  # baked install dir
     assert "root.parent.iterdir" in code  # newest-version sibling scan
     assert "hooks" in code and "run.py" in code
 

@@ -21,6 +21,9 @@ import json
 import shutil
 import subprocess
 import sys
+import threading
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -51,11 +54,19 @@ def run_gate(api_json_path, extra_env=None):
     )
 
 
-def write_release(tmp_path, name, assets):
+def write_release(tmp_path, name, assets, published_at=None):
     payload = {"tag_name": "v9.9.9", "assets": assets}
+    if published_at is not None:
+        payload["published_at"] = published_at
     p = tmp_path / name
     p.write_text(json.dumps(payload))
     return p
+
+
+def fresh_release(tmp_path, name, assets):
+    """A release published a moment ago: inside the signing grace window."""
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return write_release(tmp_path, name, assets, published_at=now)
 
 
 def asset(url):
@@ -215,6 +226,65 @@ def test_gate_does_not_let_api_strings_inject_into_its_own_messages(tmp_path):
     # The literal text survives; no format expansion, no crash.
     assert "%s%s%n.txt" in r.stderr
     assert "RESULT: INSTALLABLE" not in r.stdout
+
+
+def test_gate_waits_out_the_signing_window_then_still_fails(tmp_path):
+    """A fresh release with no asset is usually just mid-signing (the Tests run
+    races the Sign release workflow: v5.13.13 checked at publish+2s, the asset
+    landed ~20s later). The gate polls through the grace window -- but if it
+    closes with no asset, the release is broken and must still go red."""
+    api = fresh_release(tmp_path, "fresh-noasset.json", [])
+    r = run_gate(api, {
+        "RELEASE_SIGNING_GRACE_SECONDS": "3",
+        "RELEASE_SIGNING_POLL_SECONDS": "1",
+    })
+    assert r.returncode == 1
+    assert "NOT INSTALLABLE" in r.stderr
+    assert "sign-release.sh" in r.stderr
+
+
+def test_gate_passes_when_the_asset_lands_mid_wait(tmp_path):
+    """The race's happy path: publish is fresh, the manifest asset appears
+    while the gate is polling, and the gate goes green instead of failing a
+    release that was never broken."""
+    api = fresh_release(tmp_path, "fresh-later.json", [])
+    manifest = tmp_path / "CHECKSUMS.sha256"
+    manifest.write_text(VALID_MANIFEST)
+
+    def attach_asset():
+        time.sleep(1.5)
+        write_release(tmp_path, "fresh-later.json", asset(manifest),
+                      published_at=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+
+    t = threading.Thread(target=attach_asset)
+    t.start()
+    try:
+        r = run_gate(api, {
+            "RELEASE_SIGNING_GRACE_SECONDS": "30",
+            "RELEASE_SIGNING_POLL_SECONDS": "1",
+        })
+    finally:
+        t.join()
+    assert r.returncode == 0, r.stderr
+    assert "RESULT: INSTALLABLE" in r.stdout
+
+
+def test_gate_does_not_wait_on_an_old_unsigned_release(tmp_path):
+    """The grace window exists for the publish race only. A release older than
+    the window with no asset is the v5.11.57-64 break and must fail at once,
+    not burn CI minutes polling for a signing that already ended."""
+    api = write_release(
+        tmp_path, "old-noasset.json", [],
+        published_at="2020-01-01T00:00:00Z",
+    )
+    start = time.monotonic()
+    r = run_gate(api, {
+        "RELEASE_SIGNING_GRACE_SECONDS": "600",
+        "RELEASE_SIGNING_POLL_SECONDS": "1",
+    })
+    assert r.returncode == 1
+    assert "NOT INSTALLABLE" in r.stderr
+    assert time.monotonic() - start < 30
 
 
 def test_gate_script_is_executable_and_syntactically_valid():

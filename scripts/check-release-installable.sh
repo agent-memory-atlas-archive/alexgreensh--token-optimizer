@@ -85,14 +85,49 @@ names = [a.get("name") for a in data.get("assets", [])]
 print(tag)
 print(asset)
 print(",".join(n for n in names if n))
+print(data.get("published_at", "") or "")
 PYEOF
 
 parsed="$(python3 "${tmp}/parse.py" "${tmp}/latest.json")"
 RELEASE_TAG="$(printf '%s\n' "$parsed" | sed -n '1p')"
 CHECKSUM_ASSET_URL="$(printf '%s\n' "$parsed" | sed -n '2p')"
 ASSET_NAMES="$(printf '%s\n' "$parsed" | sed -n '3p')"
+PUBLISHED_AT="$(printf '%s\n' "$parsed" | sed -n '4p')"
 
 [ -n "$RELEASE_TAG" ] || fail "The releases API returned no tag_name for ${GITHUB_REPO}."
+
+# A FRESH release with no asset is a race, not a break: this job runs on the
+# same push that publishes the release, while Sign release attaches
+# CHECKSUMS.sha256 on `release: published` a few seconds later (v5.13.13 failed
+# at publish+2s; the asset landed ~20s after publish). Poll until the signing
+# grace window (measured from published_at) closes. An OLD release with no
+# asset is the real v5.11.57-64 break and fails immediately -- the grace only
+# covers the window in which signing could still be in flight.
+grace="${RELEASE_SIGNING_GRACE_SECONDS:-600}"
+poll="${RELEASE_SIGNING_POLL_SECONDS:-15}"
+case "$grace" in ''|*[!0-9]*) grace=0;; esac
+case "$poll" in ''|*[!0-9]*) poll=15;; esac
+
+if [ -z "$CHECKSUM_ASSET_URL" ] && [ "$grace" -gt 0 ] && [ -n "$PUBLISHED_AT" ]; then
+    deadline="$(python3 - "$PUBLISHED_AT" "$grace" <<'PYEOF'
+import datetime, sys
+try:
+    pub = datetime.datetime.fromisoformat(sys.argv[1].replace("Z", "+00:00"))
+    print(int(pub.timestamp()) + int(sys.argv[2]))
+except Exception:
+    print(0)
+PYEOF
+)"
+    while [ "$(date +%s)" -lt "${deadline:-0}" ]; do
+        printf 'release %s published %s; waiting for the Sign release workflow to attach CHECKSUMS.sha256...\n' "$RELEASE_TAG" "$PUBLISHED_AT"
+        sleep "$poll"
+        curl "${curl_args[@]}" 2>/dev/null || continue
+        parsed="$(python3 "${tmp}/parse.py" "${tmp}/latest.json")"
+        CHECKSUM_ASSET_URL="$(printf '%s\n' "$parsed" | sed -n '2p')"
+        ASSET_NAMES="$(printf '%s\n' "$parsed" | sed -n '3p')"
+        [ -n "$CHECKSUM_ASSET_URL" ] && break
+    done
+fi
 
 if [ -z "$CHECKSUM_ASSET_URL" ]; then
     fail "Release ${RELEASE_TAG} has no CHECKSUMS.sha256 asset (assets: ${ASSET_NAMES:-none}). Every verified install aborts at install.sh:962. Fix: run scripts/sign-release.sh ${RELEASE_TAG}, or re-run the Sign release workflow for that tag."

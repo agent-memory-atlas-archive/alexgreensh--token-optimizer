@@ -6,6 +6,7 @@ Raw tool output is never copied into the index. Each pass commits at most
 import hashlib
 import json
 import sqlite3
+import time
 from pathlib import Path
 
 from plugin_env import resolve_snapshot_dir
@@ -14,44 +15,57 @@ PASS_BYTES = 64 * 1024 * 1024
 LINE_BYTES = 16 * 1024 * 1024
 SCHEMA_VERSION = 2
 
+_SCHEMA = '''
+  CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY, identity TEXT, offset INTEGER,
+    size INTEGER, skipped INTEGER, revision INTEGER, mtime INTEGER);
+  CREATE TABLE IF NOT EXISTS records(path TEXT, offset INTEGER, data TEXT,
+    PRIMARY KEY(path, offset));
+'''
+
+
+def _open_db(db_path):
+    conn = sqlite3.connect(db_path, timeout=5.0)
+    try:
+        conn.execute('PRAGMA journal_mode=WAL')
+        conn.execute('PRAGMA busy_timeout=5000')
+        conn.executescript(_SCHEMA)
+        if 'mtime' not in {row[1] for row in conn.execute('PRAGMA table_info(files)')}:
+            try:
+                conn.execute('ALTER TABLE files ADD COLUMN mtime INTEGER')
+            except sqlite3.OperationalError:
+                pass  # concurrent migration: column already added
+    except Exception:
+        # On Windows an abandoned handle pins the file and defeats the
+        # unlink-and-rebuild below, so a failed open must not leak it.
+        conn.close()
+        raise
+    return conn
+
 
 def _connect():
     root = resolve_snapshot_dir()
     root.mkdir(parents=True, exist_ok=True)
     db_path = root / 'codex-log-index.db'
     try:
-        conn = sqlite3.connect(db_path, timeout=5.0)
-        conn.execute('PRAGMA journal_mode=WAL')
-        conn.execute('PRAGMA busy_timeout=5000')
-        conn.executescript('''
-          CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY, identity TEXT, offset INTEGER,
-            size INTEGER, skipped INTEGER, revision INTEGER, mtime INTEGER);
-          CREATE TABLE IF NOT EXISTS records(path TEXT, offset INTEGER, data TEXT,
-            PRIMARY KEY(path, offset));
-        ''')
-        if 'mtime' not in {row[1] for row in conn.execute('PRAGMA table_info(files)')}:
-            try:
-                conn.execute('ALTER TABLE files ADD COLUMN mtime INTEGER')
-            except sqlite3.OperationalError:
-                pass  # concurrent migration: column already added
-        return conn
+        return _open_db(db_path)
+    except sqlite3.OperationalError:
+        raise  # locked/contended is not corruption: never delete a live index
     except sqlite3.DatabaseError:
-        # Corrupt DB: self-heal by removing and rebuilding.
-        for suffix in ('', '-wal', '-shm'):
+        pass  # corrupt DB: self-heal by removing and rebuilding
+    # Windows refuses to unlink a file while any handle is open -- _open_db
+    # already closed the broken connection, but an indexer or another process
+    # can hold a transient share lock, so retry each file briefly.
+    for suffix in ('', '-wal', '-shm'):
+        target = db_path.parent / (db_path.name + suffix)
+        for _ in range(10):
             try:
-                (db_path.parent / (db_path.name + suffix)).unlink()
+                target.unlink()
+                break
+            except FileNotFoundError:
+                break
             except OSError:
-                pass
-        conn = sqlite3.connect(db_path, timeout=5.0)
-        conn.execute('PRAGMA journal_mode=WAL')
-        conn.execute('PRAGMA busy_timeout=5000')
-        conn.executescript('''
-          CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY, identity TEXT, offset INTEGER,
-            size INTEGER, skipped INTEGER, revision INTEGER, mtime INTEGER);
-          CREATE TABLE IF NOT EXISTS records(path TEXT, offset INTEGER, data TEXT,
-            PRIMARY KEY(path, offset));
-        ''')
-        return conn
+                time.sleep(0.1)
+    return _open_db(db_path)
 
 
 def pending(filepath):
