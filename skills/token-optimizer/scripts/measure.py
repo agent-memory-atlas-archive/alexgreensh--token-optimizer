@@ -3163,6 +3163,10 @@ def detect_context_window():
         if configured_window:
             return remember((configured_window, "codex config: model_context_window"))
         model = os.environ.get("CODEX_MODEL") or os.environ.get("OPENAI_MODEL") or _codex_config_model()
+        import codex_models
+        window = codex_models.effective_window(model)
+        if window:
+            return remember((window, f'Codex model catalog: {model}'))
         model_note = f" for {model}" if model else ""
         return remember((CODEX_DEFAULT_EFFECTIVE_CONTEXT_WINDOW, f"Codex conservative effective window{model_note} (override: TOKEN_OPTIMIZER_CONTEXT_SIZE)"))
     # Hermes: Hermes does not expose a model field in
@@ -5128,6 +5132,8 @@ def _codex_state_summary():
         "effort": None,
         "compaction": None,
     }
+    import codex_models
+    summary['available_models'] = codex_models.visible_models()
     try:
         current = codex_session.find_current_session_jsonl()
         if current:
@@ -21908,8 +21914,8 @@ def _windows_process_creation(pid):
     return {}
 
 
-def _collect_windows_claude_sessions():
-    """Collect running Claude CLI sessions on Windows via PowerShell Get-Process.
+def _collect_windows_claude_sessions(process_name="claude"):
+    """Collect runtime processes on Windows via PowerShell Get-Process.
 
     Safety invariants:
     - Only matches on the process image name (claude / claude-*).
@@ -21940,13 +21946,15 @@ def _collect_windows_claude_sessions():
     import csv as _csv
     import io as _io
 
+    if process_name not in ("claude", "codex"):
+        raise ValueError("Unsupported runtime process name")
     sessions = []
     ps_cmd = (
         # -Name 'claude*' filters server-side (only candidate processes are
         # ever materialized), so the "touches only candidates" claim is real,
         # not a post-enumeration Where-Object. -ErrorAction SilentlyContinue
         # keeps a zero-match run from erroring.
-        "Get-Process -Name 'claude*' -ErrorAction SilentlyContinue | "
+        f"Get-Process -Name '{process_name}*' -ErrorAction SilentlyContinue | "
         "Select-Object Id, ProcessName, SessionId, "
         "@{N='StartTime';E={try { $_.StartTime.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ') } catch { '' }}} | "
         "ConvertTo-Csv -NoTypeInformation"
@@ -21975,10 +21983,12 @@ def _collect_windows_claude_sessions():
         start_time = (row.get("StartTime") or "").strip()
         image_lower = image_name.lower()
         # Strict image-name match only. See docstring invariants.
-        if not (image_lower == "claude.exe"
+        matches = image_lower in ("codex", "codex.exe") if process_name == "codex" else (
+                image_lower == "claude.exe"
                 or image_lower == "claude"
                 or image_lower.startswith("claude.")
-                or image_lower.startswith("claude-")):
+                or image_lower.startswith("claude-"))
+        if not matches:
             continue
         try:
             pid = int(pid_str.replace(",", "").strip())
@@ -22095,7 +22105,8 @@ def _collect_health_data():
         pass
 
     if system == "Windows":
-        running_sessions = _collect_windows_claude_sessions()
+        running_sessions = (_collect_windows_claude_sessions(process_name="codex")
+                            if runtime == "codex" else _collect_windows_claude_sessions())
     else:
         running_sessions = _collect_posix_claude_sessions(process_name=process_name)
         if running_sessions is None:
@@ -22131,6 +22142,11 @@ def _collect_health_data():
 
     # Flag sessions
     for s in running_sessions:
+        if runtime == "codex":
+            # Desktop app-server lifetime is not task age or evidence of an
+            # abandoned session. Never recommend killing shared Codex hosts.
+            s["flags"] = ["RUNNING"]
+            continue
         flags = []
         if s["version"] and installed_version and s["version"] != installed_version:
             flags.append("OUTDATED")
@@ -22418,6 +22434,9 @@ def kill_stale_sessions(threshold_hours=12, dry_run=False):
     """
     import signal
 
+    if detect_runtime() == "codex":
+        print("\n  Codex processes can host multiple active tasks. Process age cannot identify stale tasks; automatic termination is disabled.")
+        return
     health = _collect_health_data()
     if health is None:
         print("\n  Session health check is not supported on this platform.")
@@ -26539,8 +26558,9 @@ def _generate_schtasks_xml(task_name, user_id, command, arguments=""):
     # No <URI> element: it is optional per the Task Scheduler 1.2 schema
     # and creates a mismatch class when enterprise GPO relocates tasks
     # into subfolders. /TN in the schtasks /Create call is sufficient.
-    # Two triggers: LogonTrigger for normal logins + BootTrigger so Fast
-    # Startup (hibernate-kernel wake) still fires the daemon.
+    # A BootTrigger requires elevated registration even with LeastPrivilege.
+    # This is a per-user service: logon is the correct boundary, including
+    # logins following Fast Startup. Keep installation non-elevated.
     return (
         '<?xml version="1.0" encoding="UTF-16"?>\n'
         '<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">\n'
@@ -26552,9 +26572,6 @@ def _generate_schtasks_xml(task_name, user_id, command, arguments=""):
         "      <Enabled>true</Enabled>\n"
         f"      <UserId>{xml_escape(user_id)}</UserId>\n"
         "    </LogonTrigger>\n"
-        "    <BootTrigger>\n"
-        "      <Enabled>true</Enabled>\n"
-        "    </BootTrigger>\n"
         "  </Triggers>\n"
         "  <Principals>\n"
         '    <Principal id="Author">\n'
