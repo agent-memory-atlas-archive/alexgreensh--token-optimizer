@@ -18,7 +18,9 @@ SCRIPTS = REPO / "skills" / "token-optimizer" / "scripts"
 
 
 def _run(code, env=None):
-    full_env = {**os.environ, "PYTHONUTF8": "1"}
+    # The detector is runtime-gated (Claude-only): pin the probe to Claude so a
+    # runtime env var leaked by an earlier test in the suite cannot flip it.
+    full_env = {**os.environ, "PYTHONUTF8": "1", "TOKEN_OPTIMIZER_RUNTIME": "claude"}
     if env:
         full_env.update(env)
     return subprocess.run(

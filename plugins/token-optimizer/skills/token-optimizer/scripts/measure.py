@@ -3421,7 +3421,16 @@ def quick_scan(as_json=False):
 
     # Current session fill estimate (overhead only, no session data)
     fill_pct = overhead / ctx_window
-    quality_est = _estimate_quality_from_fill(fill_pct)
+    # Resolve the model so Codex never gets scored on the Anthropic curve.
+    # Codex sessions run gpt-5.x-codex variants; env/config resolution covers
+    # the common cases, and "codex" as fallback maps to the published
+    # openai-gpt-5 MRCR curve rather than anthropic-default.
+    _rt = detect_runtime()
+    if _rt == "codex":
+        _qmodel = os.environ.get("CODEX_MODEL") or os.environ.get("OPENAI_MODEL") or _codex_config_model() or "codex"
+    else:
+        _qmodel = os.environ.get("CLAUDE_MODEL") or os.environ.get("ANTHROPIC_MODEL")
+    quality_est, _qcurve = _estimate_quality_with_curve(fill_pct, model=_qmodel, context_window=ctx_window)
     band_name, band_color = _degradation_band(fill_pct)
 
     # Top offenders
@@ -3577,6 +3586,10 @@ def quick_scan(as_json=False):
             "messages_before_compact": msgs_before_compact,
             "fill_pct": round(fill_pct * 100, 1),
             "quality_estimate": quality_est,
+            "quality_curve": _qcurve,
+            "quality_basis": (
+                f"heuristic: {_qcurve} MRCR curve at current startup fill; not a measured per-session score"
+            ),
             "grade": grade,
             "degradation_band": band_name,
             "top_offenders": [
@@ -3599,7 +3612,7 @@ def quick_scan(as_json=False):
 
     print("\n  DEGRADATION RISK")
     print(f"    Current startup fill:  {fill_pct * 100:.0f}% ({overhead:,}) -- {band_name}")
-    print(f"    Quality estimate:      {grade} ({quality_est}/100) (MRCR-based at this fill level)")
+    print(f"    Quality estimate:      {grade} ({quality_est}/100) ({_qcurve} MRCR curve at this fill level; heuristic, not measured)")
     next_danger = int(ctx_window * 0.50)
     print(f"    Next danger zone:      {next_danger:,} (50%, \"lost in the middle\" begins)")
     compact_at = int(ctx_window * 0.80)
@@ -5903,6 +5916,28 @@ def _collect_codex_skill_inventory(cfg: dict, *, project: Path) -> dict[str, lis
     if plugin_cache.exists():
         candidates.extend((p, "plugin") for p in plugin_cache.rglob("skills/*/SKILL.md"))
 
+    # Plugins disabled in config.toml ([plugins."name@marketplace"] enabled=false)
+    # do not expose their cached skills to the model — they belong in "disabled",
+    # not "active", or the inventory reports an advertised surface larger than
+    # what Codex actually loads.
+    disabled_plugin_keys: set[str] = set()
+    plugins_cfg = cfg.get("plugins")
+    if isinstance(plugins_cfg, dict):
+        for _pkey, _pcfg in plugins_cfg.items():
+            if isinstance(_pcfg, dict) and not _pcfg.get("enabled", True):
+                disabled_plugin_keys.add(str(_pkey))
+
+    def _plugin_key_for(path_str: str) -> str | None:
+        # Cache layout: <cache>/<marketplace>/<plugin>/<version>/skills/<name>/SKILL.md
+        try:
+            rel = Path(path_str).relative_to(plugin_cache.resolve(strict=False))
+        except ValueError:
+            return None
+        parts = rel.parts
+        if len(parts) >= 5 and parts[-3] == "skills":
+            return f"{parts[1]}@{parts[0]}"
+        return None
+
     active = []
     disabled = []
     seen: set[str] = set()
@@ -5923,7 +5958,8 @@ def _collect_codex_skill_inventory(cfg: dict, *, project: Path) -> dict[str, lis
             "disable_cmd": f"TOKEN_OPTIMIZER_RUNTIME=codex python3 {mp_cmd} codex-skill disable --path {shlex.quote(resolved)}",
             "enable_cmd": f"TOKEN_OPTIMIZER_RUNTIME=codex python3 {mp_cmd} codex-skill enable --path {shlex.quote(resolved)}",
         }
-        if resolved in disabled_paths:
+        _pkey = _plugin_key_for(resolved)
+        if resolved in disabled_paths or (_pkey is not None and _pkey in disabled_plugin_keys):
             disabled.append(item)
         else:
             active.append(item)
@@ -8463,10 +8499,42 @@ def generate_coach_data(focus=None, components=None, trends=None):
     skills = components.get("skills", {})
     skill_count = skills.get("count", 0)
     skill_tokens = skills.get("tokens", 0)
+    if is_codex:
+        # The Codex scan splits plugin-delivered skills into plugin_skills, but
+        # their name+description metadata is advertised to the model exactly
+        # like user skills — the headline must count both or it under-reports
+        # the real startup surface.
+        plugin_skills = components.get("plugin_skills", {})
+        skill_count += plugin_skills.get("count", 0)
+        skill_tokens += plugin_skills.get("tokens", 0)
     # context_window already set above via detect_context_window() — don't overwrite with stale snapshot value
     skill_pct = skill_tokens / context_window * 100 if context_window else 0
     unused_skills = trends.get("skills", {}).get("never_used", []) if trends else []
-    unused_count = len(unused_skills) if unused_skills else 0
+    active_names = set(skills.get("names", []))
+    if is_codex:
+        active_names.update(components.get("plugin_skills", {}).get("names", []))
+    unused_skills = sorted({name for name in unused_skills
+                            if name in active_names and not _is_own_tool_skill(name)})
+    unused_count = len(unused_skills)
+    # Savings come from per-skill measurement only: sum the unused candidates'
+    # own measured frontmatter tokens. Unmeasured names are reported as such —
+    # never an inventory-wide upper bound and never count x a flat constant.
+    skills_detail = components.get("skills_detail", {})
+    unused_measured_tokens = 0
+    unused_unmeasured = 0
+    for _name in unused_skills:
+        _toks = (skills_detail.get(_name) or {}).get("frontmatter_tokens")
+        if _toks:
+            unused_measured_tokens += int(_toks)
+        else:
+            unused_unmeasured += 1
+    if unused_measured_tokens > 0 and unused_unmeasured == 0:
+        unused_savings = f"~{unused_measured_tokens:,} tokens (measured descriptions of the {unused_count} unused skills)"
+    elif unused_measured_tokens > 0:
+        unused_savings = (f"~{unused_measured_tokens:,} tokens measured for the unused set "
+                          f"({unused_unmeasured} of {unused_count} lack per-skill measurement)")
+    else:
+        unused_savings = "Unknown: per-skill token measurements unavailable for the unused set"
     unused_ratio = unused_count / skill_count if skill_count > 0 else 0
     if unused_count > 20 and skill_pct > 2 and unused_ratio > 0.8:
         skill_fix = (
@@ -8481,7 +8549,7 @@ def generate_coach_data(focus=None, components=None, trends=None):
             "severity": "high",
             "detail": f"{unused_count} of {skill_count} skills unused in 30 days ({skill_tokens:,} tokens, {skill_pct:.1f}% of context)",
             "fix": skill_fix,
-            "savings": f"~{unused_count * TOKENS_PER_SKILL_APPROX:,} tokens from unused skills",
+            "savings": unused_savings,
         })
         score -= 7
     elif unused_count > 15 and unused_ratio > 0.6:
@@ -8491,12 +8559,12 @@ def generate_coach_data(focus=None, components=None, trends=None):
             "severity": "low",
             "detail": f"{unused_count} of {skill_count} skills unused in 30 days. Some may be seasonal.",
             "fix": "Review for skills you've truly abandoned vs. ones you use occasionally",
-            "savings": f"~{unused_count * TOKENS_PER_SKILL_APPROX:,} tokens if archived",
+            "savings": unused_savings,
         })
         score -= 3
     elif skill_count > 0:
         patterns_good.append({
-            "name": "Active Skill Set",
+            "name": "Installed Skill Set",
             "detail": f"{skill_count} skills ({skill_tokens:,} tokens, {skill_pct:.1f}% of context)",
         })
 
@@ -8580,7 +8648,9 @@ def generate_coach_data(focus=None, components=None, trends=None):
             "name": "MCP Sprawl",
             "severity": "medium",
             "detail": f"{mcp_servers} MCP servers ({mcp_tokens:,} tokens, {mcp_pct:.1f}% of context)",
-            "fix": "Disable unused servers in settings.json",
+            "fix": ("Disable unused servers in ~/.codex/config.toml ([mcp_servers] sections)"
+                    if is_codex else
+                    "Disable unused servers in settings.json"),
             "savings": "~50-100 tokens per disabled server",
         })
         score -= 5
@@ -8682,11 +8752,23 @@ def generate_coach_data(focus=None, components=None, trends=None):
         # proportional "Unused Skill Overhead" / "Some Unused Skills" patterns.
         # Removed duplicate check here to prevent double-penalty.
 
-    # Check verbose skill descriptions
+    # Check verbose skill descriptions. The warning claims ">200 chars", so the
+    # filter applies that stated threshold (the Codex scan also flags a 120-200
+    # band for its own medium-tier nudge — those are not "over 200").
     quality = components.get("skill_frontmatter_quality", {})
-    verbose = quality.get("verbose_skills", [])
-    truncated_skills = [s for s in verbose if s.get("truncated")]
-    verbose_only = [s for s in verbose if not s.get("truncated")]
+    verbose = [s for s in quality.get("verbose_skills", [])
+               if not _is_own_tool_skill(s.get("name"))
+               and s.get("description_chars", 0) > 200]
+    if is_codex:
+        # The 1,536-char silent truncation is a Claude Code behavior — Codex
+        # does not cut descriptions at that limit. A truncated-flagged entry
+        # under Codex is simply a very long description: keep it in the verbose
+        # set so it still surfaces instead of vanishing from every warning.
+        verbose_only = verbose
+        truncated_skills = []
+    else:
+        truncated_skills = [s for s in verbose if s.get("truncated")]
+        verbose_only = [s for s in verbose if not s.get("truncated")]
     if truncated_skills:
         patterns_bad.append({
             "name": "Truncated Skill Descriptions",
@@ -8751,7 +8833,7 @@ def generate_coach_data(focus=None, components=None, trends=None):
             if md_comp.get("exists") and md_comp.get("content"):
                 _claude_md_content = md_comp["content"]
                 break
-        if not _claude_md_content:
+        if not _claude_md_content and not is_codex:
             for path in (CLAUDE_DIR / "CLAUDE.md", Path.home() / "CLAUDE.md", Path.cwd() / "CLAUDE.md"):
                 if path.exists():
                     try:
@@ -8801,9 +8883,11 @@ def generate_coach_data(focus=None, components=None, trends=None):
             if f["name"] == "overpowered" and _opus_addiction_fired:
                 continue
 
-            # Enrich overpowered findings with counterfactual
+            # Enrich overpowered findings with counterfactual (Claude model
+            # ladder only — under Codex a "switch to Sonnet" estimate would be
+            # foreign-runtime advice)
             detail = f["evidence"]
-            if f["name"] == "overpowered" and recent_files:
+            if f["name"] == "overpowered" and recent_files and not is_codex:
                 try:
                     latest = _parse_session_jsonl(str(recent_files[0][0]))
                     if latest:
@@ -8861,7 +8945,7 @@ def generate_coach_data(focus=None, components=None, trends=None):
                         "name": "Quality Declining",
                         "severity": "high",
                         "detail": f"Average quality dropped from {prior_avg_q:.0f} to {recent_avg_q:.0f} over the last week",
-                        "fix": "Check for new MCP servers, growing CLAUDE.md, or longer sessions causing context fill",
+                        "fix": f"Check for new MCP servers, growing {instruction_label}, or longer sessions causing context fill",
                         "savings": "Quality recovery prevents retry waste (typically 5,000-20,000 tokens per failed turn)",
                     })
                     score -= 8
@@ -8885,14 +8969,32 @@ def generate_coach_data(focus=None, components=None, trends=None):
                 history["duration_recent_avg"] = round(recent_avg_dur, 1)
                 history["duration_prior_avg"] = round(older_avg_dur, 1)
                 if recent_avg_dur > older_avg_dur * 1.5 and recent_avg_dur > 60:
-                    patterns_bad.append({
-                        "name": "Session Duration Creep",
-                        "severity": "medium",
-                        "detail": f"Sessions averaging {recent_avg_dur:.0f} min (was {older_avg_dur:.0f} min). Longer sessions fill context faster",
-                        "fix": "Use /compact proactively around the midpoint. Break large tasks into focused sessions",
-                        "savings": f"~{int(recent_avg_dur - older_avg_dur) * 200:,} fewer tokens of context bloat per session",
-                    })
-                    score -= 5
+                    # Elapsed minutes include idle time — duration alone is NOT
+                    # evidence of token waste. The score only moves when real
+                    # per-session token volume grew alongside the duration.
+                    recent_toks = [s.get("input_tokens", 0) for s in recent_sessions if s.get("input_tokens")]
+                    older_toks = [s.get("input_tokens", 0) for s in older_sessions if s.get("input_tokens")]
+                    tokens_grew = (
+                        bool(recent_toks) and bool(older_toks)
+                        and (sum(recent_toks) / len(recent_toks)) > (sum(older_toks) / len(older_toks)) * 1.25
+                    )
+                    if tokens_grew:
+                        patterns_bad.append({
+                            "name": "Session Duration Creep",
+                            "severity": "medium",
+                            "detail": f"Sessions averaging {recent_avg_dur:.0f} min (was {older_avg_dur:.0f} min) with per-session input volume up {((sum(recent_toks) / len(recent_toks)) / (sum(older_toks) / len(older_toks)) - 1) * 100:.0f}% — real context growth, not idle time",
+                            "fix": "Use /compact proactively around the midpoint. Break large tasks into focused sessions",
+                            "savings": "Not estimated: duration is not a token measure; compacting earlier reduces context fill",
+                        })
+                        score -= 5
+                    else:
+                        patterns_bad.append({
+                            "name": "Session Duration Creep",
+                            "severity": "low",
+                            "detail": f"Elapsed sessions averaging {recent_avg_dur:.0f} min (was {older_avg_dur:.0f} min); may include idle time and does not by itself indicate token waste",
+                            "fix": "If sessions are genuinely busier (not just idle), compact proactively around the midpoint",
+                            "savings": "Not estimated: elapsed session duration includes idle time and does not measure token waste",
+                        })
 
         # 3. Cache hit rate degradation (model-switch aware)
         multi_model_recent = sum(1 for s in recent_sessions if s.get("model_count", 1) > 1)
@@ -8912,7 +9014,9 @@ def generate_coach_data(focus=None, components=None, trends=None):
                             "name": "Cache Hit Rate Dropping (Model Switches)",
                             "severity": "low",
                             "detail": f"Cache hit rate fell from {older_avg_chr:.0%} to {recent_avg_chr:.0%}, but {multi_model_pct:.0f}% of recent sessions switched models mid-session. Model switches invalidate the prompt cache (expected behavior)",
-                            "fix": "Pick one model per session when possible. Use /model at session start, not mid-conversation. Subagent model routing (Haiku/Sonnet) is fine, it runs in separate contexts",
+                            "fix": ("Set the session model up front (config.toml `model`) instead of switching mid-session. Codex subagents run in separate contexts, so a smaller model for them does not disturb the main session's cache"
+                                    if is_codex else
+                                    "Pick one model per session when possible. Use /model at session start, not mid-conversation. Subagent model routing (Haiku/Sonnet) is fine, it runs in separate contexts"),
                             "savings": "Avoiding mid-session model switches can recover 10-20% cache hit rate",
                         })
                         score -= 2
@@ -8921,8 +9025,8 @@ def generate_coach_data(focus=None, components=None, trends=None):
                             "name": "Cache Hit Rate Dropping",
                             "severity": "medium",
                             "detail": f"Cache hit rate fell from {older_avg_chr:.0%} to {recent_avg_chr:.0%}. Lower cache = higher cost per turn",
-                            "fix": "Check for new MCP servers or CLAUDE.md changes that shift the stable prefix. Avoid tools that rewrite existing context",
-                            "savings": "Each 10% cache drop costs ~$0.50/session at Opus rates",
+                            "fix": f"Check for new MCP servers or {instruction_label} changes that shift the stable prefix. Avoid tools that rewrite existing context",
+                            "savings": "Cost impact depends on the session model and uncached input volume",
                         })
                         score -= 5
 
@@ -8940,7 +9044,9 @@ def generate_coach_data(focus=None, components=None, trends=None):
                     "name": "Majority Low-Grade Sessions",
                     "severity": "high",
                     "detail": f"{d_pct:.0f}% of recent sessions scored D or below",
-                    "fix": "Run /token-optimizer for a full audit. Common causes: bloated tool outputs, stale reads, long sessions without compaction",
+                    "fix": ("Run a full audit (token-optimizer skill or `measure.py coach --json`). Common causes: bloated tool outputs, stale reads, long sessions without compaction"
+                            if is_codex else
+                            "Run /token-optimizer for a full audit. Common causes: bloated tool outputs, stale reads, long sessions without compaction"),
                     "savings": "Improving average grade from D to B typically saves 15-30% of session cost",
                 })
                 score -= 8
@@ -8967,9 +9073,11 @@ def generate_coach_data(focus=None, components=None, trends=None):
                 patterns_bad.append({
                     "name": "High Cost Per Session",
                     "severity": "medium",
-                    "detail": f"${cost_per_session:.2f}/session average (${total_cost:.2f} across {session_count_t} sessions in {period} days)",
-                    "fix": "Route simple tasks to Sonnet/Haiku. Use /compact in long sessions. Archive unused skills",
-                    "savings": f"~${cost_per_session * 0.3:.2f}/session with routing + compression",
+                    "detail": f"Estimated API-equivalent cost: ${cost_per_session:.2f}/session (${total_cost:.2f} across {session_count_t} sessions in {period} days); not a billing statement",
+                    "fix": ("Choose a lower reasoning effort or a smaller Codex model for simple tasks. Compact long sessions when needed"
+                            if is_codex else
+                            "Route simple tasks to Sonnet/Haiku. Use /compact in long sessions. Review unused skills"),
+                    "savings": "Not estimated: requires a measured model-routing or compression comparison",
                 })
                 score -= 3
 
@@ -9018,7 +9126,9 @@ def generate_coach_data(focus=None, components=None, trends=None):
                 "name": "Frequent Model Switching",
                 "severity": "medium",
                 "detail": f"{multi_model_pct:.0f}% of recent sessions used multiple models. Each switch invalidates the prompt cache and can cause context quality drops",
-                "fix": "Set your preferred model at session start with /model. Route subagents to cheaper models via agent() opts instead of switching the main session model",
+                "fix": ("Set the session model up front (config.toml `model`) instead of switching mid-session; each switch invalidates the cached prefix"
+                        if is_codex else
+                        "Set your preferred model at session start with /model. Route subagents to cheaper models via agent() opts instead of switching the main session model"),
                 "savings": "Consistent model usage improves cache hit rate by 10-20% and avoids quality grade drops",
             })
             score -= 4
@@ -9057,6 +9167,17 @@ def generate_coach_data(focus=None, components=None, trends=None):
         "focus_area": focus,
         "history": history,
     }
+
+    if is_codex:
+        # The skill figures above count the installed inventory Codex
+        # advertises to the model (user skills + skills of enabled plugins;
+        # skills under config-disabled plugins are excluded by the scan). What
+        # a given session's prompt actually receives is not directly observed —
+        # the count is the advertised surface, labeled as such.
+        result["snapshot"]["skills_basis"] = (
+            "installed inventory advertised to the model (user skills + enabled-plugin "
+            "skills); per-session prompt inclusion not directly observed"
+        )
 
     # Add compaction timing guide when relevant
     has_compaction_patterns = (
@@ -9126,8 +9247,12 @@ def generate_coach_data(focus=None, components=None, trends=None):
                 "name": "Heavy Subagent Spend",
                 "severity": "medium",
                 "detail": f"Subagents consumed ${total_subagent_cost:.2f} ({sub_pct}% of recent spend)",
-                "fix": "Route data-gathering subagents to Haiku. Reserve Opus for synthesis.",
-                "savings": f"~${total_subagent_cost * 0.6:.2f} with Haiku routing",
+                "fix": ("Route data-gathering subagents to a smaller Codex model or lower reasoning effort. Reserve the frontier model for synthesis."
+                        if is_codex else
+                        "Route data-gathering subagents to Haiku. Reserve Opus for synthesis."),
+                "savings": ("Not estimated: requires a measured model-routing comparison"
+                            if is_codex else
+                            f"~${total_subagent_cost * 0.6:.2f} with Haiku routing"),
             })
             score = max(0, result["health_score"] - 5)
             result["health_score"] = score
@@ -9198,15 +9323,24 @@ def _cmd_route(args):
         # Positional task: keep every token except the recognized --json flag so
         # task words that happen to start with "--" are not silently dropped.
         task = " ".join(a for a in args[1:] if a != "--json")
+    _rt = detect_runtime()
     try:
         import routing_advisor
-        _rt = detect_runtime()
         rec = routing_advisor.recommend(task, _rt, models=_resolve_platform_models(_rt))
     except Exception as _e:
         # Router module unavailable: a real, non-cheap default with the same
         # keys as a normal recommendation so JSON consumers never KeyError.
+        # Model name comes from the platform's own ladder, never a hardcoded
+        # Claude tier under a non-Claude runtime.
+        _mid = "sonnet"
+        try:
+            _row = routing_advisor.ROUTING_TABLES.get(_rt) or routing_advisor._GENERIC_ROW
+            _mid = _row["models"]["mid"]
+        except Exception:
+            if _rt == "codex":
+                _mid = "gpt-5.6-terra"
         rec = {
-            "model": "sonnet", "effort": "medium", "significance": "standard",
+            "model": _mid, "effort": "medium", "significance": "standard",
             "confidence": "low", "category": "simple", "tier": "mid",
             "effort_kind": "advisory", "effort_knob": "effort",
             "floor": {"min_tier": "mid", "min_effort": "medium"},
@@ -47437,6 +47571,8 @@ if __name__ == "__main__":
             print(f"  Startup overhead: {snap['total_overhead']:,} tokens ({snap['overhead_pct']}% of {snap['context_window'] // 1000}K)")
             print(f"  Usable context: ~{snap['usable_tokens']:,} tokens (after overhead + autocompact buffer)")
             print(f"  Skills: {snap['skill_count']} ({snap['skill_tokens']:,} tokens)")
+            if snap.get("skills_basis"):
+                print(f"          ({snap['skills_basis']})")
             print(f"  {instruction_label}: {snap['claude_md_tokens']:,} tokens")
             print(f"  MCP: {snap['mcp_server_count']} servers ({snap['mcp_tokens']:,} tokens)")
             print()

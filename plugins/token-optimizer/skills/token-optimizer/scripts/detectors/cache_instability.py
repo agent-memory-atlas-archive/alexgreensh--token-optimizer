@@ -1,5 +1,7 @@
 """Cache instability detector: flags CLAUDE.md patterns that break Anthropic prompt cache prefix stability."""
 
+from runtime_env import detect_runtime
+
 import json
 import os
 import re
@@ -445,6 +447,12 @@ def detect_cache_instability(session_data):
            model-facing prompt).
       5.   Process-library prompt prefix files in .a5c/processes, .claude/processes.
     """
+    if detect_runtime() == "codex":
+        # Every surface here is Claude-runtime-specific (CLAUDE.md prefix,
+        # .mcp.json/.claude.json server sets, .claude/processes). Codex
+        # sessions must not trigger reads or recommendations on foreign-runtime
+        # config paths.
+        return []
     claude_md = session_data.get("claude_md_content", "")
     # New surfaces must still run when CLAUDE.md is absent/small. With an empty
     # `lines` list every original prefix loop is a no-op, so the 3 original
