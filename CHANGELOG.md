@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+- Fix: the Hermes context-fill nudge measured the session-CUMULATIVE input tally instead of the live
+  prompt, so it reported a context emergency that did not exist. Every host re-sends the whole
+  conversation on each turn, so that sum climbs past the model window regardless of real occupancy:
+  on a 129-call Hermes session the cumulative figure reached 1,285,803 against a 1,000,000 window
+  ("Context ~100% full ... Grade: F", the percentage being capped at 100) while Hermes itself
+  reported 278,545 / 1,000,000 = 28% for the same session. The nudge now uses the prompt the last
+  call actually sent (fresh + cached prompt tokens, since cached tokens occupy the same window), and
+  says so in the message ("last request prompt ~N tokens vs model window M"). The cumulative tally
+  is unchanged for cost and usage reporting. Regression tests:
+  `tests/test_hermes_context_fill_nudge.py` (3 of the 5 cases fail on the previous code).
+
 ## [5.13.15] - 2026-09-16
 
 - Fix: `codex_install.py` no longer emits a base64 `python -c` exec-bootstrap as the Windows hook command on versioned marketplace installs (issue #183). The encoded-exec string trips generic-loader antivirus signatures (SentinelOne flagged it as a Metasploit variant, once per shipped copy of the file), even though the payload was fixed, readable, and decode-auditable. The installer now copies a plain, auditable `windows-launcher.py` next to the versioned install dirs -- a stable path that survives marketplace upgrades -- and bakes a command that invokes it by quoted path with plainly quoted argv. Version resolution (newest semver sibling, fail-open to the baked install, TOKEN_OPTIMIZER_DEBUG-gated resolver log), stdin/argv/env passthrough, legacy-command recognition on reinstall/uninstall, and upgrade trust semantics are unchanged: the command signature now normalizes only the `--baked-root` version leaf, legacy base64 commands compare verbatim so the next install replaces them (the one-time review that ships this fix), and `--decode-launcher` still decodes legacy commands while pointing launcher-file commands at their plain source. Regression coverage: an AV-safe source-string guard (the generator and the launcher never contain or emit `exec(`/base64/bootstrap patterns), launcher install/idempotence/stability tests, cross-platform resolver execution tests, and cmd.exe execution tests on Windows CI.
