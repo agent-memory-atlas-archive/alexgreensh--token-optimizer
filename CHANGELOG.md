@@ -2,8 +2,11 @@
 
 ## [Unreleased]
 
+## [5.13.15] - 2026-09-16
+
 - Fix: `codex_install.py` no longer emits a base64 `python -c` exec-bootstrap as the Windows hook command on versioned marketplace installs (issue #183). The encoded-exec string trips generic-loader antivirus signatures (SentinelOne flagged it as a Metasploit variant, once per shipped copy of the file), even though the payload was fixed, readable, and decode-auditable. The installer now copies a plain, auditable `windows-launcher.py` next to the versioned install dirs -- a stable path that survives marketplace upgrades -- and bakes a command that invokes it by quoted path with plainly quoted argv. Version resolution (newest semver sibling, fail-open to the baked install, TOKEN_OPTIMIZER_DEBUG-gated resolver log), stdin/argv/env passthrough, legacy-command recognition on reinstall/uninstall, and upgrade trust semantics are unchanged: the command signature now normalizes only the `--baked-root` version leaf, legacy base64 commands compare verbatim so the next install replaces them (the one-time review that ships this fix), and `--decode-launcher` still decodes legacy commands while pointing launcher-file commands at their plain source. Regression coverage: an AV-safe source-string guard (the generator and the launcher never contain or emit `exec(`/base64/bootstrap patterns), launcher install/idempotence/stability tests, cross-platform resolver execution tests, and cmd.exe execution tests on Windows CI.
 - Fix: the Codex command-compression shell resolver no longer crashes on unreadable PATH entries. A directory the user cannot stat (e.g. another account's private `~/.cargo/bin` on a shared machine) raised PermissionError out of `_default_shell()` and failed the hook; unreadable entries are now skipped like any other non-match.
+- Fix: the generated Windows hook command now force-quotes every path/value token. `list2cmdline` only wraps a token containing whitespace, so a space-free install path carrying a cmd.exe metacharacter (`& | < > ^`) was emitted bare and `cmd` parsed it as a command separator; every token is now quoted (cmd treats those as literal inside quotes). A `%` in the install path remains the one documented, unsupported case.
 
 ## [5.13.14] - 2026-09-14
 
