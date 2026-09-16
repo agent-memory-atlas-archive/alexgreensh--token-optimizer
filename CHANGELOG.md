@@ -8,10 +8,11 @@
   on a 129-call Hermes session the cumulative figure reached 1,285,803 against a 1,000,000 window
   ("Context ~100% full ... Grade: F", the percentage being capped at 100) while Hermes itself
   reported 278,545 / 1,000,000 = 28% for the same session. The nudge now uses the prompt the last
-  call actually sent (fresh + cached prompt tokens, since cached tokens occupy the same window), and
-  says so in the message ("last request prompt ~N tokens vs model window M"). The cumulative tally
-  is unchanged for cost and usage reporting. Regression tests:
-  `tests/test_hermes_context_fill_nudge.py` (3 of the 5 cases fail on the previous code).
+  call actually sent -- the full prompt_tokens (fresh input + cache-read + cache-write), since every
+  prompt token occupies the window -- and says so in the message ("last request prompt ~N tokens vs
+  model window M"). The cumulative tally is unchanged for cost and usage reporting. Regression tests:
+  `tests/test_hermes_context_fill_nudge.py` (3 of the 5 original cases fail on the previous code,
+  plus a cache-write case so the live figure is not undercounted on a cache-creation turn).
 
 ## [5.13.15] - 2026-09-16
 

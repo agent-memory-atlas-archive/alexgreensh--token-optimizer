@@ -46,11 +46,12 @@ def plugin():
     module._ROLLED_UP.clear()
 
 
-def _call(plugin, session_id: str, input_tokens: int, cache_read: int = 0) -> None:
+def _call(plugin, session_id: str, input_tokens: int, cache_read: int = 0,
+          cache_write: int = 0) -> None:
     plugin.on_post_api_request(
         session_id=session_id,
         usage={"input_tokens": input_tokens, "output_tokens": 1, "cache_read_tokens": cache_read,
-               "cache_write_tokens": 0, "reasoning_tokens": 0},
+               "cache_write_tokens": cache_write, "reasoning_tokens": 0},
     )
 
 
@@ -94,6 +95,18 @@ def test_cached_prompt_tokens_count_toward_fill(plugin):
     nudge = _nudge(plugin, "s-cache")
     assert nudge is not None
     assert "750,100" in nudge["context"] or "750,000" in nudge["context"]
+
+
+def test_cache_write_tokens_count_toward_fill(plugin):
+    """A cache-CREATION turn writes tokens that also occupy the window. Counting only
+    input + cache_read would undercount the fill on that turn; the live prompt is the
+    full prompt_tokens = input + cache_read + cache_write."""
+    _call(plugin, "s-write", input_tokens=100, cache_read=200_000, cache_write=600_000)
+
+    assert plugin._TALLY["s-write"]["last_prompt"] == 800_100
+    nudge = _nudge(plugin, "s-write")
+    assert nudge is not None
+    assert "800,100" in nudge["context"]
 
 
 def test_nudge_is_once_per_session(plugin):
