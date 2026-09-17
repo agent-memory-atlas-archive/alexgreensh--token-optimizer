@@ -56,6 +56,12 @@ _EXIT_CODE_RESPONSE_RE = re.compile(r"^Error: Exit code (\d+)\s*\n?")
 # line cannot misfire the failure parse.
 _EXIT_CODE_RESPONSE_RE_CODEX = re.compile(r"^Exit code (\d+)\s*\n?")
 
+# Claude Code omits agent_id for the main context. Keep that context on the
+# historical session-only store id while giving every explicit agent its own
+# store. This sentinel is process-local plumbing, never persisted as an id.
+_MAIN_AGENT_SENTINEL = "__main_agent__"
+_DEDUP_AGENT_ENV = "TOKEN_OPTIMIZER_DEDUP_AGENT_ID"
+
 
 def main() -> None:
     """Read PostToolUse hook input, compress Bash stdout if eligible."""
@@ -78,9 +84,22 @@ def main() -> None:
     _injected = bool(_sid) and not os.environ.get("CLAUDE_SESSION_ID")
     if _injected:
         os.environ["CLAUDE_SESSION_ID"] = _sid
+    # Payload identity is authoritative for this invocation. A hook process may
+    # be reused or nested with a stale value in its environment, so always
+    # override it for the call, then restore the exact prior state. Agent ids
+    # are opaque: a non-empty whitespace value is still a supplied identity.
+    _agent_context = str(payload.get("agent_id", "") or _MAIN_AGENT_SENTINEL)
+    _agent_was_present = _DEDUP_AGENT_ENV in os.environ
+    _previous_agent_context = os.environ.get(_DEDUP_AGENT_ENV)
+    os.environ[_DEDUP_AGENT_ENV] = _agent_context
     try:
         _run(payload)
     finally:
+        if _agent_was_present:
+            assert _previous_agent_context is not None
+            os.environ[_DEDUP_AGENT_ENV] = _previous_agent_context
+        else:
+            os.environ.pop(_DEDUP_AGENT_ENV, None)
         if _injected:
             del os.environ["CLAUDE_SESSION_ID"]
 
@@ -421,6 +440,21 @@ def _stdout_has_error_patterns(stdout: str) -> bool:
     return False
 
 
+def _dedup_store_id(session_id: str, agent_id: str) -> str:
+    """Return the storage identity for one model-visible conversation context.
+
+    Main-agent calls retain the historical session id exactly. Explicit agents
+    use a short digest so arbitrary host identifiers cannot create invalid or
+    excessively long SQLite filenames.
+    """
+    if not agent_id or agent_id == _MAIN_AGENT_SENTINEL:
+        return session_id
+    agent_digest = hashlib.sha256(
+        agent_id.encode("utf-8", errors="replace")
+    ).hexdigest()[:16]
+    return f"{session_id}-agent-{agent_digest}"
+
+
 def _crossturn_dedup(command: str, output: str):
     """Return a compact delta-reference when this command's output repeats a
     recent same-session run, else None.
@@ -449,7 +483,8 @@ def _crossturn_dedup(command: str, output: str):
         # owner of the labeled-placeholder redaction contract (L-1).
         from credential_patterns import redact_credentials as _redact_credentials
 
-        store = SessionStore(session_id)
+        agent_id = os.environ.get(_DEDUP_AGENT_ENV, _MAIN_AGENT_SENTINEL)
+        store = SessionStore(_dedup_store_id(session_id, agent_id))
         try:
             cmd_h = content_hash(command.strip())
             out_h = content_hash(output)  # identical-detection stays on raw bytes
