@@ -310,6 +310,56 @@ def test_whitespace_agent_id_falls_back_to_session_identity(hook):
     assert hook._dedup_store_id(session, "agent-alpha") != session
 
 
+def test_similar_agent_ids_do_not_merge_stores(hook):
+    """Opacity: a supplied agent_id is an OPAQUE identity, never normalized.
+
+    ``.strip()`` is consulted only to decide emptiness. Two distinct-but-similar
+    ids that differ ONLY in surrounding whitespace must therefore map to distinct
+    stores -- collapsing them would silently merge two supplied identities, the
+    exact over-reach this fix removes. All three forms are also distinct from the
+    bare session (they are real, non-empty ids)."""
+    session = "test-xturn-session"
+    padded_both = hook._dedup_store_id(session, " agent-A ")
+    bare = hook._dedup_store_id(session, "agent-A")
+    trailing = hook._dedup_store_id(session, "agent-A ")
+    # All three are pairwise DISTINCT (no accidental merge).
+    assert len({padded_both, bare, trailing}) == 3
+    # None collapses onto the bare session identity.
+    assert padded_both != session
+    assert bare != session
+    assert trailing != session
+    # Same id repeated is still stable (opacity is deterministic, not random).
+    assert hook._dedup_store_id(session, " agent-A ") == padded_both
+
+
+def test_hook_payload_preserves_unstripped_agent_identity(hook, monkeypatch):
+    """main() must carry a non-empty agent_id through UN-stripped, so " agent-A"
+    (padded) and "agent-A" (bare) resolve to DISTINCT stores end-to-end."""
+    session = "shared-session"
+
+    def context_for(agent_id):
+        seen = []
+        payload = {"session_id": session, "agent_id": agent_id}
+        monkeypatch.delenv("TOKEN_OPTIMIZER_DEDUP_AGENT_ID", raising=False)
+        monkeypatch.setitem(sys.modules, "hook_io", SimpleNamespace(
+            read_stdin_hook_input=lambda max_bytes: payload))
+        monkeypatch.setattr(hook, "_run", lambda value: seen.append(
+            __import__("os").environ.get("TOKEN_OPTIMIZER_DEDUP_AGENT_ID")))
+        hook.main()
+        return seen[0]
+
+    padded_ctx = context_for(" agent-A")
+    bare_ctx = context_for("agent-A")
+    # The context env value is the original, un-stripped id.
+    assert padded_ctx == " agent-A"
+    assert bare_ctx == "agent-A"
+    # And they resolve to distinct stores, neither equal to the bare session.
+    assert hook._dedup_store_id(session, padded_ctx) != hook._dedup_store_id(
+        session, bare_ctx)
+    assert hook._dedup_store_id(session, padded_ctx) != session
+    assert hook._dedup_store_id(session, bare_ctx) != session
+
+
 @pytest.mark.parametrize("agent_id", [None, "", "   "])
 def test_hook_payload_blank_agent_falls_back_to_main_sentinel(
         hook, monkeypatch, agent_id):

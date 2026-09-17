@@ -86,11 +86,15 @@ def main() -> None:
         os.environ["CLAUDE_SESSION_ID"] = _sid
     # Payload identity is authoritative for this invocation. A hook process may
     # be reused or nested with a stale value in its environment, so always
-    # override it for the call, then restore the exact prior state. A
-    # whitespace-only agent_id is not a real identity: strip it and fall back to
-    # the main-agent sentinel, so a host that sends "  " cannot silently fork the
-    # main agent off its own dedup/streak history.
-    _agent_context = str(payload.get("agent_id", "") or "").strip() or _MAIN_AGENT_SENTINEL
+    # override it for the call, then restore the exact prior state. A supplied
+    # agent_id is an OPAQUE identity: strip is consulted ONLY to decide
+    # emptiness, never to normalize. A whitespace-only agent_id is not a real
+    # identity, so it falls back to the main-agent sentinel and a host that
+    # sends "  " cannot silently fork the main agent off its own dedup/streak
+    # history. A non-empty id is carried through UN-stripped, so " agent-A " and
+    # "agent-A" stay distinct stores (no accidental merge of two supplied ids).
+    _raw_agent_id = str(payload.get("agent_id", "") or "")
+    _agent_context = _raw_agent_id if _raw_agent_id.strip() else _MAIN_AGENT_SENTINEL
     _agent_was_present = _DEDUP_AGENT_ENV in os.environ
     _previous_agent_context = os.environ.get(_DEDUP_AGENT_ENV)
     os.environ[_DEDUP_AGENT_ENV] = _agent_context
@@ -462,12 +466,15 @@ def _dedup_store_id(session_id: str, agent_id: str) -> str:
 
     Main-agent calls retain the historical session id exactly. Explicit agents
     use a short digest so arbitrary host identifiers cannot create invalid or
-    excessively long SQLite filenames. A whitespace-only agent_id is not a real
-    identity: it is stripped and falls back to the session-only id, so a host
-    that sends "  " cannot fork the main agent off its own history.
+    excessively long SQLite filenames. A supplied agent_id is an OPAQUE identity:
+    strip is consulted ONLY to decide emptiness, never to normalize. A
+    whitespace-only agent_id is not a real identity, so it falls back to the
+    session-only id and a host that sends "  " cannot fork the main agent off its
+    own history. A non-empty id is hashed exactly as received (un-stripped), so
+    " agent-A ", "agent-A", and "agent-A " are three DISTINCT stores.
     """
-    agent_id = (agent_id or "").strip()
-    if not agent_id or agent_id == _MAIN_AGENT_SENTINEL:
+    stripped = (agent_id or "").strip()
+    if not stripped or agent_id == _MAIN_AGENT_SENTINEL:
         return session_id
     agent_digest = hashlib.sha256(
         agent_id.encode("utf-8", errors="replace")
