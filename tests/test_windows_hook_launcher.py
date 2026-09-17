@@ -105,6 +105,7 @@ def _install_test_launcher(base: Path) -> Path:
     target.write_bytes(LAUNCHER_SOURCE.read_bytes())
     return target
 
+
 def test_windows_hook_command_invokes_stable_plain_launcher(monkeypatch, tmp_path):
     module = _load_codex_install(monkeypatch, "win32")
     root = tmp_path / "market" / "token-optimizer" / "5.13.14"
@@ -122,6 +123,7 @@ def test_windows_hook_command_invokes_stable_plain_launcher(monkeypatch, tmp_pat
     assert "base64" not in command
     assert module._LAUNCHER_MARKER in command
     assert module._is_token_optimizer_group({"hooks": [{"command": command}]})
+
 
 def test_installer_generator_source_cannot_regress_to_encoded_exec(monkeypatch, tmp_path):
     """AV-safe source-string guard: codex_install's command generator must
@@ -149,6 +151,7 @@ def test_installer_generator_source_cannot_regress_to_encoded_exec(monkeypatch, 
         assert "exec(" not in low
         assert str(root.parent / "windows-launcher.py") in command
 
+
 def test_plain_launcher_source_is_auditable_and_has_no_encoded_exec():
     source = LAUNCHER_SOURCE.read_text(encoding="utf-8")
     compact = re.sub(r"\s+", "", source.lower())
@@ -158,6 +161,7 @@ def test_plain_launcher_source_is_auditable_and_has_no_encoded_exec():
     assert "exec(" not in compact
     assert "runpy.run_path" in source
     assert "root.parent.iterdir" in source
+
 
 def test_launcher_signature_normalizes_version_only(monkeypatch, tmp_path):
     module = _load_codex_install(monkeypatch, "win32")
@@ -173,6 +177,7 @@ def test_launcher_signature_normalizes_version_only(monkeypatch, tmp_path):
         cmd_a + " & echo tampered",
     ):
         assert module._launcher_signature(other) != module._launcher_signature(cmd_a)
+
 
 def test_legacy_base64_launcher_is_recognized_decodable_and_replaced(monkeypatch, tmp_path):
     """Upgrade compatibility: the retired command shape remains owned and
@@ -193,6 +198,7 @@ def test_legacy_base64_launcher_is_recognized_decodable_and_replaced(monkeypatch
     assert module._launcher_signature(legacy) == legacy
     assert module._launcher_signature(legacy) != module._launcher_signature(current)
     assert module.decode_launcher_command(current) is None
+
 
 def test_launcher_install_is_atomic_idempotent_and_stable(monkeypatch, tmp_path):
     module = _load_codex_install(monkeypatch, "win32")
@@ -218,6 +224,7 @@ def test_launcher_install_is_atomic_idempotent_and_stable(monkeypatch, tmp_path)
     # to the same launcher path, so an upgrade never orphans the command.
     assert module._windows_launcher_install_path(root.parent / "9.9.9") == target
 
+
 def test_launcher_install_cleans_unique_temp_on_replace_failure(monkeypatch, tmp_path):
     """Failure path: os.replace denied (AV lock, ACL race) must surface the
     loud ValueError, leave NO target behind, and leave no temp file -- the
@@ -240,6 +247,7 @@ def test_launcher_install_cleans_unique_temp_on_replace_failure(monkeypatch, tmp
     assert not target.exists()
     assert list(root.parent.glob("windows-launcher.py.*")) == []
     assert sorted(p.name for p in root.parent.iterdir()) == ["5.13.14"]
+
 
 def test_launcher_install_temps_are_unique_per_attempt(monkeypatch, tmp_path):
     """Concurrent installers must not contend on one fixed temp name: the
@@ -267,6 +275,7 @@ def test_launcher_install_temps_are_unique_per_attempt(monkeypatch, tmp_path):
         assert Path(name).parent == root.parent
         assert Path(name).name.startswith("windows-launcher.py.")
 
+
 def test_install_writes_launcher_before_hooks_config(monkeypatch, tmp_path):
     module = _load_codex_install(monkeypatch, "win32")
     root = tmp_path / "plugin" / "token-optimizer" / "5.13.14"
@@ -288,6 +297,7 @@ def test_install_writes_launcher_before_hooks_config(monkeypatch, tmp_path):
                 for group in groups for h in group["hooks"]]
     assert commands
     assert all(str(root.parent / "windows-launcher.py") in c for c in commands)
+
 
 def test_windows_version_resolver_picks_newest_with_stdio_argv_env(monkeypatch, tmp_path):
     module = _load_codex_install(monkeypatch, "win32")
@@ -330,28 +340,72 @@ def test_windows_version_resolver_skips_incomplete_newest_upgrade(monkeypatch, t
     assert payload["root"] == str(base / "5.11.75")
     assert not (base / "5.11.76" / "hooks" / "invoked.json").exists()
 
-def test_windows_version_resolver_skips_unreadable_newest_runner(monkeypatch, tmp_path):
-    if os.name == "nt":
-        pytest.skip("POSIX mode bits cannot model Windows ACL readability")
+
+def test_windows_version_resolver_skips_zerobyte_newest_runner(monkeypatch, tmp_path):
+    """Readability gate, verified on EVERY platform incl. nt (the only one this
+    launcher runs on). The retired ``os.access(run_py, R_OK)`` probe was a
+    Windows no-op -- it reads the read-only file attribute, not the ACL -- so
+    it admitted a run.py it could not actually read. A zero-byte run.py is the
+    portable stand-in for "opens but has nothing to run": the old gate ran it
+    (rc 0, hook silently does nothing), while the fix opens each candidate
+    newest-first and skips it for the next healthy version. This test does NOT
+    skip on nt, so CI confidence is real there."""
     module = _load_codex_install(monkeypatch, "win32")
     base = tmp_path / "plugin cache" / "token-optimizer"
     _make_fake_runner(base / "5.11.75")
-    _make_fake_runner(base / "5.11.76")
-    newest_runner = base / "5.11.76" / "hooks" / "run.py"
-    newest_runner.chmod(0)
+    (base / "5.11.76" / "hooks").mkdir(parents=True)
+    (base / "5.11.76" / "hooks" / "run.py").write_bytes(b"")  # zero-byte/truncated
+    launcher = _install_test_launcher(base)
+
+    proc = subprocess.run(
+        [sys.executable, str(launcher), "--baked-root", str(base / "5.11.75"),
+         "--", "hooks/test.py", module._LAUNCHER_MARKER],
+        input="", capture_output=True, text=True, timeout=30)
+
+    assert proc.returncode == 0, proc.stderr
+    payload = json.loads((base / "5.11.75" / "hooks" / "invoked.json").read_text())
+    assert payload["root"] == str(base / "5.11.75")
+    assert not (base / "5.11.76" / "hooks" / "invoked.json").exists()
+
+
+def test_windows_version_resolver_skips_unreadable_candidate_and_picks_next_healthy(
+        monkeypatch, tmp_path):
+    """py3.12 abort repro (reproduced by review): a candidate whose ``hooks/``
+    dir can't be traversed makes a bare ``Path.is_file()`` RAISE
+    PermissionError; on 3.12 that escaped the version comprehension and was
+    swallowed by the outer ``except OSError``, aborting the whole scan and
+    selecting the WRONG (baked) runtime. Here the unreadable candidate is the
+    NEWEST and must NOT win: with baked 5.11.70 and healthy 5.11.75, the
+    per-candidate ``open`` must skip the unreadable 5.11.76 and pick 5.11.75,
+    never fall back to 5.11.70. POSIX-only: Windows ACLs can't be modeled with
+    mode bits and root bypasses them, so the zero-byte test above owns nt."""
+    if os.name == "nt":
+        pytest.skip("POSIX mode bits cannot model Windows ACL readability")
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        pytest.skip("root bypasses POSIX permission bits")
+    module = _load_codex_install(monkeypatch, "win32")
+    base = tmp_path / "plugin cache" / "token-optimizer"
+    _make_fake_runner(base / "5.11.70")  # baked fallback, must NOT win
+    _make_fake_runner(base / "5.11.75")  # newest healthy, must win
+    _make_fake_runner(base / "5.11.76")  # newest, made unreadable below
+    unreadable_hooks = base / "5.11.76" / "hooks"
+    unreadable_hooks.chmod(0)  # non-traversable: bare is_file() would RAISE here
     launcher = _install_test_launcher(base)
 
     try:
         proc = subprocess.run(
-            [sys.executable, str(launcher), "--baked-root", str(base / "5.11.75"),
+            [sys.executable, str(launcher), "--baked-root", str(base / "5.11.70"),
              "--", "hooks/test.py", module._LAUNCHER_MARKER],
             input="", capture_output=True, text=True, timeout=30)
     finally:
-        newest_runner.chmod(0o600)
+        unreadable_hooks.chmod(0o700)
 
     assert proc.returncode == 0, proc.stderr
-    assert (base / "5.11.75" / "hooks" / "invoked.json").exists()
+    payload = json.loads((base / "5.11.75" / "hooks" / "invoked.json").read_text())
+    assert payload["root"] == str(base / "5.11.75")
+    assert not (base / "5.11.70" / "hooks" / "invoked.json").exists()
     assert not (base / "5.11.76" / "hooks" / "invoked.json").exists()
+
 
 def test_windows_version_resolver_falls_back_and_logs_only_under_debug(monkeypatch, tmp_path):
     module = _load_codex_install(monkeypatch, "win32")
@@ -372,6 +426,7 @@ def test_windows_version_resolver_falls_back_and_logs_only_under_debug(monkeypat
     assert proc.returncode == 0, proc.stderr
     assert str(base / "5.11.75") in log.read_text()
 
+
 def test_legacy_markerless_windows_groups_are_replaced_on_reinstall(monkeypatch):
     module = _load_codex_install(monkeypatch, "win32")
     legacy = {"hooks": [{"command":
@@ -384,6 +439,7 @@ def test_legacy_markerless_windows_groups_are_replaced_on_reinstall(monkeypatch)
     monkeypatch.setattr(module, "_managed_hooks", lambda **kw: {"Stop": [fixed]})
     merged = module._merge_hooks({"hooks": {"Stop": [legacy, foreign]}})
     assert merged["hooks"]["Stop"] == [foreign, fixed]
+
 
 def test_foreign_hook_referencing_runtime_root_is_never_touched(monkeypatch):
     module = _load_codex_install(monkeypatch, "win32")
@@ -453,6 +509,7 @@ def test_windows_hook_executes_with_spaceless_metachar_path(monkeypatch, tmp_pat
     assert payload["root"] == str(base / "5.11.76")
     assert payload["argv"] == ["hooks/test.py", "--flag"]
 
+
 def test_posix_hook_command_keeps_bash_resolver(monkeypatch):
     module = _load_codex_install(monkeypatch, "linux")
     command = module._hook_command("skills/token-optimizer/scripts/read_cache.py", "--quiet")
@@ -462,6 +519,7 @@ def test_posix_hook_command_keeps_bash_resolver(monkeypatch):
 
 
 # ---------- Claude Code hooks run under Git Bash on Windows ----------
+
 
 def test_claude_windows_hook_command_stays_bash_safe():
     """The Windows resolution must keep the Git-Bash launcher form.
@@ -484,6 +542,7 @@ def test_claude_windows_hook_command_stays_bash_safe():
     assert "C:/Users/Test User/.claude/token-optimizer" in command
     assert "\\" not in command
     assert command.endswith("; done; exit 0")
+
 
 def test_claude_posix_hook_command_is_byte_for_byte_unchanged():
     module = _load_measure_hook_resolver("Linux")
@@ -521,6 +580,7 @@ def _hook_runtime_bash():
         return None
     return b
 
+
 def test_claude_windows_hook_command_executes_under_bash_without_nul_file(tmp_path):
     """Killer regression: run the resolved command under the bash
     Claude Code actually uses for hooks (Git Bash on Windows) in a scratch dir.
@@ -556,6 +616,7 @@ def test_claude_windows_hook_command_executes_under_bash_without_nul_file(tmp_pa
         f"literal NUL file created under {bash} (dir listing: {entries})"
     )
 
+
 def test_claude_windows_hook_command_string_is_bash_parseable():
     """bash -n must parse the resolved command (syntax-level Git Bash safety)."""
     bash = shutil.which("bash")
@@ -569,6 +630,7 @@ def test_claude_windows_hook_command_string_is_bash_parseable():
     proc = subprocess.run([bash, "-n"], input=command, capture_output=True, text=True)
     assert proc.returncode == 0, f"bash failed to parse hook command: {proc.stderr}"
 
+
 def test_claude_windows_hook_command_constant_is_bash_safe():
     """The SessionEnd HOOK_COMMAND written to settings.json (win32 branch)."""
     command = _load_measure_hook_command()
@@ -581,6 +643,7 @@ def test_claude_windows_hook_command_constant_is_bash_safe():
     assert "session-end-flush --trigger end" in command
     assert "collect --quiet" not in command and "dashboard --quiet" not in command
 
+
 def test_claude_windows_hook_command_constant_parses_under_bash():
     bash = shutil.which("bash")
     if not bash:
@@ -589,6 +652,7 @@ def test_claude_windows_hook_command_constant_parses_under_bash():
 
     proc = subprocess.run([bash, "-n"], input=command, capture_output=True, text=True)
     assert proc.returncode == 0, f"bash failed to parse HOOK_COMMAND: {proc.stderr}"
+
 
 def test_measure_py_has_no_cmd_null_redirect_anywhere():
     """Source-grep guard: the cmd.exe null redirect must never reappear in
@@ -600,6 +664,7 @@ def test_measure_py_has_no_cmd_null_redirect_anywhere():
         "cmd.exe null redirect found in measure.py; Claude Code runs hooks "
         "under Git Bash where it creates a literal NUL file"
     )
+
 
 def test_claude_windows_session_start_marks_legacy_cmd_form_for_self_heal():
     """Installs holding the pre-fix native cmd.exe form must be flagged stale
@@ -613,12 +678,14 @@ def test_claude_windows_session_start_marks_legacy_cmd_form_for_self_heal():
 
     assert module["_windows_hook_command_is_stale"](legacy_cmd_form, resolved) is True
 
+
 def test_claude_windows_current_bash_launcher_is_not_stale():
     module = _load_measure_hook_resolver("Windows")
     root = Path(r"C:\Users\Test User\.claude\token-optimizer")
     current = module["_resolve_hook_command"](HOOKS_JSON_TEMPLATE, root)
 
     assert module["_windows_hook_command_is_stale"](current, current) is False
+
 
 def test_claude_posix_does_not_refresh_current_root_launcher():
     module = _load_measure_hook_resolver("Linux")
@@ -636,6 +703,7 @@ def _load_full_measure():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
 
 def test_windows_legacy_nul_sessionend_hook_reads_as_not_current(monkeypatch):
     """The pre-fix >NUL SessionEnd command matched all three
@@ -658,6 +726,7 @@ def test_windows_legacy_nul_sessionend_hook_reads_as_not_current(monkeypatch):
     flush_settings = {"hooks": {"SessionEnd": [{"hooks": [{"type": "command", "command": flush}]}]}}
     assert measure._is_hook_current(flush_settings) is True
 
+
 def test_posix_nul_sessionend_hook_is_win32_gated(monkeypatch):
     """The >NUL staleness heuristic is win32-only; POSIX never emits >NUL."""
     measure = _load_full_measure()
@@ -669,6 +738,7 @@ def test_posix_nul_sessionend_hook_is_win32_gated(monkeypatch):
     flush_settings = {"hooks": {"SessionEnd": [{"hooks": [{"type": "command", "command": flush}]}]}}
     assert measure._is_hook_current(flush_settings) is True
 
+
 def test_windows_resolved_command_matches_native_root_after_normalization():
     """_resolve_hook_command embeds a forward-slash
     root on Windows, so a raw substring test of the native-backslash root
@@ -678,6 +748,7 @@ def test_windows_resolved_command_matches_native_root_after_normalization():
     resolved = module["_resolve_hook_command"](HOOKS_JSON_TEMPLATE, PureWindowsPath(native_root))
     assert native_root not in resolved
     assert native_root.replace("\\", "/") in resolved.replace("\\", "/")
+
 
 def test_setup_all_hooks_containment_is_separator_normalized():
     """setup_all_hooks' 'already
