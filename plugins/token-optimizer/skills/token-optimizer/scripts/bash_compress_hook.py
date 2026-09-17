@@ -86,9 +86,11 @@ def main() -> None:
         os.environ["CLAUDE_SESSION_ID"] = _sid
     # Payload identity is authoritative for this invocation. A hook process may
     # be reused or nested with a stale value in its environment, so always
-    # override it for the call, then restore the exact prior state. Agent ids
-    # are opaque: a non-empty whitespace value is still a supplied identity.
-    _agent_context = str(payload.get("agent_id", "") or _MAIN_AGENT_SENTINEL)
+    # override it for the call, then restore the exact prior state. A
+    # whitespace-only agent_id is not a real identity: strip it and fall back to
+    # the main-agent sentinel, so a host that sends "  " cannot silently fork the
+    # main agent off its own dedup/streak history.
+    _agent_context = str(payload.get("agent_id", "") or "").strip() or _MAIN_AGENT_SENTINEL
     _agent_was_present = _DEDUP_AGENT_ENV in os.environ
     _previous_agent_context = os.environ.get(_DEDUP_AGENT_ENV)
     os.environ[_DEDUP_AGENT_ENV] = _agent_context
@@ -96,7 +98,9 @@ def main() -> None:
         _run(payload)
     finally:
         if _agent_was_present:
-            assert _previous_agent_context is not None
+            # os.environ values are always strings when the key is present, so
+            # the restore is unconditional (the prior value may be "" but never
+            # None here).
             os.environ[_DEDUP_AGENT_ENV] = _previous_agent_context
         else:
             os.environ.pop(_DEDUP_AGENT_ENV, None)
@@ -169,8 +173,21 @@ def _run(payload: dict) -> None:
     _nudge = None
     try:
         from thrash_guard import check as _thrash_check
+        # Scope the thrash streak store by the SAME agent identity as the
+        # cross-turn dedup path (issue #189). Without this, the streak store
+        # keys on the bare session id, so a subagent gets a "ran N times this
+        # session" nudge for runs the MAIN agent made, and the subagent's runs
+        # bump the main agent's streak -- the exact cross-agent contamination
+        # the dedup path was scoped to prevent. Pass the already-computed scoped
+        # store id (a string, so no circular import back into this module). The
+        # main/no-agent case resolves to the bare session id, so behavior there
+        # is byte-identical to before.
+        _thrash_store_id = _dedup_store_id(
+            os.environ.get("CLAUDE_SESSION_ID", ""),
+            os.environ.get(_DEDUP_AGENT_ENV, _MAIN_AGENT_SENTINEL),
+        )
         _nudge = _thrash_check(command, stdout, stderr=stderr,
-                               exit_code=exit_code)
+                               exit_code=exit_code, store_id=_thrash_store_id)
     except Exception:
         pass  # Fail open: the raw output stands
 
@@ -445,8 +462,11 @@ def _dedup_store_id(session_id: str, agent_id: str) -> str:
 
     Main-agent calls retain the historical session id exactly. Explicit agents
     use a short digest so arbitrary host identifiers cannot create invalid or
-    excessively long SQLite filenames.
+    excessively long SQLite filenames. A whitespace-only agent_id is not a real
+    identity: it is stripped and falls back to the session-only id, so a host
+    that sends "  " cannot fork the main agent off its own history.
     """
+    agent_id = (agent_id or "").strip()
     if not agent_id or agent_id == _MAIN_AGENT_SENTINEL:
         return session_id
     agent_digest = hashlib.sha256(

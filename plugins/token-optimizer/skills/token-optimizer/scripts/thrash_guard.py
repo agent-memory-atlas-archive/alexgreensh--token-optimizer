@@ -38,7 +38,10 @@ Design (nudge-only):
   Exactly one nudge per output.
 
 The state lives in the per-session SessionStore (command_run_streaks), so
-streaks never leak across sessions.
+streaks never leak across sessions. When the caller passes ``store_id`` (the
+same agent-scoped identity the cross-turn dedup path uses), the streak store is
+keyed on that instead, so streaks never leak across agents within a session
+either -- a subagent never inherits or bumps the main agent's streak.
 """
 
 from __future__ import annotations
@@ -372,6 +375,7 @@ def check(
     now: float | None = None,
     stderr: str = "",
     exit_code: int | None = None,
+    store_id: str | None = None,
 ):
     """Record this Bash run and return a nudge line when the streak warrants it.
 
@@ -381,7 +385,11 @@ def check(
     ``stderr`` is the tool response's stderr, used for failure detection when
     no exit code is available. ``exit_code`` is the command's exit status when
     the caller knows it; when present it is the sole failure signal and the
-    output text is never scanned.
+    output text is never scanned. ``store_id`` is the agent-scoped storage
+    identity to key the streak store on (the same one the cross-turn dedup path
+    computes via ``_dedup_store_id``); ``None`` (the default) preserves the
+    historical session-only identity byte-for-byte, so the main/no-agent case is
+    unchanged.
 
     Three signals share one store record:
     1. Identical-output streak (existing): fires when the same command
@@ -399,6 +407,17 @@ def check(
             return None
         session_id = os.environ.get("CLAUDE_SESSION_ID", "")
         if not session_id or not _VALID_SESSION_ID.match(session_id):
+            return None
+        # Agent-scoped streak store: when the caller passes an already-computed
+        # scoped identity (the SAME _dedup_store_id the cross-turn dedup path
+        # uses), key the streak store on it so a subagent's streaks never mix
+        # with the main agent's, and vice versa (issue #189). store_id=None (the
+        # default) preserves the historical session-only identity exactly. A
+        # malformed scoped id is rejected the same way an invalid session id is
+        # (SessionStore would otherwise spawn a fresh fallback store per call and
+        # silently stop accumulating streaks).
+        store_identity = store_id or session_id
+        if not _VALID_SESSION_ID.match(store_identity):
             return None
 
         from session_store import SessionStore
@@ -421,7 +440,7 @@ def check(
         )
         body = _heredoc_body(command)
         has_inline_script = body is not None and len(body) >= INLINE_SCRIPT_MIN_CHARS
-        store = SessionStore(session_id)
+        store = SessionStore(store_identity)
         try:
             # Acquire a write lock BEFORE the read so the get-compute-upsert
             # sequence is atomic: two concurrent hook processes cannot both

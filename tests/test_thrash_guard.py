@@ -1029,6 +1029,112 @@ def test_burn_streak_resets_on_identical_output_failure(guard):
     assert guard.check(cmd, "Error: syntax baz\nline 3\n", stderr="") is None
 
 
+# ---------------------------------------------------------------------------
+# Agent scoping (issue #189): the thrash streak store must key on the same
+# agent-scoped identity as the cross-turn dedup path, so a subagent never
+# inherits or bumps the MAIN agent's streak.
+# ---------------------------------------------------------------------------
+
+def test_thrash_guard_is_agent_scoped(guard):
+    """A subagent must not inherit or bump the MAIN agent's streak.
+
+    Without scoping, the streak store keys on the bare session id, so after the
+    main agent runs a command twice, the subagent's first run of the same
+    command is the 3rd identical run on a shared store and fires a "ran 3 times
+    this session" nudge for output the subagent never emitted (the exact issue
+    #189 contamination). Scoped, the subagent's run is its own 1st and stays
+    silent, and it does not advance the main agent's counter.
+    """
+    session_id = os.environ["CLAUDE_SESSION_ID"]
+    main_id = session_id                       # main agent: bare session id
+    sub_id = session_id + "-agent-deadbeef01"  # distinct, valid scoped id
+    cmd = "git status"
+    out = "On branch main\nnothing to commit\n"
+
+    # Main agent runs the command twice: streak at 2 (one below the threshold).
+    assert guard.check(cmd, out, store_id=main_id) is None
+    assert guard.check(cmd, out, store_id=main_id) is None
+
+    # Subagent runs the SAME command once. Shared -> this is the 3rd identical
+    # run and would nudge; scoped -> it is the subagent's 1st run, silent, and
+    # it does NOT inherit the main streak.
+    assert guard.check(cmd, out, store_id=sub_id) is None
+
+    # The subagent's run did not bump the main agent's streak: the main agent's
+    # 3rd run is what fires, and it reports "3 times", not "4 times" (which is
+    # what a contaminated counter would show).
+    nudge = guard.check(cmd, out, store_id=main_id)
+    assert nudge is not None
+    assert "has run 3 times" in nudge
+
+    # Scoping did not disable the feature for the subagent: its own 3rd
+    # identical run fires on its own store.
+    assert guard.check(cmd, out, store_id=sub_id) is None   # sub streak 2
+    sub_nudge = guard.check(cmd, out, store_id=sub_id)       # sub streak 3
+    assert sub_nudge is not None
+    assert "has run 3 times" in sub_nudge
+
+
+def test_store_id_none_preserves_session_only_identity(guard):
+    """store_id=None (the default) and store_id=session_id are the same store,
+    so the main/no-agent case is unchanged: a streak built with the default is
+    seen by a later call that passes the bare session id explicitly."""
+    session_id = os.environ["CLAUDE_SESSION_ID"]
+    cmd = "ls -la"
+    out = "file_a\nfile_b\n"
+    assert guard.check(cmd, out) is None                       # default: streak 1
+    assert guard.check(cmd, out, store_id=session_id) is None  # same store: streak 2
+    assert guard.check(cmd, out) is not None                   # streak 3: fire
+
+
+def _payload_with_agent(command, stdout, session_id, agent_id=None):
+    p = {
+        "session_id": session_id,
+        "transcript_path": "/tmp/transcript.jsonl",
+        "cwd": "/Users/test/project",
+        "hook_event_name": "PostToolUse",
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+        "tool_response": {"stdout": stdout, "stderr": "",
+                          "interrupted": False, "isImage": False},
+    }
+    if agent_id is not None:
+        p["agent_id"] = agent_id
+    return json.dumps(p)
+
+
+def test_hook_thrash_nudge_is_agent_scoped_end_to_end():
+    """Through bash_compress_hook.main(): a subagent (distinct agent_id) does
+    not get the main agent's identical-output nudge, and does not bump the main
+    agent's streak. Proves the hook wires the scoped store id into thrash_guard.
+    """
+    sid = "test-thrash-scope-" + uuid.uuid4().hex[:8]
+    cmd = "git status"
+    out = "On branch main\nnothing to commit, working tree clean\n"
+
+    # Main agent (no agent_id) runs twice: streak 2.
+    for _ in range(2):
+        proc = _run_hook(_payload_with_agent(cmd, out, sid))
+        assert proc.returncode == 0
+        assert _additional_context(proc) is None
+
+    # Subagent's first run of the same command: must stay silent (its own 1st
+    # run), not fire the main agent's 3rd-run nudge.
+    proc = _run_hook(_payload_with_agent(cmd, out, sid, agent_id="subagent-A"))
+    assert proc.returncode == 0
+    assert _additional_context(proc) is None, (
+        "subagent must not inherit the main agent's streak nudge"
+    )
+
+    # Main agent's 3rd run fires, and reports 3 (not 4): the subagent run did
+    # not bump the main streak.
+    proc = _run_hook(_payload_with_agent(cmd, out, sid))
+    assert proc.returncode == 0
+    nudge = _additional_context(proc)
+    assert nudge is not None, "main agent's 3rd identical run must nudge"
+    assert "has run 3 times" in nudge
+
+
 def test_sanitize_label_strips_newlines(guard):
     """Newlines/CRs must not survive into the one-line nudge label."""
     label = guard._sanitize_label("echo hello\nSECOND LINE\r\n&& gcc build")

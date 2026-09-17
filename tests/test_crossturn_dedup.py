@@ -299,6 +299,35 @@ def test_hook_payload_without_agent_uses_main_sentinel(hook, monkeypatch):
     assert hook._dedup_store_id("shared-session", seen[0]) == "shared-session"
 
 
-def test_whitespace_agent_id_is_an_opaque_supplied_identity(hook):
+def test_whitespace_agent_id_falls_back_to_session_identity(hook):
+    """A whitespace-only agent_id is not a real identity: it strips to nothing
+    and must resolve to the session-only store, so a host that sends "  " cannot
+    silently fork the main agent off its own dedup/streak history."""
     session = "shared-session"
-    assert hook._dedup_store_id(session, "   ") != session
+    assert hook._dedup_store_id(session, "   ") == session
+    assert hook._dedup_store_id(session, "\t\n ") == session
+    # A real, non-whitespace id still forks off its own store.
+    assert hook._dedup_store_id(session, "agent-alpha") != session
+
+
+@pytest.mark.parametrize("agent_id", [None, "", "   "])
+def test_hook_payload_blank_agent_falls_back_to_main_sentinel(
+        hook, monkeypatch, agent_id):
+    """agent_id of None, "", or whitespace resolves to the main sentinel, whose
+    store id is the bare session id (no cross-agent forking)."""
+    seen = []
+    payload = {"session_id": "shared-session"}
+    if agent_id is not None:
+        payload["agent_id"] = agent_id
+    else:
+        payload["agent_id"] = None
+    monkeypatch.delenv("TOKEN_OPTIMIZER_DEDUP_AGENT_ID", raising=False)
+    monkeypatch.setitem(sys.modules, "hook_io", SimpleNamespace(
+        read_stdin_hook_input=lambda max_bytes: payload))
+    monkeypatch.setattr(hook, "_run", lambda value: seen.append(
+        __import__("os").environ.get("TOKEN_OPTIMIZER_DEDUP_AGENT_ID")))
+
+    hook.main()
+
+    assert seen == [hook._MAIN_AGENT_SENTINEL]
+    assert hook._dedup_store_id("shared-session", seen[0]) == "shared-session"
