@@ -85,7 +85,7 @@ def test_nudge_fires_on_live_prompt_size(plugin):
     text = nudge["context"]
     assert "790,000" in text and "1,000,000" in text
     assert "79%" in text
-    assert "2,000,000" not in text  # never the cumulative figure
+    assert "795,000" not in text  # never the cumulative figure (5,000 + 790,000)
 
 
 def test_cached_prompt_tokens_count_toward_fill(plugin):
@@ -94,7 +94,7 @@ def test_cached_prompt_tokens_count_toward_fill(plugin):
 
     nudge = _nudge(plugin, "s-cache")
     assert nudge is not None
-    assert "750,100" in nudge["context"] or "750,000" in nudge["context"]
+    assert "750,100" in nudge["context"]  # input (100) + cache_read (750,000); exact, not rounded
 
 
 def test_cache_write_tokens_count_toward_fill(plugin):
@@ -107,6 +107,37 @@ def test_cache_write_tokens_count_toward_fill(plugin):
     nudge = _nudge(plugin, "s-write")
     assert nudge is not None
     assert "800,100" in nudge["context"]
+
+
+def test_zero_usage_call_does_not_reset_last_prompt(plugin):
+    """An errored/retried request can report empty/zero usage. It must NOT clobber the
+    good live reading with 0 (which would make on_pre_llm_call treat the next turn as the
+    first turn and fall back to the history estimate, leaving a ~full window unwarned)."""
+    _call(plugin, "s-zero", input_tokens=950_000, cache_read=0)  # 95% of the window
+    assert plugin._TALLY["s-zero"]["last_prompt"] == 950_000
+
+    # All-zero usage (errored/retried request): no positive prompt anywhere.
+    plugin.on_post_api_request(
+        session_id="s-zero",
+        usage={"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0,
+               "cache_write_tokens": 0, "reasoning_tokens": 0},
+    )
+    assert plugin._TALLY["s-zero"]["last_prompt"] == 950_000, "zero usage must not reset last_prompt"
+
+    nudge = _nudge(plugin, "s-zero")
+    assert nudge is not None and "context" in nudge
+    assert "95%" in nudge["context"]
+    assert "950,000" in nudge["context"]
+
+
+def test_prompt_tokens_field_is_preferred_when_present(plugin):
+    """When the host supplies canonical prompt_tokens, use it verbatim (drift-proof)."""
+    plugin.on_post_api_request(
+        session_id="s-canon",
+        usage={"input_tokens": 100, "output_tokens": 1, "cache_read_tokens": 200,
+               "cache_write_tokens": 300, "reasoning_tokens": 0, "prompt_tokens": 880_000},
+    )
+    assert plugin._TALLY["s-canon"]["last_prompt"] == 880_000
 
 
 def test_nudge_is_once_per_session(plugin):

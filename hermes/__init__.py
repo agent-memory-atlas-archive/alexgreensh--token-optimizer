@@ -230,11 +230,19 @@ def on_post_api_request(**kwargs: Any) -> None:
             # turn, so that sum climbs past the model window even while real occupancy is low
             # (measured on Hermes: cumulative 1.28M against its own reported 278,545 / 1,000,000
             # for the same session). Never use it to judge fill. Every prompt token occupies the
-            # window, so sum all three prompt components -- input + cache_read + cache_write. This
-            # equals Hermes' CanonicalUsage.prompt_tokens; dropping cache_write would undercount
-            # the fill on a cache-creation turn (cached tokens are still in the window).
-            tally["last_prompt"] = delta["input"] + delta["cache_read"] + delta["cache_write"]
-            tally["calls"] = tally.get("calls", 0) + 1
+            # window, so we want the full prompt = input + cache_read + cache_write. Prefer the
+            # host's own CanonicalUsage.prompt_tokens when present (drift-proof: it already sums
+            # those three); fall back to summing the components. Dropping cache_write would
+            # undercount the fill on a cache-creation turn (cached tokens are still in the window).
+            prompt = int(usage.get("prompt_tokens", 0) or 0)
+            if prompt <= 0:
+                prompt = delta["input"] + delta["cache_read"] + delta["cache_write"]
+            # Only overwrite when positive: an errored/retried request can report empty/zero
+            # usage, and clobbering a good reading with 0 would make on_pre_llm_call treat the
+            # next turn as "first turn" (current_input <= 0) and fall back to the history
+            # estimate, so a genuinely ~full window would go unwarned.
+            if prompt > 0:
+                tally["last_prompt"] = prompt
     except Exception as exc:
         logger.debug("[token-optimizer] post_api_request accumulation error: %s", exc)
 
