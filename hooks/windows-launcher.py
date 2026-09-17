@@ -105,12 +105,34 @@ def main(argv: list[str] | None = None) -> None:
     # Resolve the newest semver sibling of the install parent; on any
     # listing failure keep the baked install (fail-open, same contract the
     # retired base64 bootstrap documented).
+    #
+    # Windows-only launcher, so os.access(run.py, R_OK) is unusable: it maps
+    # to the read-only file attribute, not the ACL, and returns True for a
+    # run.py an ACL forbids reading -- runpy would then die with
+    # PermissionError instead of falling back. And a bare .is_file() on a
+    # candidate whose hooks/ dir can't be traversed RAISES PermissionError,
+    # which on 3.12 escapes the comprehension and aborts the whole scan
+    # (caught below), selecting the wrong runtime. So probe each candidate by
+    # actually opening its run.py, newest-first, and take the first that
+    # opens with real content: an unreadable, missing, or incomplete
+    # candidate is skipped (not fatal), and a genuine ACL denial is honored.
     try:
-        versions = [p for p in root.parent.iterdir() if p.is_dir()
-                    and _SEMVER_DIR_RE.fullmatch(p.name)]
-        root = max(versions,
-                   key=lambda p: tuple(map(int, p.name.split("."))),
-                   default=root)
+        candidates = sorted(
+            (p for p in root.parent.iterdir()
+             if _SEMVER_DIR_RE.fullmatch(p.name)),
+            key=lambda p: tuple(map(int, p.name.split("."))),
+            reverse=True,
+        )
+        for candidate in candidates:
+            run_py = candidate / "hooks" / "run.py"
+            try:
+                with open(run_py, "rb") as fh:
+                    if not fh.read(1):
+                        continue  # zero-byte/truncated: would run nothing rc 0
+            except OSError:
+                continue  # missing, incomplete upgrade, or ACL-denied
+            root = candidate
+            break
     except OSError:
         pass
     # The baked-install fallback is silent by design; the only observable

@@ -323,6 +323,90 @@ def test_windows_version_resolver_picks_newest_with_stdio_argv_env(monkeypatch, 
         assert not (base / stale / "hooks" / "invoked.json").exists()
 
 
+def test_windows_version_resolver_skips_incomplete_newest_upgrade(monkeypatch, tmp_path):
+    module = _load_codex_install(monkeypatch, "win32")
+    base = tmp_path / "plugin cache" / "token-optimizer"
+    _make_fake_runner(base / "5.11.75")
+    (base / "5.11.76").mkdir(parents=True)  # Interrupted upgrade: no hooks/run.py.
+    launcher = _install_test_launcher(base)
+
+    proc = subprocess.run(
+        [sys.executable, str(launcher), "--baked-root", str(base / "5.11.75"),
+         "--", "hooks/test.py", module._LAUNCHER_MARKER],
+        input="", capture_output=True, text=True, timeout=30)
+
+    assert proc.returncode == 0, proc.stderr
+    payload = json.loads((base / "5.11.75" / "hooks" / "invoked.json").read_text())
+    assert payload["root"] == str(base / "5.11.75")
+    assert not (base / "5.11.76" / "hooks" / "invoked.json").exists()
+
+
+def test_windows_version_resolver_skips_zerobyte_newest_runner(monkeypatch, tmp_path):
+    """Readability gate, verified on EVERY platform incl. nt (the only one this
+    launcher runs on). The retired ``os.access(run_py, R_OK)`` probe was a
+    Windows no-op -- it reads the read-only file attribute, not the ACL -- so
+    it admitted a run.py it could not actually read. A zero-byte run.py is the
+    portable stand-in for "opens but has nothing to run": the old gate ran it
+    (rc 0, hook silently does nothing), while the fix opens each candidate
+    newest-first and skips it for the next healthy version. This test does NOT
+    skip on nt, so CI confidence is real there."""
+    module = _load_codex_install(monkeypatch, "win32")
+    base = tmp_path / "plugin cache" / "token-optimizer"
+    _make_fake_runner(base / "5.11.75")
+    (base / "5.11.76" / "hooks").mkdir(parents=True)
+    (base / "5.11.76" / "hooks" / "run.py").write_bytes(b"")  # zero-byte/truncated
+    launcher = _install_test_launcher(base)
+
+    proc = subprocess.run(
+        [sys.executable, str(launcher), "--baked-root", str(base / "5.11.75"),
+         "--", "hooks/test.py", module._LAUNCHER_MARKER],
+        input="", capture_output=True, text=True, timeout=30)
+
+    assert proc.returncode == 0, proc.stderr
+    payload = json.loads((base / "5.11.75" / "hooks" / "invoked.json").read_text())
+    assert payload["root"] == str(base / "5.11.75")
+    assert not (base / "5.11.76" / "hooks" / "invoked.json").exists()
+
+
+def test_windows_version_resolver_skips_unreadable_candidate_and_picks_next_healthy(
+        monkeypatch, tmp_path):
+    """py3.12 abort repro (reproduced by review): a candidate whose ``hooks/``
+    dir can't be traversed makes a bare ``Path.is_file()`` RAISE
+    PermissionError; on 3.12 that escaped the version comprehension and was
+    swallowed by the outer ``except OSError``, aborting the whole scan and
+    selecting the WRONG (baked) runtime. Here the unreadable candidate is the
+    NEWEST and must NOT win: with baked 5.11.70 and healthy 5.11.75, the
+    per-candidate ``open`` must skip the unreadable 5.11.76 and pick 5.11.75,
+    never fall back to 5.11.70. POSIX-only: Windows ACLs can't be modeled with
+    mode bits and root bypasses them, so the zero-byte test above owns nt."""
+    if os.name == "nt":
+        pytest.skip("POSIX mode bits cannot model Windows ACL readability")
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        pytest.skip("root bypasses POSIX permission bits")
+    module = _load_codex_install(monkeypatch, "win32")
+    base = tmp_path / "plugin cache" / "token-optimizer"
+    _make_fake_runner(base / "5.11.70")  # baked fallback, must NOT win
+    _make_fake_runner(base / "5.11.75")  # newest healthy, must win
+    _make_fake_runner(base / "5.11.76")  # newest, made unreadable below
+    unreadable_hooks = base / "5.11.76" / "hooks"
+    unreadable_hooks.chmod(0)  # non-traversable: bare is_file() would RAISE here
+    launcher = _install_test_launcher(base)
+
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(launcher), "--baked-root", str(base / "5.11.70"),
+             "--", "hooks/test.py", module._LAUNCHER_MARKER],
+            input="", capture_output=True, text=True, timeout=30)
+    finally:
+        unreadable_hooks.chmod(0o700)
+
+    assert proc.returncode == 0, proc.stderr
+    payload = json.loads((base / "5.11.75" / "hooks" / "invoked.json").read_text())
+    assert payload["root"] == str(base / "5.11.75")
+    assert not (base / "5.11.70" / "hooks" / "invoked.json").exists()
+    assert not (base / "5.11.76" / "hooks" / "invoked.json").exists()
+
+
 def test_windows_version_resolver_falls_back_and_logs_only_under_debug(monkeypatch, tmp_path):
     module = _load_codex_install(monkeypatch, "win32")
     base = tmp_path / "plugin cache" / "token-optimizer"
