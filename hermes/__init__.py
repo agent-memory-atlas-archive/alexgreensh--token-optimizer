@@ -225,6 +225,24 @@ def on_post_api_request(**kwargs: Any) -> None:
             })
             for k, v in delta.items():
                 tally[k] += v
+            # LIVE context size = the prompt THIS call actually sent.
+            # `input` above is session-CUMULATIVE: a host re-sends the whole conversation every
+            # turn, so that sum climbs past the model window even while real occupancy is low
+            # (measured on Hermes: cumulative 1.28M against its own reported 278,545 / 1,000,000
+            # for the same session). Never use it to judge fill. Every prompt token occupies the
+            # window, so we want the full prompt = input + cache_read + cache_write. Prefer the
+            # host's own CanonicalUsage.prompt_tokens when present (drift-proof: it already sums
+            # those three); fall back to summing the components. Dropping cache_write would
+            # undercount the fill on a cache-creation turn (cached tokens are still in the window).
+            prompt = int(usage.get("prompt_tokens", 0) or 0)
+            if prompt <= 0:
+                prompt = delta["input"] + delta["cache_read"] + delta["cache_write"]
+            # Only overwrite when positive: an errored/retried request can report empty/zero
+            # usage, and clobbering a good reading with 0 would make on_pre_llm_call treat the
+            # next turn as "first turn" (current_input <= 0) and fall back to the history
+            # estimate, so a genuinely ~full window would go unwarned.
+            if prompt > 0:
+                tally["last_prompt"] = prompt
     except Exception as exc:
         logger.debug("[token-optimizer] post_api_request accumulation error: %s", exc)
 
@@ -258,12 +276,15 @@ def on_pre_llm_call(**kwargs: Any) -> dict[str, str] | None:
         if already_nudged:
             return None
 
-        # Determine input token estimate.
-        tally_input = tally.get("input", 0)
-        if tally_input > 0:
-            current_input = tally_input
-        else:
-            # No tally yet (first turn): estimate from history length.
+        # Determine LIVE context fill.
+        # Use the LAST request's prompt size, never the session-cumulative `input` tally: every
+        # turn re-sends the whole conversation, so the cumulative figure climbs past the model
+        # window regardless of how small the live context is (measured on Hermes: cumulative
+        # 1,285,803 against its own 278,545 / 1,000,000 = 28% for the same session, which made the
+        # nudge report "~100% full, Grade: F" while the host showed 28%).
+        current_input = int(tally.get("last_prompt", 0) or 0)
+        if current_input <= 0:
+            # No completed call yet (first turn): estimate from history length.
             current_input = _estimate_fill_from_history(conversation_history)
 
         ctx_win = _context_window(model)
@@ -288,7 +309,7 @@ def on_pre_llm_call(**kwargs: Any) -> dict[str, str] | None:
         )
         nudge = (
             f"[Token Optimizer] Context ~{fill_pct}% full "
-            f"(~{current_input:,} input tokens vs assumed {ctx_win:,} window) "
+            f"(last request prompt ~{current_input:,} tokens vs model window {ctx_win:,}) "
             f"Grade: {grade}. {tip}"
         )
 
