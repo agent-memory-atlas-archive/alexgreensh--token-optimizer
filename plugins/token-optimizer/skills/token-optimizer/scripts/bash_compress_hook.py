@@ -56,6 +56,12 @@ _EXIT_CODE_RESPONSE_RE = re.compile(r"^Error: Exit code (\d+)\s*\n?")
 # line cannot misfire the failure parse.
 _EXIT_CODE_RESPONSE_RE_CODEX = re.compile(r"^Exit code (\d+)\s*\n?")
 
+# Claude Code omits agent_id for the main context. Keep that context on the
+# historical session-only store id while giving every explicit agent its own
+# store. This sentinel is process-local plumbing, never persisted as an id.
+_MAIN_AGENT_SENTINEL = "__main_agent__"
+_DEDUP_AGENT_ENV = "TOKEN_OPTIMIZER_DEDUP_AGENT_ID"
+
 
 def main() -> None:
     """Read PostToolUse hook input, compress Bash stdout if eligible."""
@@ -78,9 +84,30 @@ def main() -> None:
     _injected = bool(_sid) and not os.environ.get("CLAUDE_SESSION_ID")
     if _injected:
         os.environ["CLAUDE_SESSION_ID"] = _sid
+    # Payload identity is authoritative for this invocation. A hook process may
+    # be reused or nested with a stale value in its environment, so always
+    # override it for the call, then restore the exact prior state. A supplied
+    # agent_id is an OPAQUE identity: strip is consulted ONLY to decide
+    # emptiness, never to normalize. A whitespace-only agent_id is not a real
+    # identity, so it falls back to the main-agent sentinel and a host that
+    # sends "  " cannot silently fork the main agent off its own dedup/streak
+    # history. A non-empty id is carried through UN-stripped, so " agent-A " and
+    # "agent-A" stay distinct stores (no accidental merge of two supplied ids).
+    _raw_agent_id = str(payload.get("agent_id", "") or "")
+    _agent_context = _raw_agent_id if _raw_agent_id.strip() else _MAIN_AGENT_SENTINEL
+    _agent_was_present = _DEDUP_AGENT_ENV in os.environ
+    _previous_agent_context = os.environ.get(_DEDUP_AGENT_ENV)
+    os.environ[_DEDUP_AGENT_ENV] = _agent_context
     try:
         _run(payload)
     finally:
+        if _agent_was_present:
+            # os.environ values are always strings when the key is present, so
+            # the restore is unconditional (the prior value may be "" but never
+            # None here).
+            os.environ[_DEDUP_AGENT_ENV] = _previous_agent_context
+        else:
+            os.environ.pop(_DEDUP_AGENT_ENV, None)
         if _injected:
             del os.environ["CLAUDE_SESSION_ID"]
 
@@ -150,8 +177,21 @@ def _run(payload: dict) -> None:
     _nudge = None
     try:
         from thrash_guard import check as _thrash_check
+        # Scope the thrash streak store by the SAME agent identity as the
+        # cross-turn dedup path (issue #189). Without this, the streak store
+        # keys on the bare session id, so a subagent gets a "ran N times this
+        # session" nudge for runs the MAIN agent made, and the subagent's runs
+        # bump the main agent's streak -- the exact cross-agent contamination
+        # the dedup path was scoped to prevent. Pass the already-computed scoped
+        # store id (a string, so no circular import back into this module). The
+        # main/no-agent case resolves to the bare session id, so behavior there
+        # is byte-identical to before.
+        _thrash_store_id = _dedup_store_id(
+            os.environ.get("CLAUDE_SESSION_ID", ""),
+            os.environ.get(_DEDUP_AGENT_ENV, _MAIN_AGENT_SENTINEL),
+        )
         _nudge = _thrash_check(command, stdout, stderr=stderr,
-                               exit_code=exit_code)
+                               exit_code=exit_code, store_id=_thrash_store_id)
     except Exception:
         pass  # Fail open: the raw output stands
 
@@ -421,6 +461,27 @@ def _stdout_has_error_patterns(stdout: str) -> bool:
     return False
 
 
+def _dedup_store_id(session_id: str, agent_id: str) -> str:
+    """Return the storage identity for one model-visible conversation context.
+
+    Main-agent calls retain the historical session id exactly. Explicit agents
+    use a short digest so arbitrary host identifiers cannot create invalid or
+    excessively long SQLite filenames. A supplied agent_id is an OPAQUE identity:
+    strip is consulted ONLY to decide emptiness, never to normalize. A
+    whitespace-only agent_id is not a real identity, so it falls back to the
+    session-only id and a host that sends "  " cannot fork the main agent off its
+    own history. A non-empty id is hashed exactly as received (un-stripped), so
+    " agent-A ", "agent-A", and "agent-A " are three DISTINCT stores.
+    """
+    stripped = (agent_id or "").strip()
+    if not stripped or agent_id == _MAIN_AGENT_SENTINEL:
+        return session_id
+    agent_digest = hashlib.sha256(
+        agent_id.encode("utf-8", errors="replace")
+    ).hexdigest()[:16]
+    return f"{session_id}-agent-{agent_digest}"
+
+
 def _crossturn_dedup(command: str, output: str):
     """Return a compact delta-reference when this command's output repeats a
     recent same-session run, else None.
@@ -449,7 +510,8 @@ def _crossturn_dedup(command: str, output: str):
         # owner of the labeled-placeholder redaction contract (L-1).
         from credential_patterns import redact_credentials as _redact_credentials
 
-        store = SessionStore(session_id)
+        agent_id = os.environ.get(_DEDUP_AGENT_ENV, _MAIN_AGENT_SENTINEL)
+        store = SessionStore(_dedup_store_id(session_id, agent_id))
         try:
             cmd_h = content_hash(command.strip())
             out_h = content_hash(output)  # identical-detection stays on raw bytes

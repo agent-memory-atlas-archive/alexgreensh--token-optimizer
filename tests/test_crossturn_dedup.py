@@ -11,6 +11,7 @@ import sqlite3
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -53,10 +54,8 @@ def _git_status(nfiles, branch="main"):
     files = [f"\tmodified:   src/module_{i:02d}.py" for i in range(nfiles)]
     return "\n".join(base + files + ["", "no changes added, only modified files here"]) + "\n"
 
-
 def test_first_run_is_not_deduped(hook):
     assert hook._crossturn_dedup("git status", _git_status(12)) is None
-
 
 def test_identical_rerun_is_collapsed(hook):
     out = _git_status(12)
@@ -66,7 +65,6 @@ def test_identical_rerun_is_collapsed(hook):
     assert "identical" in ref.lower()
     assert len(ref) < len(out) * 0.5                              # big saving
 
-
 def test_small_change_becomes_a_delta(hook):
     hook._crossturn_dedup("git status", _git_status(12))          # records
     ref = hook._crossturn_dedup("git status", _git_status(14))    # +2 files
@@ -74,19 +72,16 @@ def test_small_change_becomes_a_delta(hook):
     assert "except" in ref.lower()
     assert len(ref) < len(_git_status(14)) * 0.85
 
-
 def test_different_command_never_dedups(hook):
     hook._crossturn_dedup("git status", _git_status(12))
     other = "\n".join(f"-rw-r--r-- 1 u s {1000+i} module_{i:02d}.py" for i in range(30)) + "\n"
     assert hook._crossturn_dedup("ls -la", other) is None
-
 
 def test_tiny_output_is_ignored(hook):
     # Below the 200-char floor -> not worth a reference.
     small = "On branch main\n"
     assert hook._crossturn_dedup("git status", small) is None
     assert hook._crossturn_dedup("git status", small) is None
-
 
 def test_never_raises_without_session(hook, monkeypatch):
     monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
@@ -115,7 +110,6 @@ _OUTPUT_WITH_AWS_KEY = (
     f"  \"rows\": [\n" + "\n".join(f"    {{\"id\": {i}}}" for i in range(40)) + "\n  ]\n}\n"
 )
 
-
 def test_crossturn_dedup_command_text_redacted_in_store(hook):
     """C-4: a credential-bearing command must not survive in command_outputs.command_text."""
     hook._crossturn_dedup(_CMD_WITH_BEARER, _OUTPUT_WITH_AWS_KEY)  # records
@@ -133,7 +127,6 @@ def test_crossturn_dedup_command_text_redacted_in_store(hook):
     assert "Bearer " + _BEARER_SECRET not in command_text
     assert "CREDENTIAL REDACTED" in command_text
 
-
 def test_crossturn_dedup_compressed_output_redacted_in_store(hook):
     """C-4: a credential-bearing output must not survive in command_outputs.compressed_output."""
     hook._crossturn_dedup(_CMD_WITH_BEARER, _OUTPUT_WITH_AWS_KEY)  # records
@@ -149,7 +142,6 @@ def test_crossturn_dedup_compressed_output_redacted_in_store(hook):
     compressed_output = row[0] or ""
     assert _AWS_KEY not in compressed_output
     assert "CREDENTIAL REDACTED" in compressed_output
-
 
 def test_crossturn_dedup_ref_label_does_not_leak_secret(hook):
     """C-1: the ref string returned to the model must not contain the raw secret.
@@ -167,7 +159,6 @@ def test_crossturn_dedup_ref_label_does_not_leak_secret(hook):
     # The redacted label should carry the placeholder, proving safe_command was used.
     assert "CREDENTIAL REDACTED" in ref
 
-
 def test_crossturn_dedup_delta_label_does_not_leak_secret(hook):
     """C-1 (delta path): the delta ref must also use the redacted label."""
     hook._crossturn_dedup(_CMD_WITH_BEARER, _OUTPUT_WITH_AWS_KEY)  # records
@@ -177,7 +168,6 @@ def test_crossturn_dedup_delta_label_does_not_leak_secret(hook):
     assert _BEARER_SECRET not in ref
     assert "Bearer " + _BEARER_SECRET not in ref
     assert "CREDENTIAL REDACTED" in ref
-
 
 def test_log_event_command_pattern_redacted_in_trends_db(hook):
     """C-2: _log_event must redact command_pattern before it reaches trends.db.
@@ -204,7 +194,6 @@ def test_log_event_command_pattern_redacted_in_trends_db(hook):
     assert "Bearer " + _BEARER_SECRET not in command_pattern
     assert "CREDENTIAL REDACTED" in command_pattern
 
-
 def test_log_event_does_not_persist_raw_secret_in_any_column(hook):
     """C-2 (whole-row sweep): no column in compression_events may carry the raw
     secret. The table stores command_pattern (text) plus token counts and
@@ -230,3 +219,165 @@ def test_log_event_does_not_persist_raw_secret_in_any_column(hook):
         if isinstance(val, str):
             assert _BEARER_SECRET not in val, f"raw secret leaked in column {col!r}"
             assert "Bearer " + _BEARER_SECRET not in val, f"Bearer leaked in column {col!r}"
+
+def test_sibling_agents_do_not_share_dedup_history(hook, monkeypatch):
+    """A reference is valid only inside the agent context that saw the output."""
+    out = _git_status(12)
+    monkeypatch.setenv("TOKEN_OPTIMIZER_DEDUP_AGENT_ID", "agent-alpha")
+    assert hook._crossturn_dedup("git status", out) is None
+
+    monkeypatch.setenv("TOKEN_OPTIMIZER_DEDUP_AGENT_ID", "agent-beta")
+    assert hook._crossturn_dedup("git status", out) is None
+
+    # Beta's own repeat still dedups, proving isolation did not disable the feature.
+    ref = hook._crossturn_dedup("git status", out)
+    assert ref is not None
+    assert "identical" in ref.lower()
+
+def test_same_agent_keeps_dedup_history(hook, monkeypatch):
+    out = _git_status(12)
+    monkeypatch.setenv("TOKEN_OPTIMIZER_DEDUP_AGENT_ID", "agent-alpha")
+    assert hook._crossturn_dedup("git status", out) is None
+    assert hook._crossturn_dedup("git status", out) is not None
+
+
+def test_main_and_agent_store_ids_are_stable_and_distinct(hook):
+    session = "test-xturn-session"
+    assert hook._dedup_store_id(session, "") == session
+    assert hook._dedup_store_id(session, "agent-alpha") == hook._dedup_store_id(
+        session, "agent-alpha")
+    assert hook._dedup_store_id(session, "agent-alpha") != hook._dedup_store_id(
+        session, "agent-beta")
+    assert hook._dedup_store_id(session, "agent-alpha") != session
+
+@pytest.mark.parametrize("previous", [None, "agent-stale"])
+@pytest.mark.parametrize("raises", [False, True])
+def test_hook_payload_overrides_and_restores_agent_context(
+        hook, monkeypatch, previous, raises):
+    """The current payload wins, and both success/exception restore prior state."""
+    payload = {"session_id": "shared-session", "agent_id": "agent-new"}
+    if previous is None:
+        monkeypatch.delenv("TOKEN_OPTIMIZER_DEDUP_AGENT_ID", raising=False)
+    else:
+        monkeypatch.setenv("TOKEN_OPTIMIZER_DEDUP_AGENT_ID", previous)
+    monkeypatch.setitem(sys.modules, "hook_io", SimpleNamespace(
+        read_stdin_hook_input=lambda max_bytes: payload))
+    seen = []
+
+    def run(value):
+        seen.append(__import__("os").environ["TOKEN_OPTIMIZER_DEDUP_AGENT_ID"])
+        if raises:
+            raise RuntimeError("test failure")
+
+    monkeypatch.setattr(hook, "_run", run)
+    if raises:
+        with pytest.raises(RuntimeError, match="test failure"):
+            hook.main()
+    else:
+        hook.main()
+
+    assert seen == ["agent-new"]
+    env = __import__("os").environ
+    if previous is None:
+        assert "TOKEN_OPTIMIZER_DEDUP_AGENT_ID" not in env
+    else:
+        assert env["TOKEN_OPTIMIZER_DEDUP_AGENT_ID"] == previous
+
+
+def test_hook_payload_without_agent_uses_main_sentinel(hook, monkeypatch):
+    seen = []
+    payload = {"session_id": "shared-session"}
+    monkeypatch.delenv("TOKEN_OPTIMIZER_DEDUP_AGENT_ID", raising=False)
+    monkeypatch.setitem(sys.modules, "hook_io", SimpleNamespace(
+        read_stdin_hook_input=lambda max_bytes: payload))
+    monkeypatch.setattr(hook, "_run", lambda value: seen.append(
+        __import__("os").environ.get("TOKEN_OPTIMIZER_DEDUP_AGENT_ID")))
+
+    hook.main()
+
+    assert seen == [hook._MAIN_AGENT_SENTINEL]
+    assert hook._dedup_store_id("shared-session", seen[0]) == "shared-session"
+
+
+def test_whitespace_agent_id_falls_back_to_session_identity(hook):
+    """A whitespace-only agent_id is not a real identity: it strips to nothing
+    and must resolve to the session-only store, so a host that sends "  " cannot
+    silently fork the main agent off its own dedup/streak history."""
+    session = "shared-session"
+    assert hook._dedup_store_id(session, "   ") == session
+    assert hook._dedup_store_id(session, "\t\n ") == session
+    # A real, non-whitespace id still forks off its own store.
+    assert hook._dedup_store_id(session, "agent-alpha") != session
+
+
+def test_similar_agent_ids_do_not_merge_stores(hook):
+    """Opacity: a supplied agent_id is an OPAQUE identity, never normalized.
+
+    ``.strip()`` is consulted only to decide emptiness. Two distinct-but-similar
+    ids that differ ONLY in surrounding whitespace must therefore map to distinct
+    stores -- collapsing them would silently merge two supplied identities, the
+    exact over-reach this fix removes. All three forms are also distinct from the
+    bare session (they are real, non-empty ids)."""
+    session = "test-xturn-session"
+    padded_both = hook._dedup_store_id(session, " agent-A ")
+    bare = hook._dedup_store_id(session, "agent-A")
+    trailing = hook._dedup_store_id(session, "agent-A ")
+    # All three are pairwise DISTINCT (no accidental merge).
+    assert len({padded_both, bare, trailing}) == 3
+    # None collapses onto the bare session identity.
+    assert padded_both != session
+    assert bare != session
+    assert trailing != session
+    # Same id repeated is still stable (opacity is deterministic, not random).
+    assert hook._dedup_store_id(session, " agent-A ") == padded_both
+
+
+def test_hook_payload_preserves_unstripped_agent_identity(hook, monkeypatch):
+    """main() must carry a non-empty agent_id through UN-stripped, so " agent-A"
+    (padded) and "agent-A" (bare) resolve to DISTINCT stores end-to-end."""
+    session = "shared-session"
+
+    def context_for(agent_id):
+        seen = []
+        payload = {"session_id": session, "agent_id": agent_id}
+        monkeypatch.delenv("TOKEN_OPTIMIZER_DEDUP_AGENT_ID", raising=False)
+        monkeypatch.setitem(sys.modules, "hook_io", SimpleNamespace(
+            read_stdin_hook_input=lambda max_bytes: payload))
+        monkeypatch.setattr(hook, "_run", lambda value: seen.append(
+            __import__("os").environ.get("TOKEN_OPTIMIZER_DEDUP_AGENT_ID")))
+        hook.main()
+        return seen[0]
+
+    padded_ctx = context_for(" agent-A")
+    bare_ctx = context_for("agent-A")
+    # The context env value is the original, un-stripped id.
+    assert padded_ctx == " agent-A"
+    assert bare_ctx == "agent-A"
+    # And they resolve to distinct stores, neither equal to the bare session.
+    assert hook._dedup_store_id(session, padded_ctx) != hook._dedup_store_id(
+        session, bare_ctx)
+    assert hook._dedup_store_id(session, padded_ctx) != session
+    assert hook._dedup_store_id(session, bare_ctx) != session
+
+
+@pytest.mark.parametrize("agent_id", [None, "", "   "])
+def test_hook_payload_blank_agent_falls_back_to_main_sentinel(
+        hook, monkeypatch, agent_id):
+    """agent_id of None, "", or whitespace resolves to the main sentinel, whose
+    store id is the bare session id (no cross-agent forking)."""
+    seen = []
+    payload = {"session_id": "shared-session"}
+    if agent_id is not None:
+        payload["agent_id"] = agent_id
+    else:
+        payload["agent_id"] = None
+    monkeypatch.delenv("TOKEN_OPTIMIZER_DEDUP_AGENT_ID", raising=False)
+    monkeypatch.setitem(sys.modules, "hook_io", SimpleNamespace(
+        read_stdin_hook_input=lambda max_bytes: payload))
+    monkeypatch.setattr(hook, "_run", lambda value: seen.append(
+        __import__("os").environ.get("TOKEN_OPTIMIZER_DEDUP_AGENT_ID")))
+
+    hook.main()
+
+    assert seen == [hook._MAIN_AGENT_SENTINEL]
+    assert hook._dedup_store_id("shared-session", seen[0]) == "shared-session"
