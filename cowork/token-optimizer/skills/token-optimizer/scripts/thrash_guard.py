@@ -307,6 +307,11 @@ def _workspace_changed_since(store, ts: float) -> bool:
     Reads the session's activity log, which records every tool use with a
     timestamp. If the agent edited files between two runs of the same
     command, byte-identical output is not evidence of a stuck loop.
+
+    ``store`` must be the BARE-SESSION store (``SessionStore(session_id)``),
+    because that is where ``context_intel.py`` writes ``activity_log``. Passing
+    the agent-scoped streak store here would read an empty log for subagents and
+    make edit-detection inert (issue #190 follow-up).
     """
     try:
         row = store._connect().execute(
@@ -441,6 +446,21 @@ def check(
         body = _heredoc_body(command)
         has_inline_script = body is not None and len(body) >= INLINE_SCRIPT_MIN_CHARS
         store = SessionStore(store_identity)
+        # Edit-detection reads activity_log, which context_intel.py writes to the
+        # BARE-session store (SessionStore(session_id)), NOT the agent-scoped
+        # streak store. For a subagent, store_identity != session_id, so the
+        # agent-scoped store's activity_log is empty; reading it there would make
+        # the "workspace changed since last run" suppression inert and produce a
+        # false thrash nudge (issue #190 follow-up). Streak state stays on the
+        # agent-scoped ``store``; only the activity_log lookup uses this one. In
+        # the main/no-agent path store_identity == session_id, so this is the
+        # same store object and behavior is byte-identical.
+        if store_identity == session_id:
+            activity_store = store
+            _own_activity_store = False
+        else:
+            activity_store = SessionStore(session_id)
+            _own_activity_store = True
         try:
             # Acquire a write lock BEFORE the read so the get-compute-upsert
             # sequence is atomic: two concurrent hook processes cannot both
@@ -462,7 +482,9 @@ def check(
             workspace_changed = (
                 bool(prior) and not fresh
                 and prior.get("output_hash") == out_h
-                and _workspace_changed_since(store, float(prior.get("last_ts") or 0))
+                and _workspace_changed_since(
+                    activity_store, float(prior.get("last_ts") or 0)
+                )
             )
 
             # --- Identical-output streak (existing signal) ---
@@ -576,5 +598,7 @@ def check(
             return None
         finally:
             store.close()
+            if _own_activity_store:
+                activity_store.close()
     except Exception:
         return None

@@ -485,6 +485,56 @@ def test_edit_detection_uses_timestamps(guard):
     assert guard.check(cmd, out, now=t0 + 2) is not None  # streak 3: fire
 
 
+def test_edit_detection_reads_bare_session_activity_log_for_subagent(guard):
+    """A subagent's edit-detection must read the BARE-session activity_log.
+
+    Streaks are agent-scoped (issue #189), so a subagent's thrash streaks live
+    in SessionStore(store_id). But activity_log is written by context_intel.py
+    to the BARE-session store SessionStore(session_id). If edit-detection read
+    activity_log from the agent-scoped store it would find an empty log for a
+    subagent, the "workspace changed since last run" suppression would go inert,
+    and a subagent that legitimately edited a file between two byte-identical
+    runs would get a FALSE thrash nudge (issue #190 follow-up).
+
+    Here the subagent runs a command twice, edits a file (logged to the bare
+    session store, exactly as context_intel does), then runs it twice more.
+    With edit-detection reading the bare-session log, the edit restarts the
+    streak and both post-edit runs stay silent; without the fix the agent-scoped
+    log is empty, streak reaches the threshold, and the third run falsely fires.
+    """
+    session_id = os.environ["CLAUDE_SESSION_ID"]
+    sub_id = session_id + "-agent-deadbeef01"  # distinct, valid scoped id
+    cmd = "python3 report.py"
+    out = "report body\n"
+    t0 = time.time()
+    # Subagent runs twice under its OWN scoped store: streak 2.
+    guard.check(cmd, out, now=t0, store_id=sub_id)
+    guard.check(cmd, out, now=t0 + 1, store_id=sub_id)
+    # The subagent edits a file; context_intel logs it to the BARE session store.
+    _log_edit(t0 + 2)
+    # Without reading the bare-session activity_log these two runs would reach
+    # streak 3/4 on the agent-scoped store and FALSELY fire; the edit must reset.
+    assert guard.check(cmd, out, now=t0 + 3, store_id=sub_id) is None
+    assert guard.check(cmd, out, now=t0 + 4, store_id=sub_id) is None
+    # Edit-detection is not disabled: a fresh streak with no further edit fires.
+    assert guard.check(cmd, out, now=t0 + 5, store_id=sub_id) is not None
+
+
+def test_edit_detection_main_agent_path_unchanged(guard):
+    """The main/no-agent path (store_id=None, store_identity == session_id) must
+    behave exactly as before: an edit between identical runs resets the streak,
+    reading the same bare-session activity_log it always did."""
+    cmd = "python3 report.py"
+    out = "report body\n"
+    t0 = time.time()
+    guard.check(cmd, out, now=t0)
+    guard.check(cmd, out, now=t0 + 1)
+    _log_edit(t0 + 2)  # bare session store == the store the main path keys on
+    assert guard.check(cmd, out, now=t0 + 3) is None
+    assert guard.check(cmd, out, now=t0 + 4) is None
+    assert guard.check(cmd, out, now=t0 + 5) is not None  # fresh streak fires
+
+
 def test_burn_nudge_fires_on_third_failure_with_different_output(guard):
     cmd = "gcc -o image image.c -lm && ./image 2>&1"
     # Three failures, each with different output
