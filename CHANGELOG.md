@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [5.13.16] - 2026-09-17
 
 - Fix: the Hermes context-fill nudge measured the session-CUMULATIVE input tally instead of the live
   prompt, so it reported a context emergency that did not exist. Every host re-sends the whole
@@ -13,6 +13,28 @@
   model window M"). The cumulative tally is unchanged for cost and usage reporting. Regression tests:
   `tests/test_hermes_context_fill_nudge.py` (3 of the 5 original cases fail on the previous code,
   plus a cache-write case so the live figure is not undercounted on a cache-creation turn).
+
+- Fix: Bash cross-turn output dedup and the repeat-command thrash nudge were keyed only by session, so
+  a subagent could be told its output was "identical to your previous output", or that a command "has
+  run N times this session", for work only the main agent had done. Both are now scoped to session plus
+  agent identity: a supplied agent id is treated as an opaque identity (never normalized or merged),
+  while a missing, empty, or whitespace-only id falls back to the historical session-only identity so
+  the main-agent case is unchanged. The thrash guard's edit-detection reads the shared session activity
+  log, so a subagent that edits a file between two identical runs still suppresses the false "stuck in a
+  loop" nudge. (issue #189)
+
+- Fix: the Windows hook launcher could select an incomplete or unreadable runtime version. It now admits
+  only versioned install dirs whose `run.py` actually opens, choosing the newest that does and skipping
+  incomplete, unreadable, or zero-byte candidates before falling back to the baked install. This replaces
+  a readability check that was a no-op on Windows and removes a case where an unreadable candidate could
+  cause the wrong version to be selected on some Python versions. Argv, stdin, and environment
+  forwarding are unchanged. (issue #188)
+
+- Fix: `health` and `kill-stale` found no running sessions when Claude Code is launched by the Claude
+  Desktop app under WSL2, because the desktop starts a versioned `ccd-cli` binary rather than a `claude`
+  binary, so session detection never matched. Detection now also recognizes the ccd-cli launcher via an
+  anchored, version-shaped path match on the process command, which excludes bundled helpers and
+  unrelated processes so no false sessions are counted. (issue #192)
 
 ## [5.13.15] - 2026-09-16
 
