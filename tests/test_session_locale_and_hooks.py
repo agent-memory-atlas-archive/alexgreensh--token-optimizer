@@ -236,12 +236,23 @@ result = {
     # POSITIVE: the versioned WSL 2 desktop launcher must be detected as a
     # `claude` session even though argv[0]'s basename is the version string.
     "ccd_matches_claude": m(ccd, "claude"),
-    # Also with a home-relative path form as some ps outputs abbreviate it.
-    "ccd_home_relative": m("~/.claude/remote/ccd-cli/2.1.271 --model x", "claude"),
+    # POSITIVE: a non-standard-HOME absolute path (e.g. WSL 2 /mnt/c) still
+    # matches. `ps`/`/proc/<pid>/cmdline` never emit a literal `~`; they give an
+    # absolute or relative real path, so an abbreviated-`~` case would be fake.
+    "ccd_home_relative": m("/mnt/c/Users/alex/.claude/remote/ccd-cli/2.1.271 --model x", "claude"),
     # NEGATIVE: must not satisfy a codex probe (no false cross-runtime match).
     "ccd_not_codex": m("/home/user/.claude/remote/ccd-cli/2.1.271", "codex"),
     # NEGATIVE: the launcher path appearing only as an ARGUMENT must not match.
     "path_as_arg": m("/usr/bin/vim /home/user/.claude/remote/ccd-cli/notes.txt", "claude"),
+    # NEGATIVE: a bundled/spawned binary UNDER the version dir (e.g. ripgrep)
+    # must not match -- the version-shaped basename is anchored to the end.
+    "ccd_bundled_binary": m("/home/u/.claude/remote/ccd-cli/2.1.271/rg", "claude"),
+    # NEGATIVE: a non-version helper file under the ccd-cli dir must not match.
+    "ccd_helper_script": m("/home/u/.claude/remote/ccd-cli/helper.sh", "claude"),
+    # NEGATIVE: an in-progress `.download` partial must not match.
+    "ccd_download_partial": m("/home/u/.claude/remote/ccd-cli/2.1.271.download", "claude"),
+    # NEGATIVE: the bare ccd-cli directory itself must not match.
+    "ccd_bare_dir": m("/home/u/.claude/remote/ccd-cli/", "claude"),
     # NEGATIVE: an unrelated remote-relay server process must not be swept in.
     "relay_server": m("/home/user/.claude/remote/srv/abc123/server --serve --socket /x", "claude"),
     # REGRESSION: the pre-existing bare/basename matches still work.
@@ -257,9 +268,13 @@ def test_ccd_cli_launcher_detected_issue_192():
     assert r.returncode == 0, f"probe crashed: {r.stderr}"
     res = json.loads(r.stdout.strip().splitlines()[-1])
     assert res["ccd_matches_claude"], "WSL 2 ccd-cli launcher not detected as a claude session"
-    assert res["ccd_home_relative"], "home-relative ccd-cli launcher not detected"
+    assert res["ccd_home_relative"], "non-standard-HOME absolute ccd-cli launcher not detected"
     assert not res["ccd_not_codex"], "ccd-cli launcher wrongly matched a codex probe"
     assert not res["path_as_arg"], "ccd-cli path matched when it was only an argument"
+    assert not res["ccd_bundled_binary"], "bundled binary under the ccd-cli version dir wrongly matched"
+    assert not res["ccd_helper_script"], "non-version ccd-cli helper file wrongly matched"
+    assert not res["ccd_download_partial"], "ccd-cli .download partial wrongly matched"
+    assert not res["ccd_bare_dir"], "bare ccd-cli directory wrongly matched"
     assert not res["relay_server"], "remote relay server process wrongly matched as a claude session"
     assert res["bare_claude"], "regression: bare `claude` no longer matches"
     assert res["basename_claude"], "regression: absolute-path claude basename no longer matches"

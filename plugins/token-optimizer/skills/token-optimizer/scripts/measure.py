@@ -22440,6 +22440,15 @@ def _find_session_version_for_pid(pid):
 
 
 _CCD_CLI_LAUNCHER_SEGMENT = "/.claude/remote/ccd-cli/"
+# The remote launcher's argv[0] IS the versioned binary, whose basename is the
+# bare version (e.g. `.../ccd-cli/2.1.271`, optionally `.exe` on Windows). Anchor
+# to that version-shaped basename so a bundled/spawned binary under the version
+# dir (`.../ccd-cli/2.1.271/rg`), a non-version file (`.../ccd-cli/helper.sh`), a
+# `.download` partial, or the bare directory do NOT match. A bare-substring test
+# swept all of those in and inflated the session count. See issue #192.
+_CCD_CLI_LAUNCHER_RE = re.compile(
+    re.escape(_CCD_CLI_LAUNCHER_SEGMENT) + r"\d+(?:\.\d+)+(?:\.exe)?$"
+)
 
 
 def _command_matches_process(command, process_name):
@@ -22461,11 +22470,15 @@ def _command_matches_process(command, process_name):
     ``~/.claude/remote/ccd-cli/2.1.271 --output-format stream-json ...``),
     notably under WSL 2 where ``claude`` is not on ``PATH``. The executable
     basename is then the bare version string, so the basename comparison can
-    never match. Recognise that launcher by its distinctive ``argv[0]`` path
-    segment instead. Restricted to ``process_name == "claude"`` (Codex is not
-    launched this way) and to ``argv[0]`` (so the path appearing only as an
-    argument does not match), which keeps the match from catching unrelated
-    processes. See issue #192.
+    never match. Recognise that launcher by an anchored, version-shaped
+    ``argv[0]`` match (``.../.claude/remote/ccd-cli/<version>``): a bare
+    substring test was too loose and also swept in bundled binaries under the
+    version dir (``.../ccd-cli/<version>/rg``), helper scripts
+    (``.../ccd-cli/helper.sh``), ``.download`` partials, and the bare directory,
+    inflating the session count. Restricted to ``process_name == "claude"``
+    (Codex is not launched this way) and to ``argv[0]`` (so the path appearing
+    only as an argument does not match), which keeps the match from catching
+    unrelated processes. See issue #192.
     """
     command = (command or "").strip()
     if not command:
@@ -22473,7 +22486,7 @@ def _command_matches_process(command, process_name):
     if command == process_name or command.startswith(process_name + " "):
         return True
     argv0 = command.split()[0]
-    if process_name == "claude" and _CCD_CLI_LAUNCHER_SEGMENT in argv0:
+    if process_name == "claude" and _CCD_CLI_LAUNCHER_RE.search(argv0):
         return True
     exe_base = os.path.basename(argv0)
     if exe_base.endswith(".exe"):
