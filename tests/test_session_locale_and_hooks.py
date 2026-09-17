@@ -224,6 +224,93 @@ def test_verbosity_min_fill_is_clamped():
 
 # ---------- 4. Dual-tree parity ----------
 
+# ---------- 3. Claude Desktop / WSL 2 ccd-cli launcher (issue #192) ----------
+
+_MATCHER_PROBE = """
+import sys; sys.path.insert(0, '.')
+import json
+import measure
+m = measure._command_matches_process
+ccd = "/home/user/.claude/remote/ccd-cli/2.1.271 --output-format stream-json --verbose"
+result = {
+    # POSITIVE: the versioned WSL 2 desktop launcher must be detected as a
+    # `claude` session even though argv[0]'s basename is the version string.
+    "ccd_matches_claude": m(ccd, "claude"),
+    # Also with a home-relative path form as some ps outputs abbreviate it.
+    "ccd_home_relative": m("~/.claude/remote/ccd-cli/2.1.271 --model x", "claude"),
+    # NEGATIVE: must not satisfy a codex probe (no false cross-runtime match).
+    "ccd_not_codex": m("/home/user/.claude/remote/ccd-cli/2.1.271", "codex"),
+    # NEGATIVE: the launcher path appearing only as an ARGUMENT must not match.
+    "path_as_arg": m("/usr/bin/vim /home/user/.claude/remote/ccd-cli/notes.txt", "claude"),
+    # NEGATIVE: an unrelated remote-relay server process must not be swept in.
+    "relay_server": m("/home/user/.claude/remote/srv/abc123/server --serve --socket /x", "claude"),
+    # REGRESSION: the pre-existing bare/basename matches still work.
+    "bare_claude": m("claude --resume abc", "claude"),
+    "basename_claude": m("/usr/local/lib/node_modules/@anthropic-ai/claude-code/bin/claude", "claude"),
+}
+print(json.dumps(result))
+"""
+
+
+def test_ccd_cli_launcher_detected_issue_192():
+    r = _run(_MATCHER_PROBE)
+    assert r.returncode == 0, f"probe crashed: {r.stderr}"
+    res = json.loads(r.stdout.strip().splitlines()[-1])
+    assert res["ccd_matches_claude"], "WSL 2 ccd-cli launcher not detected as a claude session"
+    assert res["ccd_home_relative"], "home-relative ccd-cli launcher not detected"
+    assert not res["ccd_not_codex"], "ccd-cli launcher wrongly matched a codex probe"
+    assert not res["path_as_arg"], "ccd-cli path matched when it was only an argument"
+    assert not res["relay_server"], "remote relay server process wrongly matched as a claude session"
+    assert res["bare_claude"], "regression: bare `claude` no longer matches"
+    assert res["basename_claude"], "regression: absolute-path claude basename no longer matches"
+
+
+_CCD_COLLECT_PROBE = """
+import sys; sys.path.insert(0, '.')
+import json
+import subprocess as sp
+import measure
+
+# A synthetic `ps` table: header + the two Claude Desktop WSL 2 processes from
+# issue #192 (relay `server` and the versioned `ccd-cli` Code session) plus an
+# unrelated process. Only the ccd-cli line is a real Claude Code CLI session.
+_PS = (
+    "  PID TTY      STARTED                        ELAPSED COMMAND\\n"
+    " 4242 ??       Mon Sep 15 09:00:00 2026         01:00 "
+    "/home/user/.claude/remote/ccd-cli/2.1.271 --output-format stream-json --verbose --model sonnet\\n"
+    " 4200 ??       Mon Sep 15 08:59:00 2026         02:00 "
+    "/home/user/.claude/remote/srv/abc123/server --serve --socket /home/user/.claude/remote/run/x/s\\n"
+    " 9999 pts/0    Mon Sep 15 09:30:00 2026         00:30 node /path/to/app.js\\n"
+)
+
+class _R:
+    returncode = 0
+    stdout = _PS
+    stderr = ""
+
+sp.run = lambda *a, **k: _R()
+sessions = measure._collect_posix_claude_sessions("claude")
+pids = sorted(s["pid"] for s in sessions)
+print(json.dumps({"pids": pids}))
+"""
+
+
+def test_ccd_cli_session_collected_end_to_end_issue_192():
+    r = _run(_CCD_COLLECT_PROBE)
+    assert r.returncode == 0, f"probe crashed: {r.stderr}"
+    res = json.loads(r.stdout.strip().splitlines()[-1])
+    # Exactly the ccd-cli Code session (pid 4242): the relay `server` and the
+    # unrelated `node` process must be excluded.
+    assert res["pids"] == [4242], f"expected only the ccd-cli session, got {res['pids']}"
+
+
+def test_ccd_cli_source_documents_issue_192():
+    src = MEASURE.read_text(encoding="utf-8")
+    assert "/.claude/remote/ccd-cli/" in src, \
+        "ccd-cli launcher segment missing from the process matcher"
+    assert "issue #192" in src, "issue #192 reference missing from measure.py"
+
+
 def test_measure_py_dual_tree_parity():
     """The canonical skills/ measure.py and the generated plugins/ mirror must
     be byte-identical, or these tests (which read the plugins/ copy) could pass

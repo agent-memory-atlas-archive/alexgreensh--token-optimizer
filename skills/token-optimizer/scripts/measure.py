@@ -22439,6 +22439,9 @@ def _find_session_version_for_pid(pid):
     return None  # No confident match; don't guess (causes false OUTDATED flags)
 
 
+_CCD_CLI_LAUNCHER_SEGMENT = "/.claude/remote/ccd-cli/"
+
+
 def _command_matches_process(command, process_name):
     """True if a `ps` COMMAND field denotes a `process_name` CLI session.
 
@@ -22451,13 +22454,28 @@ def _command_matches_process(command, process_name):
     desktop app (``/Applications/Claude.app/Contents/MacOS/Claude``) is not
     mistaken for the ``claude`` CLI, and ``claude`` appearing only as an
     argument (``vim claude.py``) does not match.
+
+    Claude Desktop's "Code" tab launches Claude Code through a remote
+    launcher whose ``argv[0]`` is a VERSIONED binary under
+    ``~/.claude/remote/ccd-cli/<version>`` (e.g.
+    ``~/.claude/remote/ccd-cli/2.1.271 --output-format stream-json ...``),
+    notably under WSL 2 where ``claude`` is not on ``PATH``. The executable
+    basename is then the bare version string, so the basename comparison can
+    never match. Recognise that launcher by its distinctive ``argv[0]`` path
+    segment instead. Restricted to ``process_name == "claude"`` (Codex is not
+    launched this way) and to ``argv[0]`` (so the path appearing only as an
+    argument does not match), which keeps the match from catching unrelated
+    processes. See issue #192.
     """
     command = (command or "").strip()
     if not command:
         return False
     if command == process_name or command.startswith(process_name + " "):
         return True
-    exe_base = os.path.basename(command.split()[0])
+    argv0 = command.split()[0]
+    if process_name == "claude" and _CCD_CLI_LAUNCHER_SEGMENT in argv0:
+        return True
+    exe_base = os.path.basename(argv0)
     if exe_base.endswith(".exe"):
         exe_base = exe_base[:-4]
     return exe_base == process_name
@@ -23009,12 +23027,18 @@ def health_selfcheck():
         and _m("/usr/local/lib/node_modules/@anthropic-ai/claude-code/bin/claude", "claude")
         and _m("/usr/local/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe --resume abc", "claude")
         and _m("/opt/homebrew/bin/codex serve", "codex")
+        # Claude Desktop / WSL 2 launcher: versioned ccd-cli binary (issue #192)
+        and _m("/home/user/.claude/remote/ccd-cli/2.1.271 --output-format stream-json --verbose", "claude")
         and not _m("/Applications/Claude.app/Contents/MacOS/Claude", "claude")
         and not _m("/usr/bin/vim claude.py", "claude")
         and not _m("node /path/to/app.js", "claude")
+        # ccd-cli launcher must NOT satisfy a codex probe, and must NOT match
+        # when the path appears only as an argument.
+        and not _m("/home/user/.claude/remote/ccd-cli/2.1.271", "codex")
+        and not _m("/usr/bin/vim /home/user/.claude/remote/ccd-cli/notes.txt", "claude")
         and not _m("", "claude")
     )
-    check("process-name matcher (basename + .exe)", matcher_ok)
+    check("process-name matcher (basename + .exe + ccd-cli)", matcher_ok)
 
     # Live process-listing command
     if system == "Windows":
