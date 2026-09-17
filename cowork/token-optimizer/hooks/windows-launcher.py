@@ -107,7 +107,9 @@ def main(argv: list[str] | None = None) -> None:
     # retired base64 bootstrap documented).
     try:
         versions = [p for p in root.parent.iterdir() if p.is_dir()
-                    and _SEMVER_DIR_RE.fullmatch(p.name)]
+                    and _SEMVER_DIR_RE.fullmatch(p.name)
+                    and (p / "hooks" / "run.py").is_file()
+                    and os.access(p / "hooks" / "run.py", os.R_OK)]
         root = max(versions,
                    key=lambda p: tuple(map(int, p.name.split("."))),
                    default=root)
