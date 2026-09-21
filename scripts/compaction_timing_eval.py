@@ -24,7 +24,13 @@ SESSION_KEYS = {"session_id", "source_group_id", "host", "scenario", "provenance
 CHECKPOINT_KEYS = {"checkpoint_id", "occupancy_pct", "quality_score", "compaction_depth", "settled", "completion_cue", "pending_work", "checkpoint_age_seconds", "cold_resume_available", "safe_boundary", "next_turn_needed_older_context", "policy_observed"}
 PROVENANCE = {"real", "sanitized_real", "synthetic"}
 POLICIES = ("current_advisory", "semantic_boundary", "hybrid")
-ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+ID_PATTERNS = {
+    "corpus": re.compile(r"^corpus-[0-9a-f]{16,64}$"),
+    "session": re.compile(r"^session-[0-9a-f]{16,64}$"),
+    "group": re.compile(r"^group-[0-9a-f]{16,64}$"),
+    "checkpoint": re.compile(r"^checkpoint-[0-9]{1,12}$"),
+}
+HOSTS = {"claude", "codex", "opencode", "openclaw", "hermes", "copilot", "cursor", "antigravity", "cowork", "grok", "pi"}
 MAX_INPUT_BYTES = 10_000_000
 MAX_SESSIONS = 10_000
 MAX_CHECKPOINTS = 100_000
@@ -41,13 +47,16 @@ def occupancy_band(value: float) -> str:
     return "80+"
 
 
-def _bounded_string(value, label: str, *, identifier: bool = False) -> str:
-    if not isinstance(value, str) or not value or len(value) > (128 if identifier else MAX_METADATA_LENGTH):
+def _bounded_string(value, label: str) -> str:
+    if not isinstance(value, str) or not value or len(value) > MAX_METADATA_LENGTH:
         raise ValueError(f"{label} must be a non-empty bounded string")
-    if identifier and not ID_RE.fullmatch(value):
-        raise ValueError(f"{label} must use only anonymous ID characters")
     return value
 
+
+def _typed_id(value, label: str, kind: str) -> str:
+    if not isinstance(value, str) or not ID_PATTERNS[kind].fullmatch(value):
+        raise ValueError(f"{label} must be an opaque {kind}-typed identifier")
+    return value
 
 def _metadata(value, source: str) -> dict:
     if value is None:
@@ -68,7 +77,7 @@ def _metadata(value, source: str) -> dict:
                 raise ValueError(f"{source}: split_role must be train or evaluation")
             clean[key] = item
         else:
-            clean[key] = _bounded_string(item, f"{source}: corpus.{key}", identifier=True)
+            clean[key] = _typed_id(item, f"{source}: corpus.{key}", "corpus")
     return clean
 
 
@@ -103,9 +112,11 @@ def validate_corpus(data: dict, source: str = "corpus") -> None:
         unknown_session = set(session) - SESSION_KEYS
         if unknown_session:
             raise ValueError(f"{source}: session {s_idx} has unknown fields: {', '.join(sorted(unknown_session))}")
-        sid = _bounded_string(session.get("session_id"), f"{source}: session {s_idx} session_id", identifier=True)
-        group_id = _bounded_string(session.get("source_group_id"), f"{source}: {sid} source_group_id", identifier=True)
-        _bounded_string(session.get("host"), f"{source}: {sid} host", identifier=True)
+        sid = _typed_id(session.get("session_id"), f"{source}: session {s_idx} session_id", "session")
+        group_id = _typed_id(session.get("source_group_id"), f"{source}: {sid} source_group_id", "group")
+        _bounded_string(session.get("host"), f"{source}: {sid} host")
+        if session["host"] not in HOSTS:
+            raise ValueError(f"{source}: {sid} has unsupported host")
         if sid in seen:
             raise ValueError(f"{source}: session {s_idx} has duplicate session_id")
         seen.add(sid)
@@ -129,7 +140,7 @@ def validate_corpus(data: dict, source: str = "corpus") -> None:
             unknown_checkpoint = set(cp) - CHECKPOINT_KEYS
             if unknown_checkpoint:
                 raise ValueError(f"{source}: {sid} checkpoint {c_idx} has unknown fields: {', '.join(sorted(unknown_checkpoint))}")
-            cid = _bounded_string(cp.get("checkpoint_id"), f"{source}: {sid} checkpoint_id", identifier=True)
+            cid = _typed_id(cp.get("checkpoint_id"), f"{source}: {sid} checkpoint_id", "checkpoint")
             if cid in cp_seen:
                 raise ValueError(f"{source}: {sid} duplicate checkpoint_id")
             cp_seen.add(cid)
@@ -149,7 +160,7 @@ def validate_corpus(data: dict, source: str = "corpus") -> None:
             if age is not None and (isinstance(age, bool) or not isinstance(age, (int, float)) or age < 0 or not math.isfinite(age)):
                 raise ValueError(f"{source}: {sid}/{cid} invalid checkpoint age")
             overrides = cp.get("policy_observed", {})
-            if not isinstance(overrides, dict) or any(k not in POLICIES or not isinstance(v, bool) for k, v in overrides.items()):
+            if not isinstance(overrides, dict) or any(k != "current_advisory" or not isinstance(v, bool) for k, v in overrides.items()):
                 raise ValueError(f"{source}: {sid}/{cid} invalid policy_observed")
             if session["provenance"] != "synthetic" and "current_advisory" not in overrides:
                 raise ValueError(f"{source}: {sid}/{cid} real-session replay requires policy_observed.current_advisory")
@@ -169,7 +180,7 @@ def assert_disjoint(train: dict, evaluation: dict) -> None:
 
 def policy_decision(name: str, cp: dict) -> bool:
     observed = cp.get("policy_observed", {})
-    if name in observed:
+    if name == "current_advisory" and name in observed:
         return observed[name]
     risk = cp["occupancy_pct"] >= 90 or (cp["occupancy_pct"] >= 45 and cp["quality_score"] < 70)
     semantic = cp["settled"] and cp["completion_cue"] and not cp["pending_work"]
@@ -188,7 +199,7 @@ def _rate(successes: int, total: int) -> dict:
 
 
 def _cluster_bootstrap(rows: list[dict], name: str, metric: str, samples: int = 2000) -> list[float] | None:
-    """Percentile interval from whole-session resampling, never checkpoint resampling."""
+    """Percentile interval from whole-source-group resampling, never checkpoint resampling."""
     grouped: dict[str, list[dict]] = defaultdict(list)
     for row in rows:
         grouped[row["session"]["source_group_id"]].append(row)

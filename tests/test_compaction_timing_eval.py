@@ -108,12 +108,12 @@ def test_metadata_rejects_free_text_in_every_possible_field():
         with pytest.raises(ValueError, match="unknown corpus metadata"):
             mod.validate_corpus(data)
     data = corpus(); data["corpus"]["corpus_id"] = secret
-    with pytest.raises(ValueError, match="anonymous ID characters"):
+    with pytest.raises(ValueError, match="opaque corpus-typed identifier"):
         mod.validate_corpus(data)
 
 
 def test_identifiers_and_host_are_bounded_anonymous_strings():
-    for field, value in (("session_id", "has spaces"), ("source_group_id", ["bad"]), ("host", ["bad"])):
+    for field, value in (("session_id", "session-secret_words"), ("source_group_id", "group-secret:words"), ("host", "secret-host")):
         data = corpus(); data["sessions"][0][field] = value
         with pytest.raises(ValueError):
             mod.validate_corpus(data)
@@ -127,7 +127,7 @@ def test_boolean_is_not_a_number():
 
 def test_group_and_renamed_duplicate_leakage_are_rejected():
     data = corpus(); left = copy.deepcopy(data["sessions"][0]); right = copy.deepcopy(left)
-    right["session_id"] = "renamed-session"; right["source_group_id"] = "renamed-group"
+    right["session_id"] = "session-aaaaaaaaaaaaaaaa"; right["source_group_id"] = "group-bbbbbbbbbbbbbbbb"
     train = {"schema_version": 1, "corpus": {}, "sessions": [left]}
     evaluation = {"schema_version": 1, "corpus": {}, "sessions": [right]}
     with pytest.raises(ValueError, match="content signature leakage"):
@@ -141,7 +141,7 @@ def test_randomized_splits_keep_groups_and_signatures_disjoint():
     data = corpus()
     # Deliberately add renamed byte-equivalent sessions under the same source group.
     for original in list(data["sessions"][:5]):
-        duplicate = copy.deepcopy(original); duplicate["session_id"] += "-duplicate"
+        duplicate = copy.deepcopy(original); duplicate["session_id"] = "session-" + __import__("hashlib").sha256((duplicate["session_id"] + str(seed if False else len(data["sessions"]))).encode()).hexdigest()[:16]
         data["sessions"].append(duplicate)
     for seed in range(30):
         train, evaluation = mod.split_corpus(data, .7, seed)
@@ -158,10 +158,10 @@ def test_cli_malformed_inputs_exit_two_without_traceback(tmp_path):
 
 
 def test_split_outputs_only_safe_metadata():
-    data = corpus(); data["corpus"] = {"corpus_id": "private-corpus"}
+    data = corpus(); data["corpus"] = {"corpus_id": "corpus-aaaaaaaaaaaaaaaa"}
     train, evaluation = mod.split_corpus(data, .7, 4)
-    assert train["corpus"] == {"corpus_id": "private-corpus", "split_role": "train", "split_seed": 4}
-    assert evaluation["corpus"] == {"corpus_id": "private-corpus", "split_role": "evaluation", "split_seed": 4}
+    assert train["corpus"] == {"corpus_id": "corpus-aaaaaaaaaaaaaaaa", "split_role": "train", "split_seed": 4}
+    assert evaluation["corpus"] == {"corpus_id": "corpus-aaaaaaaaaaaaaaaa", "split_role": "evaluation", "split_seed": 4}
 
 
 def test_hybrid_honors_observed_current_decision_truth_table():
@@ -203,6 +203,28 @@ def test_real_rows_require_observed_current_advisory():
     for cp in data["sessions"][0]["checkpoints"]:
         cp["policy_observed"] = {"current_advisory": False}
     mod.validate_corpus(data)
+
+
+def test_encoded_prose_rejected_on_every_string_route():
+    attacks = ("USER:my_secret_raw_prompt_content", "USER-my-secret-raw-prompt-content", "USER_my_secret_raw_prompt_content")
+    for attack in attacks:
+        data = corpus(); data["corpus"]["corpus_id"] = attack
+        with pytest.raises(ValueError): mod.validate_corpus(data)
+        for field in ("session_id", "source_group_id", "host"):
+            data = corpus(); data["sessions"][0][field] = attack
+            with pytest.raises(ValueError): mod.validate_corpus(data)
+        data = corpus(); data["sessions"][0]["checkpoints"][0]["checkpoint_id"] = attack
+        with pytest.raises(ValueError): mod.validate_corpus(data)
+
+
+def test_conflicting_hybrid_override_is_rejected_and_cannot_bypass_current():
+    data = corpus(); cp = data["sessions"][0]["checkpoints"][0]
+    cp["policy_observed"] = {"current_advisory": False, "hybrid": True}
+    with pytest.raises(ValueError, match="invalid policy_observed"):
+        mod.validate_corpus(data)
+    # Even an unvalidated hostile dict cannot override derived hybrid behavior.
+    cp.update(settled=True, completion_cue=True, pending_work=False)
+    assert mod.policy_decision("hybrid", cp) is False
 
 def test_cli_rejects_session_leakage(tmp_path):
     data = corpus(); train = tmp_path / "train.json"; evaluation = tmp_path / "eval.json"

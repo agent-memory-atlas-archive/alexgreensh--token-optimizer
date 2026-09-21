@@ -1,17 +1,17 @@
 {
   "schema_version": 1,
   "corpus": {
-    "corpus_id": "challenge-v1"
+    "corpus_id": "corpus-17b5c7859182adec"
   },
   "sessions": [
     {
-      "session_id": "session-mid_task_coding-0",
+      "session_id": "session-ae4f75684ef4ff41",
       "host": "claude",
       "scenario": "mid_task_coding",
       "provenance": "synthetic",
       "checkpoints": [
         {
-          "checkpoint_id": "mid-0-0",
+          "checkpoint_id": "checkpoint-1",
           "occupancy_pct": 42,
           "quality_score": 66,
           "compaction_depth": 0,
@@ -24,7 +24,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "mid-0-1",
+          "checkpoint_id": "checkpoint-2",
           "occupancy_pct": 58,
           "quality_score": 58,
           "compaction_depth": 0,
@@ -37,7 +37,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "mid-0-2",
+          "checkpoint_id": "checkpoint-3",
           "occupancy_pct": 74,
           "quality_score": 50,
           "compaction_depth": 0,
@@ -50,7 +50,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "mid-0-3",
+          "checkpoint_id": "checkpoint-4",
           "occupancy_pct": 86,
           "quality_score": 44,
           "compaction_depth": 0,
@@ -63,16 +63,16 @@
           "next_turn_needed_older_context": false
         }
       ],
-      "source_group_id": "session-mid_task_coding-0"
+      "source_group_id": "group-ae4f75684ef4ff41"
     },
     {
-      "session_id": "session-mid_task_coding-1",
+      "session_id": "session-2c64784c613164d1",
       "host": "claude",
       "scenario": "mid_task_coding",
       "provenance": "synthetic",
       "checkpoints": [
         {
-          "checkpoint_id": "mid-1-0",
+          "checkpoint_id": "checkpoint-1",
           "occupancy_pct": 42,
           "quality_score": 66,
           "compaction_depth": 0,
@@ -85,7 +85,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "mid-1-1",
+          "checkpoint_id": "checkpoint-2",
           "occupancy_pct": 58,
           "quality_score": 58,
           "compaction_depth": 0,
@@ -98,7 +98,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "mid-1-2",
+          "checkpoint_id": "checkpoint-3",
           "occupancy_pct": 74,
           "quality_score": 50,
           "compaction_depth": 0,
@@ -111,7 +111,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "mid-1-3",
+          "checkpoint_id": "checkpoint-4",
           "occupancy_pct": 86,
           "quality_score": 44,
           "compaction_depth": 1,
@@ -124,16 +124,16 @@
           "next_turn_needed_older_context": true
         }
       ],
-      "source_group_id": "session-mid_task_coding-1"
+      "source_group_id": "group-2c64784c613164d1"
     },
     {
-      "session_id": "session-mid_task_coding-2",
+      "session_id": "session-773cddca8fbf91b1",
       "host": "claude",
       "scenario": "mid_task_coding",
       "provenance": "synthetic",
       "checkpoints": [
         {
-          "checkpoint_id": "mid-2-0",
+          "checkpoint_id": "checkpoint-1",
           "occupancy_pct": 42,
           "quality_score": 66,
           "compaction_depth": 0,
@@ -146,7 +146,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "mid-2-1",
+          "checkpoint_id": "checkpoint-2",
           "occupancy_pct": 58,
           "quality_score": 58,
           "compaction_depth": 0,
@@ -159,7 +159,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "mid-2-2",
+          "checkpoint_id": "checkpoint-3",
           "occupancy_pct": 74,
           "quality_score": 50,
           "compaction_depth": 0,
@@ -172,7 +172,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "mid-2-3",
+          "checkpoint_id": "checkpoint-4",
           "occupancy_pct": 86,
           "quality_score": 44,
           "compaction_depth": 0,
@@ -185,16 +185,16 @@
           "next_turn_needed_older_context": true
         }
       ],
-      "source_group_id": "session-mid_task_coding-2"
+      "source_group_id": "group-773cddca8fbf91b1"
     },
     {
-      "session_id": "session-mid_task_coding-3",
+      "session_id": "session-8cf123a88e9a136a",
       "host": "claude",
       "scenario": "mid_task_coding",
       "provenance": "synthetic",
       "checkpoints": [
         {
-          "checkpoint_id": "mid-3-0",
+          "checkpoint_id": "checkpoint-1",
           "occupancy_pct": 42,
           "quality_score": 66,
           "compaction_depth": 0,
@@ -207,7 +207,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "mid-3-1",
+          "checkpoint_id": "checkpoint-2",
           "occupancy_pct": 58,
           "quality_score": 58,
           "compaction_depth": 0,
@@ -220,7 +220,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "mid-3-2",
+          "checkpoint_id": "checkpoint-3",
           "occupancy_pct": 74,
           "quality_score": 50,
           "compaction_depth": 0,
@@ -233,7 +233,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "mid-3-3",
+          "checkpoint_id": "checkpoint-4",
           "occupancy_pct": 86,
           "quality_score": 44,
           "compaction_depth": 1,
@@ -246,16 +246,16 @@
           "next_turn_needed_older_context": false
         }
       ],
-      "source_group_id": "session-mid_task_coding-3"
+      "source_group_id": "group-8cf123a88e9a136a"
     },
     {
-      "session_id": "session-mid_task_coding-4",
+      "session_id": "session-31edd653d2ad231e",
       "host": "claude",
       "scenario": "mid_task_coding",
       "provenance": "synthetic",
       "checkpoints": [
         {
-          "checkpoint_id": "mid-4-0",
+          "checkpoint_id": "checkpoint-1",
           "occupancy_pct": 42,
           "quality_score": 66,
           "compaction_depth": 0,
@@ -268,7 +268,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "mid-4-1",
+          "checkpoint_id": "checkpoint-2",
           "occupancy_pct": 58,
           "quality_score": 58,
           "compaction_depth": 0,
@@ -281,7 +281,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "mid-4-2",
+          "checkpoint_id": "checkpoint-3",
           "occupancy_pct": 74,
           "quality_score": 50,
           "compaction_depth": 0,
@@ -294,7 +294,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "mid-4-3",
+          "checkpoint_id": "checkpoint-4",
           "occupancy_pct": 86,
           "quality_score": 44,
           "compaction_depth": 0,
@@ -307,16 +307,16 @@
           "next_turn_needed_older_context": true
         }
       ],
-      "source_group_id": "session-mid_task_coding-4"
+      "source_group_id": "group-31edd653d2ad231e"
     },
     {
-      "session_id": "session-mid_task_coding-5",
+      "session_id": "session-2b6ad547268ba137",
       "host": "claude",
       "scenario": "mid_task_coding",
       "provenance": "synthetic",
       "checkpoints": [
         {
-          "checkpoint_id": "mid-5-0",
+          "checkpoint_id": "checkpoint-1",
           "occupancy_pct": 42,
           "quality_score": 66,
           "compaction_depth": 0,
@@ -329,7 +329,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "mid-5-1",
+          "checkpoint_id": "checkpoint-2",
           "occupancy_pct": 58,
           "quality_score": 58,
           "compaction_depth": 0,
@@ -342,7 +342,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "mid-5-2",
+          "checkpoint_id": "checkpoint-3",
           "occupancy_pct": 74,
           "quality_score": 50,
           "compaction_depth": 0,
@@ -355,7 +355,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "mid-5-3",
+          "checkpoint_id": "checkpoint-4",
           "occupancy_pct": 86,
           "quality_score": 44,
           "compaction_depth": 1,
@@ -368,16 +368,16 @@
           "next_turn_needed_older_context": true
         }
       ],
-      "source_group_id": "session-mid_task_coding-5"
+      "source_group_id": "group-2b6ad547268ba137"
     },
     {
-      "session_id": "session-coordination-0",
+      "session_id": "session-5d8c28860fb28006",
       "host": "codex",
       "scenario": "coordination",
       "provenance": "synthetic",
       "checkpoints": [
         {
-          "checkpoint_id": "coo-0-0",
+          "checkpoint_id": "checkpoint-1",
           "occupancy_pct": 42,
           "quality_score": 74,
           "compaction_depth": 0,
@@ -390,7 +390,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "coo-0-1",
+          "checkpoint_id": "checkpoint-2",
           "occupancy_pct": 58,
           "quality_score": 66,
           "compaction_depth": 0,
@@ -403,7 +403,7 @@
           "next_turn_needed_older_context": false
         },
         {
-          "checkpoint_id": "coo-0-2",
+          "checkpoint_id": "checkpoint-3",
           "occupancy_pct": 74,
           "quality_score": 58,
           "compaction_depth": 0,
@@ -416,7 +416,7 @@
           "next_turn_needed_older_context": false
         },
         {
-          "checkpoint_id": "coo-0-3",
+          "checkpoint_id": "checkpoint-4",
           "occupancy_pct": 86,
           "quality_score": 52,
           "compaction_depth": 0,
@@ -429,16 +429,16 @@
           "next_turn_needed_older_context": false
         }
       ],
-      "source_group_id": "session-coordination-0"
+      "source_group_id": "group-5d8c28860fb28006"
     },
     {
-      "session_id": "session-coordination-1",
+      "session_id": "session-0d6ca316f3f0daae",
       "host": "codex",
       "scenario": "coordination",
       "provenance": "synthetic",
       "checkpoints": [
         {
-          "checkpoint_id": "coo-1-0",
+          "checkpoint_id": "checkpoint-1",
           "occupancy_pct": 42,
           "quality_score": 74,
           "compaction_depth": 0,
@@ -451,7 +451,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "coo-1-1",
+          "checkpoint_id": "checkpoint-2",
           "occupancy_pct": 58,
           "quality_score": 66,
           "compaction_depth": 0,
@@ -464,7 +464,7 @@
           "next_turn_needed_older_context": false
         },
         {
-          "checkpoint_id": "coo-1-2",
+          "checkpoint_id": "checkpoint-3",
           "occupancy_pct": 74,
           "quality_score": 58,
           "compaction_depth": 0,
@@ -477,7 +477,7 @@
           "next_turn_needed_older_context": false
         },
         {
-          "checkpoint_id": "coo-1-3",
+          "checkpoint_id": "checkpoint-4",
           "occupancy_pct": 86,
           "quality_score": 52,
           "compaction_depth": 1,
@@ -490,16 +490,16 @@
           "next_turn_needed_older_context": false
         }
       ],
-      "source_group_id": "session-coordination-1"
+      "source_group_id": "group-0d6ca316f3f0daae"
     },
     {
-      "session_id": "session-coordination-2",
+      "session_id": "session-c4b24056d0044372",
       "host": "codex",
       "scenario": "coordination",
       "provenance": "synthetic",
       "checkpoints": [
         {
-          "checkpoint_id": "coo-2-0",
+          "checkpoint_id": "checkpoint-1",
           "occupancy_pct": 42,
           "quality_score": 74,
           "compaction_depth": 0,
@@ -512,7 +512,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "coo-2-1",
+          "checkpoint_id": "checkpoint-2",
           "occupancy_pct": 58,
           "quality_score": 66,
           "compaction_depth": 0,
@@ -525,7 +525,7 @@
           "next_turn_needed_older_context": false
         },
         {
-          "checkpoint_id": "coo-2-2",
+          "checkpoint_id": "checkpoint-3",
           "occupancy_pct": 74,
           "quality_score": 58,
           "compaction_depth": 0,
@@ -538,7 +538,7 @@
           "next_turn_needed_older_context": false
         },
         {
-          "checkpoint_id": "coo-2-3",
+          "checkpoint_id": "checkpoint-4",
           "occupancy_pct": 86,
           "quality_score": 52,
           "compaction_depth": 0,
@@ -551,16 +551,16 @@
           "next_turn_needed_older_context": false
         }
       ],
-      "source_group_id": "session-coordination-2"
+      "source_group_id": "group-c4b24056d0044372"
     },
     {
-      "session_id": "session-coordination-3",
+      "session_id": "session-715ed84d9f30d27f",
       "host": "codex",
       "scenario": "coordination",
       "provenance": "synthetic",
       "checkpoints": [
         {
-          "checkpoint_id": "coo-3-0",
+          "checkpoint_id": "checkpoint-1",
           "occupancy_pct": 42,
           "quality_score": 74,
           "compaction_depth": 0,
@@ -573,7 +573,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "coo-3-1",
+          "checkpoint_id": "checkpoint-2",
           "occupancy_pct": 58,
           "quality_score": 66,
           "compaction_depth": 0,
@@ -586,7 +586,7 @@
           "next_turn_needed_older_context": false
         },
         {
-          "checkpoint_id": "coo-3-2",
+          "checkpoint_id": "checkpoint-3",
           "occupancy_pct": 74,
           "quality_score": 58,
           "compaction_depth": 0,
@@ -599,7 +599,7 @@
           "next_turn_needed_older_context": false
         },
         {
-          "checkpoint_id": "coo-3-3",
+          "checkpoint_id": "checkpoint-4",
           "occupancy_pct": 86,
           "quality_score": 52,
           "compaction_depth": 1,
@@ -612,16 +612,16 @@
           "next_turn_needed_older_context": false
         }
       ],
-      "source_group_id": "session-coordination-3"
+      "source_group_id": "group-715ed84d9f30d27f"
     },
     {
-      "session_id": "session-coordination-4",
+      "session_id": "session-a62c90586004ad41",
       "host": "codex",
       "scenario": "coordination",
       "provenance": "synthetic",
       "checkpoints": [
         {
-          "checkpoint_id": "coo-4-0",
+          "checkpoint_id": "checkpoint-1",
           "occupancy_pct": 42,
           "quality_score": 74,
           "compaction_depth": 0,
@@ -634,7 +634,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "coo-4-1",
+          "checkpoint_id": "checkpoint-2",
           "occupancy_pct": 58,
           "quality_score": 66,
           "compaction_depth": 0,
@@ -647,7 +647,7 @@
           "next_turn_needed_older_context": false
         },
         {
-          "checkpoint_id": "coo-4-2",
+          "checkpoint_id": "checkpoint-3",
           "occupancy_pct": 74,
           "quality_score": 58,
           "compaction_depth": 0,
@@ -660,7 +660,7 @@
           "next_turn_needed_older_context": false
         },
         {
-          "checkpoint_id": "coo-4-3",
+          "checkpoint_id": "checkpoint-4",
           "occupancy_pct": 86,
           "quality_score": 52,
           "compaction_depth": 0,
@@ -673,16 +673,16 @@
           "next_turn_needed_older_context": false
         }
       ],
-      "source_group_id": "session-coordination-4"
+      "source_group_id": "group-a62c90586004ad41"
     },
     {
-      "session_id": "session-coordination-5",
+      "session_id": "session-8e02fa220acdad6e",
       "host": "codex",
       "scenario": "coordination",
       "provenance": "synthetic",
       "checkpoints": [
         {
-          "checkpoint_id": "coo-5-0",
+          "checkpoint_id": "checkpoint-1",
           "occupancy_pct": 42,
           "quality_score": 74,
           "compaction_depth": 0,
@@ -695,7 +695,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "coo-5-1",
+          "checkpoint_id": "checkpoint-2",
           "occupancy_pct": 58,
           "quality_score": 66,
           "compaction_depth": 0,
@@ -708,7 +708,7 @@
           "next_turn_needed_older_context": false
         },
         {
-          "checkpoint_id": "coo-5-2",
+          "checkpoint_id": "checkpoint-3",
           "occupancy_pct": 74,
           "quality_score": 58,
           "compaction_depth": 0,
@@ -721,7 +721,7 @@
           "next_turn_needed_older_context": false
         },
         {
-          "checkpoint_id": "coo-5-3",
+          "checkpoint_id": "checkpoint-4",
           "occupancy_pct": 86,
           "quality_score": 52,
           "compaction_depth": 1,
@@ -734,16 +734,16 @@
           "next_turn_needed_older_context": false
         }
       ],
-      "source_group_id": "session-coordination-5"
+      "source_group_id": "group-8e02fa220acdad6e"
     },
     {
-      "session_id": "session-blocked_work-0",
+      "session_id": "session-0e07276b620cbf13",
       "host": "opencode",
       "scenario": "blocked_work",
       "provenance": "synthetic",
       "checkpoints": [
         {
-          "checkpoint_id": "blo-0-0",
+          "checkpoint_id": "checkpoint-1",
           "occupancy_pct": 42,
           "quality_score": 74,
           "compaction_depth": 0,
@@ -756,7 +756,7 @@
           "next_turn_needed_older_context": false
         },
         {
-          "checkpoint_id": "blo-0-1",
+          "checkpoint_id": "checkpoint-2",
           "occupancy_pct": 58,
           "quality_score": 66,
           "compaction_depth": 0,
@@ -769,7 +769,7 @@
           "next_turn_needed_older_context": false
         },
         {
-          "checkpoint_id": "blo-0-2",
+          "checkpoint_id": "checkpoint-3",
           "occupancy_pct": 74,
           "quality_score": 58,
           "compaction_depth": 0,
@@ -782,7 +782,7 @@
           "next_turn_needed_older_context": false
         },
         {
-          "checkpoint_id": "blo-0-3",
+          "checkpoint_id": "checkpoint-4",
           "occupancy_pct": 86,
           "quality_score": 52,
           "compaction_depth": 0,
@@ -795,16 +795,16 @@
           "next_turn_needed_older_context": false
         }
       ],
-      "source_group_id": "session-blocked_work-0"
+      "source_group_id": "group-0e07276b620cbf13"
     },
     {
-      "session_id": "session-blocked_work-1",
+      "session_id": "session-e575b5457d14280b",
       "host": "opencode",
       "scenario": "blocked_work",
       "provenance": "synthetic",
       "checkpoints": [
         {
-          "checkpoint_id": "blo-1-0",
+          "checkpoint_id": "checkpoint-1",
           "occupancy_pct": 42,
           "quality_score": 74,
           "compaction_depth": 0,
@@ -817,7 +817,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "blo-1-1",
+          "checkpoint_id": "checkpoint-2",
           "occupancy_pct": 58,
           "quality_score": 66,
           "compaction_depth": 0,
@@ -830,7 +830,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "blo-1-2",
+          "checkpoint_id": "checkpoint-3",
           "occupancy_pct": 74,
           "quality_score": 58,
           "compaction_depth": 0,
@@ -843,7 +843,7 @@
           "next_turn_needed_older_context": false
         },
         {
-          "checkpoint_id": "blo-1-3",
+          "checkpoint_id": "checkpoint-4",
           "occupancy_pct": 86,
           "quality_score": 52,
           "compaction_depth": 1,
@@ -856,16 +856,16 @@
           "next_turn_needed_older_context": true
         }
       ],
-      "source_group_id": "session-blocked_work-1"
+      "source_group_id": "group-e575b5457d14280b"
     },
     {
-      "session_id": "session-blocked_work-2",
+      "session_id": "session-0db279dbd7ffe2c9",
       "host": "opencode",
       "scenario": "blocked_work",
       "provenance": "synthetic",
       "checkpoints": [
         {
-          "checkpoint_id": "blo-2-0",
+          "checkpoint_id": "checkpoint-1",
           "occupancy_pct": 42,
           "quality_score": 74,
           "compaction_depth": 0,
@@ -878,7 +878,7 @@
           "next_turn_needed_older_context": false
         },
         {
-          "checkpoint_id": "blo-2-1",
+          "checkpoint_id": "checkpoint-2",
           "occupancy_pct": 58,
           "quality_score": 66,
           "compaction_depth": 0,
@@ -891,7 +891,7 @@
           "next_turn_needed_older_context": false
         },
         {
-          "checkpoint_id": "blo-2-2",
+          "checkpoint_id": "checkpoint-3",
           "occupancy_pct": 74,
           "quality_score": 58,
           "compaction_depth": 0,
@@ -904,7 +904,7 @@
           "next_turn_needed_older_context": false
         },
         {
-          "checkpoint_id": "blo-2-3",
+          "checkpoint_id": "checkpoint-4",
           "occupancy_pct": 86,
           "quality_score": 52,
           "compaction_depth": 0,
@@ -917,16 +917,16 @@
           "next_turn_needed_older_context": false
         }
       ],
-      "source_group_id": "session-blocked_work-2"
+      "source_group_id": "group-0db279dbd7ffe2c9"
     },
     {
-      "session_id": "session-blocked_work-3",
+      "session_id": "session-1bdee964c7fbbdc4",
       "host": "opencode",
       "scenario": "blocked_work",
       "provenance": "synthetic",
       "checkpoints": [
         {
-          "checkpoint_id": "blo-3-0",
+          "checkpoint_id": "checkpoint-1",
           "occupancy_pct": 42,
           "quality_score": 74,
           "compaction_depth": 0,
@@ -939,7 +939,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "blo-3-1",
+          "checkpoint_id": "checkpoint-2",
           "occupancy_pct": 58,
           "quality_score": 66,
           "compaction_depth": 0,
@@ -952,7 +952,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "blo-3-2",
+          "checkpoint_id": "checkpoint-3",
           "occupancy_pct": 74,
           "quality_score": 58,
           "compaction_depth": 0,
@@ -965,7 +965,7 @@
           "next_turn_needed_older_context": false
         },
         {
-          "checkpoint_id": "blo-3-3",
+          "checkpoint_id": "checkpoint-4",
           "occupancy_pct": 86,
           "quality_score": 52,
           "compaction_depth": 1,
@@ -978,16 +978,16 @@
           "next_turn_needed_older_context": true
         }
       ],
-      "source_group_id": "session-blocked_work-3"
+      "source_group_id": "group-1bdee964c7fbbdc4"
     },
     {
-      "session_id": "session-blocked_work-4",
+      "session_id": "session-1c7646e8d440016a",
       "host": "opencode",
       "scenario": "blocked_work",
       "provenance": "synthetic",
       "checkpoints": [
         {
-          "checkpoint_id": "blo-4-0",
+          "checkpoint_id": "checkpoint-1",
           "occupancy_pct": 42,
           "quality_score": 74,
           "compaction_depth": 0,
@@ -1000,7 +1000,7 @@
           "next_turn_needed_older_context": false
         },
         {
-          "checkpoint_id": "blo-4-1",
+          "checkpoint_id": "checkpoint-2",
           "occupancy_pct": 58,
           "quality_score": 66,
           "compaction_depth": 0,
@@ -1013,7 +1013,7 @@
           "next_turn_needed_older_context": false
         },
         {
-          "checkpoint_id": "blo-4-2",
+          "checkpoint_id": "checkpoint-3",
           "occupancy_pct": 74,
           "quality_score": 58,
           "compaction_depth": 0,
@@ -1026,7 +1026,7 @@
           "next_turn_needed_older_context": false
         },
         {
-          "checkpoint_id": "blo-4-3",
+          "checkpoint_id": "checkpoint-4",
           "occupancy_pct": 86,
           "quality_score": 52,
           "compaction_depth": 0,
@@ -1039,16 +1039,16 @@
           "next_turn_needed_older_context": false
         }
       ],
-      "source_group_id": "session-blocked_work-4"
+      "source_group_id": "group-1c7646e8d440016a"
     },
     {
-      "session_id": "session-blocked_work-5",
+      "session_id": "session-c6675d5179ca802d",
       "host": "opencode",
       "scenario": "blocked_work",
       "provenance": "synthetic",
       "checkpoints": [
         {
-          "checkpoint_id": "blo-5-0",
+          "checkpoint_id": "checkpoint-1",
           "occupancy_pct": 42,
           "quality_score": 74,
           "compaction_depth": 0,
@@ -1061,7 +1061,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "blo-5-1",
+          "checkpoint_id": "checkpoint-2",
           "occupancy_pct": 58,
           "quality_score": 66,
           "compaction_depth": 0,
@@ -1074,7 +1074,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "blo-5-2",
+          "checkpoint_id": "checkpoint-3",
           "occupancy_pct": 74,
           "quality_score": 58,
           "compaction_depth": 0,
@@ -1087,7 +1087,7 @@
           "next_turn_needed_older_context": false
         },
         {
-          "checkpoint_id": "blo-5-3",
+          "checkpoint_id": "checkpoint-4",
           "occupancy_pct": 86,
           "quality_score": 52,
           "compaction_depth": 1,
@@ -1100,16 +1100,16 @@
           "next_turn_needed_older_context": true
         }
       ],
-      "source_group_id": "session-blocked_work-5"
+      "source_group_id": "group-c6675d5179ca802d"
     },
     {
-      "session_id": "session-agent_fanout-0",
+      "session_id": "session-dd2274f44c02dbce",
       "host": "hermes",
       "scenario": "agent_fanout",
       "provenance": "synthetic",
       "checkpoints": [
         {
-          "checkpoint_id": "age-0-0",
+          "checkpoint_id": "checkpoint-1",
           "occupancy_pct": 42,
           "quality_score": 66,
           "compaction_depth": 0,
@@ -1122,7 +1122,7 @@
           "next_turn_needed_older_context": false
         },
         {
-          "checkpoint_id": "age-0-1",
+          "checkpoint_id": "checkpoint-2",
           "occupancy_pct": 58,
           "quality_score": 58,
           "compaction_depth": 0,
@@ -1135,7 +1135,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "age-0-2",
+          "checkpoint_id": "checkpoint-3",
           "occupancy_pct": 74,
           "quality_score": 50,
           "compaction_depth": 0,
@@ -1148,7 +1148,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "age-0-3",
+          "checkpoint_id": "checkpoint-4",
           "occupancy_pct": 86,
           "quality_score": 44,
           "compaction_depth": 0,
@@ -1161,16 +1161,16 @@
           "next_turn_needed_older_context": true
         }
       ],
-      "source_group_id": "session-agent_fanout-0"
+      "source_group_id": "group-dd2274f44c02dbce"
     },
     {
-      "session_id": "session-agent_fanout-1",
+      "session_id": "session-21d7fdfca0478ba7",
       "host": "hermes",
       "scenario": "agent_fanout",
       "provenance": "synthetic",
       "checkpoints": [
         {
-          "checkpoint_id": "age-1-0",
+          "checkpoint_id": "checkpoint-1",
           "occupancy_pct": 42,
           "quality_score": 66,
           "compaction_depth": 0,
@@ -1183,7 +1183,7 @@
           "next_turn_needed_older_context": false
         },
         {
-          "checkpoint_id": "age-1-1",
+          "checkpoint_id": "checkpoint-2",
           "occupancy_pct": 58,
           "quality_score": 58,
           "compaction_depth": 0,
@@ -1196,7 +1196,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "age-1-2",
+          "checkpoint_id": "checkpoint-3",
           "occupancy_pct": 74,
           "quality_score": 50,
           "compaction_depth": 0,
@@ -1209,7 +1209,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "age-1-3",
+          "checkpoint_id": "checkpoint-4",
           "occupancy_pct": 86,
           "quality_score": 44,
           "compaction_depth": 1,
@@ -1222,16 +1222,16 @@
           "next_turn_needed_older_context": false
         }
       ],
-      "source_group_id": "session-agent_fanout-1"
+      "source_group_id": "group-21d7fdfca0478ba7"
     },
     {
-      "session_id": "session-agent_fanout-2",
+      "session_id": "session-72544553de560b72",
       "host": "hermes",
       "scenario": "agent_fanout",
       "provenance": "synthetic",
       "checkpoints": [
         {
-          "checkpoint_id": "age-2-0",
+          "checkpoint_id": "checkpoint-1",
           "occupancy_pct": 42,
           "quality_score": 66,
           "compaction_depth": 0,
@@ -1244,7 +1244,7 @@
           "next_turn_needed_older_context": false
         },
         {
-          "checkpoint_id": "age-2-1",
+          "checkpoint_id": "checkpoint-2",
           "occupancy_pct": 58,
           "quality_score": 58,
           "compaction_depth": 0,
@@ -1257,7 +1257,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "age-2-2",
+          "checkpoint_id": "checkpoint-3",
           "occupancy_pct": 74,
           "quality_score": 50,
           "compaction_depth": 0,
@@ -1270,7 +1270,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "age-2-3",
+          "checkpoint_id": "checkpoint-4",
           "occupancy_pct": 86,
           "quality_score": 44,
           "compaction_depth": 0,
@@ -1283,16 +1283,16 @@
           "next_turn_needed_older_context": true
         }
       ],
-      "source_group_id": "session-agent_fanout-2"
+      "source_group_id": "group-72544553de560b72"
     },
     {
-      "session_id": "session-agent_fanout-3",
+      "session_id": "session-77b6ff92301e10d5",
       "host": "hermes",
       "scenario": "agent_fanout",
       "provenance": "synthetic",
       "checkpoints": [
         {
-          "checkpoint_id": "age-3-0",
+          "checkpoint_id": "checkpoint-1",
           "occupancy_pct": 42,
           "quality_score": 66,
           "compaction_depth": 0,
@@ -1305,7 +1305,7 @@
           "next_turn_needed_older_context": false
         },
         {
-          "checkpoint_id": "age-3-1",
+          "checkpoint_id": "checkpoint-2",
           "occupancy_pct": 58,
           "quality_score": 58,
           "compaction_depth": 0,
@@ -1318,7 +1318,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "age-3-2",
+          "checkpoint_id": "checkpoint-3",
           "occupancy_pct": 74,
           "quality_score": 50,
           "compaction_depth": 0,
@@ -1331,7 +1331,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "age-3-3",
+          "checkpoint_id": "checkpoint-4",
           "occupancy_pct": 86,
           "quality_score": 44,
           "compaction_depth": 1,
@@ -1344,16 +1344,16 @@
           "next_turn_needed_older_context": true
         }
       ],
-      "source_group_id": "session-agent_fanout-3"
+      "source_group_id": "group-77b6ff92301e10d5"
     },
     {
-      "session_id": "session-agent_fanout-4",
+      "session_id": "session-220ecc83a84f5af4",
       "host": "hermes",
       "scenario": "agent_fanout",
       "provenance": "synthetic",
       "checkpoints": [
         {
-          "checkpoint_id": "age-4-0",
+          "checkpoint_id": "checkpoint-1",
           "occupancy_pct": 42,
           "quality_score": 66,
           "compaction_depth": 0,
@@ -1366,7 +1366,7 @@
           "next_turn_needed_older_context": false
         },
         {
-          "checkpoint_id": "age-4-1",
+          "checkpoint_id": "checkpoint-2",
           "occupancy_pct": 58,
           "quality_score": 58,
           "compaction_depth": 0,
@@ -1379,7 +1379,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "age-4-2",
+          "checkpoint_id": "checkpoint-3",
           "occupancy_pct": 74,
           "quality_score": 50,
           "compaction_depth": 0,
@@ -1392,7 +1392,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "age-4-3",
+          "checkpoint_id": "checkpoint-4",
           "occupancy_pct": 86,
           "quality_score": 44,
           "compaction_depth": 0,
@@ -1405,16 +1405,16 @@
           "next_turn_needed_older_context": false
         }
       ],
-      "source_group_id": "session-agent_fanout-4"
+      "source_group_id": "group-220ecc83a84f5af4"
     },
     {
-      "session_id": "session-agent_fanout-5",
+      "session_id": "session-b0b2e8ceff1add5d",
       "host": "hermes",
       "scenario": "agent_fanout",
       "provenance": "synthetic",
       "checkpoints": [
         {
-          "checkpoint_id": "age-5-0",
+          "checkpoint_id": "checkpoint-1",
           "occupancy_pct": 42,
           "quality_score": 66,
           "compaction_depth": 0,
@@ -1427,7 +1427,7 @@
           "next_turn_needed_older_context": false
         },
         {
-          "checkpoint_id": "age-5-1",
+          "checkpoint_id": "checkpoint-2",
           "occupancy_pct": 58,
           "quality_score": 58,
           "compaction_depth": 0,
@@ -1440,7 +1440,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "age-5-2",
+          "checkpoint_id": "checkpoint-3",
           "occupancy_pct": 74,
           "quality_score": 50,
           "compaction_depth": 0,
@@ -1453,7 +1453,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "age-5-3",
+          "checkpoint_id": "checkpoint-4",
           "occupancy_pct": 86,
           "quality_score": 44,
           "compaction_depth": 1,
@@ -1466,16 +1466,16 @@
           "next_turn_needed_older_context": true
         }
       ],
-      "source_group_id": "session-agent_fanout-5"
+      "source_group_id": "group-b0b2e8ceff1add5d"
     },
     {
-      "session_id": "session-long_supervision-0",
+      "session_id": "session-c3e69027ff9ccd6a",
       "host": "claude",
       "scenario": "long_supervision",
       "provenance": "synthetic",
       "checkpoints": [
         {
-          "checkpoint_id": "lon-0-0",
+          "checkpoint_id": "checkpoint-1",
           "occupancy_pct": 42,
           "quality_score": 74,
           "compaction_depth": 0,
@@ -1488,7 +1488,7 @@
           "next_turn_needed_older_context": false
         },
         {
-          "checkpoint_id": "lon-0-1",
+          "checkpoint_id": "checkpoint-2",
           "occupancy_pct": 58,
           "quality_score": 66,
           "compaction_depth": 0,
@@ -1501,7 +1501,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "lon-0-2",
+          "checkpoint_id": "checkpoint-3",
           "occupancy_pct": 74,
           "quality_score": 58,
           "compaction_depth": 0,
@@ -1514,7 +1514,7 @@
           "next_turn_needed_older_context": false
         },
         {
-          "checkpoint_id": "lon-0-3",
+          "checkpoint_id": "checkpoint-4",
           "occupancy_pct": 86,
           "quality_score": 52,
           "compaction_depth": 0,
@@ -1527,16 +1527,16 @@
           "next_turn_needed_older_context": true
         }
       ],
-      "source_group_id": "session-long_supervision-0"
+      "source_group_id": "group-c3e69027ff9ccd6a"
     },
     {
-      "session_id": "session-long_supervision-1",
+      "session_id": "session-91c3edbbc611b649",
       "host": "claude",
       "scenario": "long_supervision",
       "provenance": "synthetic",
       "checkpoints": [
         {
-          "checkpoint_id": "lon-1-0",
+          "checkpoint_id": "checkpoint-1",
           "occupancy_pct": 42,
           "quality_score": 74,
           "compaction_depth": 0,
@@ -1549,7 +1549,7 @@
           "next_turn_needed_older_context": false
         },
         {
-          "checkpoint_id": "lon-1-1",
+          "checkpoint_id": "checkpoint-2",
           "occupancy_pct": 58,
           "quality_score": 66,
           "compaction_depth": 0,
@@ -1562,7 +1562,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "lon-1-2",
+          "checkpoint_id": "checkpoint-3",
           "occupancy_pct": 74,
           "quality_score": 58,
           "compaction_depth": 0,
@@ -1575,129 +1575,7 @@
           "next_turn_needed_older_context": false
         },
         {
-          "checkpoint_id": "lon-1-3",
-          "occupancy_pct": 86,
-          "quality_score": 52,
-          "compaction_depth": 1,
-          "settled": true,
-          "completion_cue": true,
-          "pending_work": false,
-          "checkpoint_age_seconds": 240,
-          "cold_resume_available": true,
-          "safe_boundary": true,
-          "next_turn_needed_older_context": false
-        }
-      ],
-      "source_group_id": "session-long_supervision-1"
-    },
-    {
-      "session_id": "session-long_supervision-2",
-      "host": "claude",
-      "scenario": "long_supervision",
-      "provenance": "synthetic",
-      "checkpoints": [
-        {
-          "checkpoint_id": "lon-2-0",
-          "occupancy_pct": 42,
-          "quality_score": 74,
-          "compaction_depth": 0,
-          "settled": true,
-          "completion_cue": true,
-          "pending_work": false,
-          "checkpoint_age_seconds": 900,
-          "cold_resume_available": true,
-          "safe_boundary": true,
-          "next_turn_needed_older_context": false
-        },
-        {
-          "checkpoint_id": "lon-2-1",
-          "occupancy_pct": 58,
-          "quality_score": 66,
-          "compaction_depth": 0,
-          "settled": false,
-          "completion_cue": false,
-          "pending_work": true,
-          "checkpoint_age_seconds": 240,
-          "cold_resume_available": true,
-          "safe_boundary": false,
-          "next_turn_needed_older_context": true
-        },
-        {
-          "checkpoint_id": "lon-2-2",
-          "occupancy_pct": 74,
-          "quality_score": 58,
-          "compaction_depth": 0,
-          "settled": true,
-          "completion_cue": true,
-          "pending_work": false,
-          "checkpoint_age_seconds": 240,
-          "cold_resume_available": true,
-          "safe_boundary": true,
-          "next_turn_needed_older_context": false
-        },
-        {
-          "checkpoint_id": "lon-2-3",
-          "occupancy_pct": 86,
-          "quality_score": 52,
-          "compaction_depth": 0,
-          "settled": true,
-          "completion_cue": true,
-          "pending_work": false,
-          "checkpoint_age_seconds": 240,
-          "cold_resume_available": true,
-          "safe_boundary": true,
-          "next_turn_needed_older_context": true
-        }
-      ],
-      "source_group_id": "session-long_supervision-2"
-    },
-    {
-      "session_id": "session-long_supervision-3",
-      "host": "claude",
-      "scenario": "long_supervision",
-      "provenance": "synthetic",
-      "checkpoints": [
-        {
-          "checkpoint_id": "lon-3-0",
-          "occupancy_pct": 42,
-          "quality_score": 74,
-          "compaction_depth": 0,
-          "settled": true,
-          "completion_cue": true,
-          "pending_work": false,
-          "checkpoint_age_seconds": 900,
-          "cold_resume_available": true,
-          "safe_boundary": true,
-          "next_turn_needed_older_context": false
-        },
-        {
-          "checkpoint_id": "lon-3-1",
-          "occupancy_pct": 58,
-          "quality_score": 66,
-          "compaction_depth": 0,
-          "settled": false,
-          "completion_cue": false,
-          "pending_work": true,
-          "checkpoint_age_seconds": 240,
-          "cold_resume_available": true,
-          "safe_boundary": false,
-          "next_turn_needed_older_context": true
-        },
-        {
-          "checkpoint_id": "lon-3-2",
-          "occupancy_pct": 74,
-          "quality_score": 58,
-          "compaction_depth": 0,
-          "settled": true,
-          "completion_cue": true,
-          "pending_work": false,
-          "checkpoint_age_seconds": 240,
-          "cold_resume_available": true,
-          "safe_boundary": true,
-          "next_turn_needed_older_context": false
-        },
-        {
-          "checkpoint_id": "lon-3-3",
+          "checkpoint_id": "checkpoint-4",
           "occupancy_pct": 86,
           "quality_score": 52,
           "compaction_depth": 1,
@@ -1710,16 +1588,16 @@
           "next_turn_needed_older_context": false
         }
       ],
-      "source_group_id": "session-long_supervision-3"
+      "source_group_id": "group-91c3edbbc611b649"
     },
     {
-      "session_id": "session-long_supervision-4",
+      "session_id": "session-dc2631857c1da999",
       "host": "claude",
       "scenario": "long_supervision",
       "provenance": "synthetic",
       "checkpoints": [
         {
-          "checkpoint_id": "lon-4-0",
+          "checkpoint_id": "checkpoint-1",
           "occupancy_pct": 42,
           "quality_score": 74,
           "compaction_depth": 0,
@@ -1732,7 +1610,7 @@
           "next_turn_needed_older_context": false
         },
         {
-          "checkpoint_id": "lon-4-1",
+          "checkpoint_id": "checkpoint-2",
           "occupancy_pct": 58,
           "quality_score": 66,
           "compaction_depth": 0,
@@ -1745,7 +1623,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "lon-4-2",
+          "checkpoint_id": "checkpoint-3",
           "occupancy_pct": 74,
           "quality_score": 58,
           "compaction_depth": 0,
@@ -1758,7 +1636,7 @@
           "next_turn_needed_older_context": false
         },
         {
-          "checkpoint_id": "lon-4-3",
+          "checkpoint_id": "checkpoint-4",
           "occupancy_pct": 86,
           "quality_score": 52,
           "compaction_depth": 0,
@@ -1771,16 +1649,16 @@
           "next_turn_needed_older_context": true
         }
       ],
-      "source_group_id": "session-long_supervision-4"
+      "source_group_id": "group-dc2631857c1da999"
     },
     {
-      "session_id": "session-long_supervision-5",
+      "session_id": "session-6d78ed292026ff31",
       "host": "claude",
       "scenario": "long_supervision",
       "provenance": "synthetic",
       "checkpoints": [
         {
-          "checkpoint_id": "lon-5-0",
+          "checkpoint_id": "checkpoint-1",
           "occupancy_pct": 42,
           "quality_score": 74,
           "compaction_depth": 0,
@@ -1793,7 +1671,7 @@
           "next_turn_needed_older_context": false
         },
         {
-          "checkpoint_id": "lon-5-1",
+          "checkpoint_id": "checkpoint-2",
           "occupancy_pct": 58,
           "quality_score": 66,
           "compaction_depth": 0,
@@ -1806,7 +1684,7 @@
           "next_turn_needed_older_context": true
         },
         {
-          "checkpoint_id": "lon-5-2",
+          "checkpoint_id": "checkpoint-3",
           "occupancy_pct": 74,
           "quality_score": 58,
           "compaction_depth": 0,
@@ -1819,7 +1697,7 @@
           "next_turn_needed_older_context": false
         },
         {
-          "checkpoint_id": "lon-5-3",
+          "checkpoint_id": "checkpoint-4",
           "occupancy_pct": 86,
           "quality_score": 52,
           "compaction_depth": 1,
@@ -1832,7 +1710,129 @@
           "next_turn_needed_older_context": false
         }
       ],
-      "source_group_id": "session-long_supervision-5"
+      "source_group_id": "group-6d78ed292026ff31"
+    },
+    {
+      "session_id": "session-e1dd7e831811ac29",
+      "host": "claude",
+      "scenario": "long_supervision",
+      "provenance": "synthetic",
+      "checkpoints": [
+        {
+          "checkpoint_id": "checkpoint-1",
+          "occupancy_pct": 42,
+          "quality_score": 74,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": true,
+          "pending_work": false,
+          "checkpoint_age_seconds": 900,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-2",
+          "occupancy_pct": 58,
+          "quality_score": 66,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-3",
+          "occupancy_pct": 74,
+          "quality_score": 58,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": true,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-4",
+          "occupancy_pct": 86,
+          "quality_score": 52,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": true,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": true
+        }
+      ],
+      "source_group_id": "group-e1dd7e831811ac29"
+    },
+    {
+      "session_id": "session-7d30231e02339f2f",
+      "host": "claude",
+      "scenario": "long_supervision",
+      "provenance": "synthetic",
+      "checkpoints": [
+        {
+          "checkpoint_id": "checkpoint-1",
+          "occupancy_pct": 42,
+          "quality_score": 74,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": true,
+          "pending_work": false,
+          "checkpoint_age_seconds": 900,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-2",
+          "occupancy_pct": 58,
+          "quality_score": 66,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-3",
+          "occupancy_pct": 74,
+          "quality_score": 58,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": true,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-4",
+          "occupancy_pct": 86,
+          "quality_score": 52,
+          "compaction_depth": 1,
+          "settled": true,
+          "completion_cue": true,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        }
+      ],
+      "source_group_id": "group-7d30231e02339f2f"
     }
   ]
 }

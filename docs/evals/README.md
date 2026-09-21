@@ -39,15 +39,15 @@ Raw message text is rejected. Unknown fields fail validation.
 | Level | Field | Required | Values / limits |
 |---|---|---:|---|
 | root | `schema_version` | yes | integer `1` |
-| root | `corpus` | no | object; only anonymous `corpus_id` plus generated split fields |
+| root | `corpus` | no | object; optional opaque `corpus_id` (`corpus-` + 16-64 lowercase hex) plus generated split fields |
 | root | `sessions` | yes | 1-10,000 session objects |
-| session | `session_id` | yes | stable anonymous ID, <=128 characters; letters, numbers, `. _ : -` |
-| session | `source_group_id` | yes | same format; identical/derived sessions share one group |
-| session | `host` | yes | anonymous host label in the same safe ID format |
+| session | `session_id` | yes | opaque `session-` + 16-64 lowercase hex characters |
+| session | `source_group_id` | yes | opaque `group-` + 16-64 lowercase hex characters; identical/derived sessions share one group |
+| session | `host` | yes | closed enum: `claude`, `codex`, `opencode`, `openclaw`, `hermes`, `copilot`, `cursor`, `antigravity`, `cowork`, `grok`, or `pi` |
 | session | `scenario` | yes | `mid_task_coding`, `coordination`, `blocked_work`, `agent_fanout`, or `long_supervision` |
 | session | `provenance` | yes | `real`, `sanitized_real`, or `synthetic` |
 | session | `checkpoints` | yes | non-empty; at most 100,000 total |
-| checkpoint | `checkpoint_id` | yes | anonymous ID format |
+| checkpoint | `checkpoint_id` | yes | `checkpoint-` + 1-12 decimal digits |
 | checkpoint | `occupancy_pct`, `quality_score` | yes | finite number 0-100; booleans rejected |
 | checkpoint | `compaction_depth` | yes | finite nonnegative number; booleans rejected |
 | checkpoint | `settled`, `completion_cue`, `pending_work` | yes | boolean |
@@ -56,15 +56,15 @@ Raw message text is rejected. Unknown fields fail validation.
 | checkpoint | `next_turn_needed_older_context` | yes | boolean or `null` |
 | checkpoint | `policy_observed` | required for real data | boolean decisions; real rows require `current_advisory` |
 
-Metadata cannot contain descriptions, limitations, labels, or other free text. Split files contain only anonymous `corpus_id`, `split_role`, and `split_seed`. The entire file is limited to 10 MB. Create stable IDs by hashing a private source identifier with a local salt and keeping a short hex digest. Never use names, paths, prompts, or message text as IDs. Use one `source_group_id` for retries, forks, copied sessions, or other related examples that must stay in one partition.
+Metadata cannot contain descriptions, limitations, labels, or other free text. Split files contain only anonymous `corpus_id`, `split_role`, and `split_seed`. The entire file is limited to 10 MB. Create IDs by hashing a private source identifier with a local salt and keeping 16-64 lowercase hex characters after the required type prefix (`corpus-`, `session-`, or `group-`). Never use names, paths, prompts, or message text as IDs. Use one `source_group_id` for retries, forks, copied sessions, or other related examples that must stay in one partition.
 
 Minimal session shape:
 
 ```json
-{"schema_version":1,"corpus":{"corpus_id":"private-run"},"sessions":[{
-  "session_id":"s-8d91","source_group_id":"g-115a","host":"claude",
+{"schema_version":1,"corpus":{"corpus_id":"corpus-0123456789abcdef"},"sessions":[{
+  "session_id":"session-0123456789abcdef","source_group_id":"group-fedcba9876543210","host":"claude",
   "scenario":"mid_task_coding","provenance":"sanitized_real","checkpoints":[{
-    "checkpoint_id":"turn-42","occupancy_pct":78,"quality_score":61,
+    "checkpoint_id":"checkpoint-42","occupancy_pct":78,"quality_score":61,
     "compaction_depth":0,"settled":true,"completion_cue":false,
     "pending_work":true,"checkpoint_age_seconds":240,
     "cold_resume_available":true,"safe_boundary":false,
