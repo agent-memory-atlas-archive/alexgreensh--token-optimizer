@@ -30,7 +30,7 @@ python3 scripts/compaction_timing_eval.py run \
   --corpus /private/eval.json --json
 ```
 
-The split keeps source groups together and is stratified by scenario. Evaluation fails on overlapping session IDs, source groups, or normalized checkpoint signatures. Confidence intervals resample whole sessions.
+The split keeps source groups together and is stratified by scenario. Evaluation fails on overlapping session IDs, source groups, or normalized checkpoint signatures. Confidence intervals resample whole source groups, keeping every related session in the same bootstrap cluster.
 
 ## Corpus schema
 
@@ -39,7 +39,7 @@ Raw message text is rejected. Unknown fields fail validation.
 | Level | Field | Required | Values / limits |
 |---|---|---:|---|
 | root | `schema_version` | yes | integer `1` |
-| root | `corpus` | no | object; allowlisted descriptive fields, each <=2,000 characters |
+| root | `corpus` | no | object; only anonymous `corpus_id` plus generated split fields |
 | root | `sessions` | yes | 1-10,000 session objects |
 | session | `session_id` | yes | stable anonymous ID, <=128 characters; letters, numbers, `. _ : -` |
 | session | `source_group_id` | yes | same format; identical/derived sessions share one group |
@@ -56,12 +56,12 @@ Raw message text is rejected. Unknown fields fail validation.
 | checkpoint | `next_turn_needed_older_context` | yes | boolean or `null` |
 | checkpoint | `policy_observed` | required for real data | boolean decisions; real rows require `current_advisory` |
 
-The entire file is limited to 10 MB. Create stable IDs by hashing a private source identifier with a local salt and keeping a short hex digest. Never use names, paths, prompts, or message text as IDs. Use one `source_group_id` for retries, forks, copied sessions, or other related examples that must stay in one partition.
+Metadata cannot contain descriptions, limitations, labels, or other free text. Split files contain only anonymous `corpus_id`, `split_role`, and `split_seed`. The entire file is limited to 10 MB. Create stable IDs by hashing a private source identifier with a local salt and keeping a short hex digest. Never use names, paths, prompts, or message text as IDs. Use one `source_group_id` for retries, forks, copied sessions, or other related examples that must stay in one partition.
 
 Minimal session shape:
 
 ```json
-{"schema_version":1,"corpus":{"name":"private run"},"sessions":[{
+{"schema_version":1,"corpus":{"corpus_id":"private-run"},"sessions":[{
   "session_id":"s-8d91","source_group_id":"g-115a","host":"claude",
   "scenario":"mid_task_coding","provenance":"sanitized_real","checkpoints":[{
     "checkpoint_id":"turn-42","occupancy_pct":78,"quality_score":61,

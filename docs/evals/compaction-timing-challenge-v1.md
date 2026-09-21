@@ -35,4 +35,4 @@ Among 102 risky checkpoints, recent checkpoint coverage was 87.2% (89/102), cold
 
 ## Interpretation
 
-`current_advisory` represents TO's existing deterministic risk/quality recommendation lane. `semantic_boundary` is a challenger. `hybrid` requires both. Progressive checkpoint coverage is reported separately because protection is not a recommendation to compact.
+`current_advisory` is an observed decision for real data. On this synthetic corpus only, it is the canonical-Python-default approximation and not cross-host runtime truth. `semantic_boundary` is a challenger. `hybrid` requires both. Progressive checkpoint coverage is reported separately because protection is not a recommendation to compact.

@@ -1,10 +1,7 @@
 {
   "schema_version": 1,
   "corpus": {
-    "name": "compaction-timing challenge matrix v1",
-    "description": "Purpose-built adversarial cases spanning every required workflow and occupancy band.",
-    "limitations": "Synthetic challenge cases test policy behavior and evaluator integrity; they do not estimate production prevalence. Run the same evaluator on locally annotated real sessions before changing runtime policy.",
-    "labeling": "Labels are scenario-authored ground truth. Product truth states whether the next scripted turn requires older context."
+    "corpus_id": "challenge-v1"
   },
   "sessions": [
     {

@@ -101,12 +101,14 @@ def test_empty_and_non_object_corpora_are_rejected():
         mod.validate_corpus({"schema_version": 1, "corpus": {}, "sessions": []})
 
 
-def test_metadata_is_allowlisted_bounded_and_cannot_carry_raw_text():
-    data = corpus(); data["corpus"]["transcript"] = "secret"
-    with pytest.raises(ValueError, match="unknown corpus metadata"):
-        mod.validate_corpus(data)
-    data = corpus(); data["corpus"]["name"] = "x" * (mod.MAX_METADATA_LENGTH + 1)
-    with pytest.raises(ValueError, match="bounded string"):
+def test_metadata_rejects_free_text_in_every_possible_field():
+    secret = "USER: my secret raw prompt content"
+    for field in ("name", "description", "limitations", "labeling"):
+        data = corpus(); data["corpus"][field] = secret
+        with pytest.raises(ValueError, match="unknown corpus metadata"):
+            mod.validate_corpus(data)
+    data = corpus(); data["corpus"]["corpus_id"] = secret
+    with pytest.raises(ValueError, match="anonymous ID characters"):
         mod.validate_corpus(data)
 
 
@@ -155,12 +157,43 @@ def test_cli_malformed_inputs_exit_two_without_traceback(tmp_path):
         assert "Traceback" not in run.stderr
 
 
-def test_free_text_metadata_never_enters_report():
-    data = corpus(); secret = "PRIVATE TRANSCRIPT WORDS"
-    data["corpus"].update(name=secret, description=secret, limitations=secret, labeling=secret)
-    report = mod.evaluate(data)
-    assert secret not in json.dumps(report)
-    assert secret not in mod.markdown(report)
+def test_split_outputs_only_safe_metadata():
+    data = corpus(); data["corpus"] = {"corpus_id": "private-corpus"}
+    train, evaluation = mod.split_corpus(data, .7, 4)
+    assert train["corpus"] == {"corpus_id": "private-corpus", "split_role": "train", "split_seed": 4}
+    assert evaluation["corpus"] == {"corpus_id": "private-corpus", "split_role": "evaluation", "split_seed": 4}
+
+
+def test_hybrid_honors_observed_current_decision_truth_table():
+    cp = corpus()["sessions"][0]["checkpoints"][0]
+    cp.update(settled=True, completion_cue=True, pending_work=False, occupancy_pct=95, quality_score=40,
+              policy_observed={"current_advisory": False})
+    assert mod.policy_decision("current_advisory", cp) is False
+    assert mod.policy_decision("hybrid", cp) is False
+    cp.update(occupancy_pct=10, quality_score=99, policy_observed={"current_advisory": True})
+    assert mod.policy_decision("current_advisory", cp) is True
+    assert mod.policy_decision("hybrid", cp) is True
+
+
+def test_bootstrap_clusters_whole_source_groups(monkeypatch):
+    data = corpus(); first = data["sessions"][0]
+    duplicate = copy.deepcopy(first); duplicate["session_id"] += "-retry"
+    rows = [{"session": first, "checkpoint": first["checkpoints"][0]},
+            {"session": duplicate, "checkpoint": duplicate["checkpoints"][0]}]
+    choices = []
+    class SpyRandom:
+        def __init__(self, *_): pass
+        def choice(self, values): choices.append(tuple(values)); return values[0]
+    monkeypatch.setattr(mod.random, "Random", SpyRandom)
+    mod._cluster_bootstrap(rows, "current_advisory", "precision", samples=1)
+    assert choices == [(first["source_group_id"],)]
+
+
+def test_source_group_cannot_span_scenarios():
+    data = corpus(); data["sessions"][1]["source_group_id"] = data["sessions"][0]["source_group_id"]
+    data["sessions"][1]["scenario"] = "coordination"
+    with pytest.raises(ValueError, match="spans multiple scenarios"):
+        mod.validate_corpus(data)
 
 
 def test_real_rows_require_observed_current_advisory():

@@ -19,7 +19,7 @@ from pathlib import Path
 
 SCENARIOS = {"mid_task_coding", "coordination", "blocked_work", "agent_fanout", "long_supervision"}
 ROOT_KEYS = {"schema_version", "corpus", "sessions"}
-METADATA_KEYS = {"name", "description", "limitations", "labeling", "split_role", "split_seed"}
+METADATA_KEYS = {"corpus_id", "split_role", "split_seed"}
 SESSION_KEYS = {"session_id", "source_group_id", "host", "scenario", "provenance", "checkpoints"}
 CHECKPOINT_KEYS = {"checkpoint_id", "occupancy_pct", "quality_score", "compaction_depth", "settled", "completion_cue", "pending_work", "checkpoint_age_seconds", "cold_resume_available", "safe_boundary", "next_turn_needed_older_context", "policy_observed"}
 PROVENANCE = {"real", "sanitized_real", "synthetic"}
@@ -63,8 +63,12 @@ def _metadata(value, source: str) -> dict:
             if isinstance(item, bool) or not isinstance(item, int):
                 raise ValueError(f"{source}: split_seed must be an integer")
             clean[key] = item
+        elif key == "split_role":
+            if item not in {"train", "evaluation"}:
+                raise ValueError(f"{source}: split_role must be train or evaluation")
+            clean[key] = item
         else:
-            clean[key] = _bounded_string(item, f"{source}: corpus.{key}")
+            clean[key] = _bounded_string(item, f"{source}: corpus.{key}", identifier=True)
     return clean
 
 
@@ -92,7 +96,7 @@ def validate_corpus(data: dict, source: str = "corpus") -> None:
         raise ValueError(f"{source}: at least one session is required")
     if len(data["sessions"]) > MAX_SESSIONS:
         raise ValueError(f"{source}: too many sessions (max {MAX_SESSIONS})")
-    seen: set[str] = set(); checkpoints_total = 0
+    seen: set[str] = set(); checkpoints_total = 0; group_scenario: dict[str, str] = {}
     for s_idx, session in enumerate(data["sessions"]):
         if not isinstance(session, dict):
             raise ValueError(f"{source}: session {s_idx} must be an object")
@@ -100,13 +104,16 @@ def validate_corpus(data: dict, source: str = "corpus") -> None:
         if unknown_session:
             raise ValueError(f"{source}: session {s_idx} has unknown fields: {', '.join(sorted(unknown_session))}")
         sid = _bounded_string(session.get("session_id"), f"{source}: session {s_idx} session_id", identifier=True)
-        _bounded_string(session.get("source_group_id"), f"{source}: {sid} source_group_id", identifier=True)
+        group_id = _bounded_string(session.get("source_group_id"), f"{source}: {sid} source_group_id", identifier=True)
         _bounded_string(session.get("host"), f"{source}: {sid} host", identifier=True)
         if sid in seen:
             raise ValueError(f"{source}: session {s_idx} has duplicate session_id")
         seen.add(sid)
         if session.get("scenario") not in SCENARIOS:
             raise ValueError(f"{source}: {sid} has unknown scenario")
+        prior_scenario = group_scenario.setdefault(group_id, session["scenario"])
+        if prior_scenario != session["scenario"]:
+            raise ValueError(f"{source}: source_group_id {group_id} spans multiple scenarios")
         if session.get("provenance") not in PROVENANCE:
             raise ValueError(f"{source}: {sid} has unknown provenance")
         checkpoints = session.get("checkpoints")
@@ -171,7 +178,7 @@ def policy_decision(name: str, cp: dict) -> bool:
     if name == "semantic_boundary":
         return semantic
     if name == "hybrid":
-        return risk and semantic
+        return policy_decision("current_advisory", cp) and semantic
     raise ValueError(f"unknown policy {name}")
 
 
@@ -184,7 +191,7 @@ def _cluster_bootstrap(rows: list[dict], name: str, metric: str, samples: int = 
     """Percentile interval from whole-session resampling, never checkpoint resampling."""
     grouped: dict[str, list[dict]] = defaultdict(list)
     for row in rows:
-        grouped[row["session"]["session_id"]].append(row)
+        grouped[row["session"]["source_group_id"]].append(row)
     ids = sorted(grouped)
     if not ids:
         return None
@@ -314,7 +321,9 @@ def split_corpus(corpus: dict, train_fraction: float, seed: int) -> tuple[dict, 
     if not train_sessions or not eval_sessions:
         raise ValueError("split could not produce non-empty train and evaluation sets")
     def pack(part: list, role: str) -> dict:
-        meta = dict(corpus.get("corpus", {})); meta["split_role"] = role; meta["split_seed"] = seed
+        meta = {"split_role": role, "split_seed": seed}
+        if corpus.get("corpus", {}).get("corpus_id"):
+            meta["corpus_id"] = corpus["corpus"]["corpus_id"]
         return {"schema_version": 1, "corpus": meta, "sessions": part}
     train, evaluation = pack(train_sessions, "train"), pack(eval_sessions, "evaluation")
     assert_disjoint(train, evaluation)
@@ -343,7 +352,7 @@ def markdown(report: dict) -> str:
     lines += ["", "## Continuity protection", "",
               f"Among {c['risky_checkpoints']} risky checkpoints, recent checkpoint coverage was {pct(c['recent_checkpoint_coverage'])}, cold-resume readiness was {pct(c['cold_resume_readiness'])}, and joint protection was {pct(c['joint_protection'])}.", "",
               "## Interpretation", "",
-              "`current_advisory` represents TO's existing deterministic risk/quality recommendation lane. `semantic_boundary` is a challenger. `hybrid` requires both. Progressive checkpoint coverage is reported separately because protection is not a recommendation to compact.", ""]
+              "`current_advisory` is an observed decision for real data. On this synthetic corpus only, it is the canonical-Python-default approximation and not cross-host runtime truth. `semantic_boundary` is a challenger. `hybrid` requires both. Progressive checkpoint coverage is reported separately because protection is not a recommendation to compact.", ""]
     return "\n".join(lines)
 
 
