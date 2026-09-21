@@ -1,8 +1,8 @@
 # Compaction timing evaluation
 
-Corpus: **compaction-timing challenge matrix v1**. Sessions: **30**. Checkpoints: **120**.
+Corpus: **synthetic challenge corpus**. Sessions: **30**. Checkpoints: **120**.
 
-> Limitation: Synthetic challenge cases test policy behavior and evaluator integrity; they do not estimate production prevalence. Run the same evaluator on locally annotated real sessions before changing runtime policy.
+> Limitation: Synthetic challenge cases test policy behavior and evaluator integrity; they do not estimate production prevalence. Run this evaluator on private, session-grouped real data before changing runtime policy.
 
 ## Overall advisory results
 

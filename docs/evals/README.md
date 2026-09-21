@@ -1,6 +1,6 @@
 # Compaction timing evaluation
 
-This evaluator measures when Token Optimizer should advise a compact or fresh start, and separately measures whether its checkpoint/cold-resume protection is ready when context becomes risky.
+This evaluator measures when Token Optimizer should advise a compact or fresh start. It separately measures whether checkpoint/cold-resume protection is ready when context becomes risky.
 
 ```bash
 python3 scripts/compaction_timing_eval.py run \
@@ -11,70 +11,82 @@ Use `--json` for machine-readable output and `--output FILE` to save either form
 
 ## Real-session workflow
 
-The committed challenge matrix is synthetic by design. It tests policy behavior and evaluator integrity; it does not estimate production prevalence. For a production estimate:
+The committed challenge matrix is synthetic. It tests evaluator behavior, not production prevalence. For a production estimate:
 
-1. Export candidate checkpoints from local transcripts. Do not commit raw transcripts.
-2. Annotate each checkpoint with `safe_boundary` using only information visible at that checkpoint.
-3. Inspect the next observed user turn and label `next_turn_needed_older_context`. Use `null` when it cannot be determined.
-4. Mark provenance `real` or `sanitized_real`. Scrub message content because the evaluator only needs structured labels and telemetry.
-5. Split by whole session, then evaluate:
+1. Export candidate checkpoints locally. Do not commit raw transcripts.
+2. Annotate `safe_boundary` using only information visible at that checkpoint.
+3. Inspect the next observed user turn and label `next_turn_needed_older_context`; use `null` when unknown.
+4. Record the advisory decision that actually occurred as `policy_observed.current_advisory`.
+5. Assign a stable anonymous `session_id` and `source_group_id`, then split and run:
 
 ```bash
 python3 scripts/compaction_timing_eval.py split \
   --corpus /private/annotated-sessions.json \
   --train-output /private/train.json \
-  --eval-output /private/eval.json \
-  --seed 42
+  --eval-output /private/eval.json --seed 42
 
 python3 scripts/compaction_timing_eval.py run \
   --train-corpus /private/train.json \
   --corpus /private/eval.json --json
 ```
 
-The run fails if any session ID appears in both files. Confidence intervals resample whole sessions rather than individual checkpoints.
+The split keeps source groups together and is stratified by scenario. Evaluation fails on overlapping session IDs, source groups, or normalized checkpoint signatures. Confidence intervals resample whole sessions.
 
-## Corpus format
+## Corpus schema
 
-The file contains metadata plus whole sessions. Raw message text is neither required nor accepted:
+Raw message text is rejected. Unknown fields fail validation.
+
+| Level | Field | Required | Values / limits |
+|---|---|---:|---|
+| root | `schema_version` | yes | integer `1` |
+| root | `corpus` | no | object; allowlisted descriptive fields, each <=2,000 characters |
+| root | `sessions` | yes | 1-10,000 session objects |
+| session | `session_id` | yes | stable anonymous ID, <=128 characters; letters, numbers, `. _ : -` |
+| session | `source_group_id` | yes | same format; identical/derived sessions share one group |
+| session | `host` | yes | anonymous host label in the same safe ID format |
+| session | `scenario` | yes | `mid_task_coding`, `coordination`, `blocked_work`, `agent_fanout`, or `long_supervision` |
+| session | `provenance` | yes | `real`, `sanitized_real`, or `synthetic` |
+| session | `checkpoints` | yes | non-empty; at most 100,000 total |
+| checkpoint | `checkpoint_id` | yes | anonymous ID format |
+| checkpoint | `occupancy_pct`, `quality_score` | yes | finite number 0-100; booleans rejected |
+| checkpoint | `compaction_depth` | yes | finite nonnegative number; booleans rejected |
+| checkpoint | `settled`, `completion_cue`, `pending_work` | yes | boolean |
+| checkpoint | `checkpoint_age_seconds` | yes | finite nonnegative number or `null` |
+| checkpoint | `cold_resume_available`, `safe_boundary` | yes | boolean |
+| checkpoint | `next_turn_needed_older_context` | yes | boolean or `null` |
+| checkpoint | `policy_observed` | required for real data | boolean decisions; real rows require `current_advisory` |
+
+The entire file is limited to 10 MB. Create stable IDs by hashing a private source identifier with a local salt and keeping a short hex digest. Never use names, paths, prompts, or message text as IDs. Use one `source_group_id` for retries, forks, copied sessions, or other related examples that must stay in one partition.
+
+Minimal session shape:
 
 ```json
-{
-  "schema_version": 1,
-  "corpus": {"name": "private run", "limitations": "how this sample was selected"},
-  "sessions": [{
-    "session_id": "stable-anonymous-id",
-    "host": "claude",
-    "scenario": "mid_task_coding",
-    "provenance": "sanitized_real",
-    "checkpoints": [{
-      "checkpoint_id": "turn-42",
-      "occupancy_pct": 78,
-      "quality_score": 61,
-      "compaction_depth": 0,
-      "settled": true,
-      "completion_cue": false,
-      "pending_work": true,
-      "checkpoint_age_seconds": 240,
-      "cold_resume_available": true,
-      "safe_boundary": false,
-      "next_turn_needed_older_context": true,
-      "policy_observed": {"current_advisory": true}
-    }]
+{"schema_version":1,"corpus":{"name":"private run"},"sessions":[{
+  "session_id":"s-8d91","source_group_id":"g-115a","host":"claude",
+  "scenario":"mid_task_coding","provenance":"sanitized_real","checkpoints":[{
+    "checkpoint_id":"turn-42","occupancy_pct":78,"quality_score":61,
+    "compaction_depth":0,"settled":true,"completion_cue":false,
+    "pending_work":true,"checkpoint_age_seconds":240,
+    "cold_resume_available":true,"safe_boundary":false,
+    "next_turn_needed_older_context":true,
+    "policy_observed":{"current_advisory":true}
   }]
-}
+}]}
 ```
 
-`scenario` is one of `mid_task_coding`, `coordination`, `blocked_work`, `agent_fanout`, or `long_supervision`. `provenance` is `real`, `sanitized_real`, or `synthetic`. Use `null` for unknown product truth and omit `policy_observed` when replaying the documented approximation instead of an observed decision.
+## Policy scope
 
-## Policy meanings
+- `current_advisory`: observed historical decision for real data. Synthetic data may use the canonical Python default approximation: fill >=45% and quality <70, or the 90% warning path.
+- `semantic_boundary`: settled state + explicit completion cue + no pending work.
+- `hybrid`: both current and semantic policies qualify.
+- `continuity_protection`: recent checkpoint and cold-resume readiness, reported separately because protection is not an advisory action.
 
-- `current_advisory`: TO's fresh-session recommendation gate (fill at least 45% and quality below 70) plus its 90% `/compact` or `/clear` warning, reconstructed from telemetry unless `policy_observed.current_advisory` records what actually happened.
-- `semantic_boundary`: a deterministic challenger based on settled state, an explicit completion cue, and no pending work.
-- `hybrid`: the current risk gate and the semantic boundary must both qualify.
-- `continuity_protection`: recent progressive checkpoint and cold-resume readiness. This is reported separately because protection is not a recommendation to compact.
+The approximation is not cross-host truth. Python thresholds are configurable and runtime state can suppress a nudge. OpenClaw currently uses a 50% fill floor rather than Python's 45%. Host/version/config comparisons therefore require observed decisions.
 
-Use `policy_observed` for historical replay whenever an observed decision is available. Reconstruction is a documented approximation, not a claim about emitted production behavior.
+## Output and exit codes
 
-## Reading the report
+- `0`: corpus validated and the requested split or report completed.
+- `2`: malformed JSON/schema, empty corpus, size limit, unsafe identifier, or train/evaluation leakage. The CLI prints one deterministic error line, without a traceback.
+- Other nonzero codes indicate an unexpected interpreter/runtime failure.
 
-Boundary precision answers: "When this policy advises action, was the unit actually at a safe boundary?" Boundary recall answers: "How many safe boundaries did it catch?" Product-truth precision asks whether the next observed user turn avoided needing older context. None of these is a reason to change runtime policy without an adequately sized, session-grouped real corpus.
+Boundary precision asks whether recommendations were at safe boundaries. Boundary recall asks how many safe boundaries were caught. Product-truth precision asks whether the next turn avoided needing older context. Unknown product truth is excluded and counted. Do not change runtime policy from synthetic results.

@@ -65,7 +65,8 @@
           "safe_boundary": true,
           "next_turn_needed_older_context": false
         }
-      ]
+      ],
+      "source_group_id": "session-mid_task_coding-0"
     },
     {
       "session_id": "session-mid_task_coding-1",
@@ -125,7 +126,8 @@
           "safe_boundary": false,
           "next_turn_needed_older_context": true
         }
-      ]
+      ],
+      "source_group_id": "session-mid_task_coding-1"
     },
     {
       "session_id": "session-mid_task_coding-2",
@@ -185,7 +187,8 @@
           "safe_boundary": false,
           "next_turn_needed_older_context": true
         }
-      ]
+      ],
+      "source_group_id": "session-mid_task_coding-2"
     },
     {
       "session_id": "session-mid_task_coding-3",
@@ -245,7 +248,8 @@
           "safe_boundary": true,
           "next_turn_needed_older_context": false
         }
-      ]
+      ],
+      "source_group_id": "session-mid_task_coding-3"
     },
     {
       "session_id": "session-mid_task_coding-4",
@@ -305,7 +309,8 @@
           "safe_boundary": false,
           "next_turn_needed_older_context": true
         }
-      ]
+      ],
+      "source_group_id": "session-mid_task_coding-4"
     },
     {
       "session_id": "session-mid_task_coding-5",
@@ -365,7 +370,8 @@
           "safe_boundary": false,
           "next_turn_needed_older_context": true
         }
-      ]
+      ],
+      "source_group_id": "session-mid_task_coding-5"
     },
     {
       "session_id": "session-coordination-0",
@@ -425,7 +431,8 @@
           "safe_boundary": true,
           "next_turn_needed_older_context": false
         }
-      ]
+      ],
+      "source_group_id": "session-coordination-0"
     },
     {
       "session_id": "session-coordination-1",
@@ -485,7 +492,8 @@
           "safe_boundary": true,
           "next_turn_needed_older_context": false
         }
-      ]
+      ],
+      "source_group_id": "session-coordination-1"
     },
     {
       "session_id": "session-coordination-2",
@@ -545,7 +553,8 @@
           "safe_boundary": true,
           "next_turn_needed_older_context": false
         }
-      ]
+      ],
+      "source_group_id": "session-coordination-2"
     },
     {
       "session_id": "session-coordination-3",
@@ -605,7 +614,8 @@
           "safe_boundary": true,
           "next_turn_needed_older_context": false
         }
-      ]
+      ],
+      "source_group_id": "session-coordination-3"
     },
     {
       "session_id": "session-coordination-4",
@@ -665,7 +675,8 @@
           "safe_boundary": true,
           "next_turn_needed_older_context": false
         }
-      ]
+      ],
+      "source_group_id": "session-coordination-4"
     },
     {
       "session_id": "session-coordination-5",
@@ -725,7 +736,8 @@
           "safe_boundary": true,
           "next_turn_needed_older_context": false
         }
-      ]
+      ],
+      "source_group_id": "session-coordination-5"
     },
     {
       "session_id": "session-blocked_work-0",
@@ -785,7 +797,8 @@
           "safe_boundary": true,
           "next_turn_needed_older_context": false
         }
-      ]
+      ],
+      "source_group_id": "session-blocked_work-0"
     },
     {
       "session_id": "session-blocked_work-1",
@@ -845,7 +858,8 @@
           "safe_boundary": true,
           "next_turn_needed_older_context": true
         }
-      ]
+      ],
+      "source_group_id": "session-blocked_work-1"
     },
     {
       "session_id": "session-blocked_work-2",
@@ -905,7 +919,8 @@
           "safe_boundary": true,
           "next_turn_needed_older_context": false
         }
-      ]
+      ],
+      "source_group_id": "session-blocked_work-2"
     },
     {
       "session_id": "session-blocked_work-3",
@@ -965,7 +980,8 @@
           "safe_boundary": true,
           "next_turn_needed_older_context": true
         }
-      ]
+      ],
+      "source_group_id": "session-blocked_work-3"
     },
     {
       "session_id": "session-blocked_work-4",
@@ -1025,7 +1041,8 @@
           "safe_boundary": true,
           "next_turn_needed_older_context": false
         }
-      ]
+      ],
+      "source_group_id": "session-blocked_work-4"
     },
     {
       "session_id": "session-blocked_work-5",
@@ -1085,7 +1102,8 @@
           "safe_boundary": true,
           "next_turn_needed_older_context": true
         }
-      ]
+      ],
+      "source_group_id": "session-blocked_work-5"
     },
     {
       "session_id": "session-agent_fanout-0",
@@ -1145,7 +1163,8 @@
           "safe_boundary": false,
           "next_turn_needed_older_context": true
         }
-      ]
+      ],
+      "source_group_id": "session-agent_fanout-0"
     },
     {
       "session_id": "session-agent_fanout-1",
@@ -1205,7 +1224,8 @@
           "safe_boundary": true,
           "next_turn_needed_older_context": false
         }
-      ]
+      ],
+      "source_group_id": "session-agent_fanout-1"
     },
     {
       "session_id": "session-agent_fanout-2",
@@ -1265,7 +1285,8 @@
           "safe_boundary": false,
           "next_turn_needed_older_context": true
         }
-      ]
+      ],
+      "source_group_id": "session-agent_fanout-2"
     },
     {
       "session_id": "session-agent_fanout-3",
@@ -1325,7 +1346,8 @@
           "safe_boundary": false,
           "next_turn_needed_older_context": true
         }
-      ]
+      ],
+      "source_group_id": "session-agent_fanout-3"
     },
     {
       "session_id": "session-agent_fanout-4",
@@ -1385,7 +1407,8 @@
           "safe_boundary": true,
           "next_turn_needed_older_context": false
         }
-      ]
+      ],
+      "source_group_id": "session-agent_fanout-4"
     },
     {
       "session_id": "session-agent_fanout-5",
@@ -1445,7 +1468,8 @@
           "safe_boundary": false,
           "next_turn_needed_older_context": true
         }
-      ]
+      ],
+      "source_group_id": "session-agent_fanout-5"
     },
     {
       "session_id": "session-long_supervision-0",
@@ -1505,7 +1529,8 @@
           "safe_boundary": true,
           "next_turn_needed_older_context": true
         }
-      ]
+      ],
+      "source_group_id": "session-long_supervision-0"
     },
     {
       "session_id": "session-long_supervision-1",
@@ -1565,7 +1590,8 @@
           "safe_boundary": true,
           "next_turn_needed_older_context": false
         }
-      ]
+      ],
+      "source_group_id": "session-long_supervision-1"
     },
     {
       "session_id": "session-long_supervision-2",
@@ -1625,7 +1651,8 @@
           "safe_boundary": true,
           "next_turn_needed_older_context": true
         }
-      ]
+      ],
+      "source_group_id": "session-long_supervision-2"
     },
     {
       "session_id": "session-long_supervision-3",
@@ -1685,7 +1712,8 @@
           "safe_boundary": true,
           "next_turn_needed_older_context": false
         }
-      ]
+      ],
+      "source_group_id": "session-long_supervision-3"
     },
     {
       "session_id": "session-long_supervision-4",
@@ -1745,7 +1773,8 @@
           "safe_boundary": true,
           "next_turn_needed_older_context": true
         }
-      ]
+      ],
+      "source_group_id": "session-long_supervision-4"
     },
     {
       "session_id": "session-long_supervision-5",
@@ -1805,7 +1834,8 @@
           "safe_boundary": true,
           "next_turn_needed_older_context": false
         }
-      ]
+      ],
+      "source_group_id": "session-long_supervision-5"
     }
   ]
 }

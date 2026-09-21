@@ -8,6 +8,8 @@ session are never split across train/evaluation partitions.
 from __future__ import annotations
 
 import argparse
+import re
+import hashlib
 import json
 import math
 import random
@@ -17,10 +19,16 @@ from pathlib import Path
 
 SCENARIOS = {"mid_task_coding", "coordination", "blocked_work", "agent_fanout", "long_supervision"}
 ROOT_KEYS = {"schema_version", "corpus", "sessions"}
-SESSION_KEYS = {"session_id", "host", "scenario", "provenance", "checkpoints"}
+METADATA_KEYS = {"name", "description", "limitations", "labeling", "split_role", "split_seed"}
+SESSION_KEYS = {"session_id", "source_group_id", "host", "scenario", "provenance", "checkpoints"}
 CHECKPOINT_KEYS = {"checkpoint_id", "occupancy_pct", "quality_score", "compaction_depth", "settled", "completion_cue", "pending_work", "checkpoint_age_seconds", "cold_resume_available", "safe_boundary", "next_turn_needed_older_context", "policy_observed"}
 PROVENANCE = {"real", "sanitized_real", "synthetic"}
 POLICIES = ("current_advisory", "semantic_boundary", "hybrid")
+ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+MAX_INPUT_BYTES = 10_000_000
+MAX_SESSIONS = 10_000
+MAX_CHECKPOINTS = 100_000
+MAX_METADATA_LENGTH = 2_000
 
 
 def occupancy_band(value: float) -> str:
@@ -33,27 +41,69 @@ def occupancy_band(value: float) -> str:
     return "80+"
 
 
+def _bounded_string(value, label: str, *, identifier: bool = False) -> str:
+    if not isinstance(value, str) or not value or len(value) > (128 if identifier else MAX_METADATA_LENGTH):
+        raise ValueError(f"{label} must be a non-empty bounded string")
+    if identifier and not ID_RE.fullmatch(value):
+        raise ValueError(f"{label} must use only anonymous ID characters")
+    return value
+
+
+def _metadata(value, source: str) -> dict:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{source}: corpus metadata must be an object")
+    unknown = set(value) - METADATA_KEYS
+    if unknown:
+        raise ValueError(f"{source}: unknown corpus metadata fields: {', '.join(sorted(unknown))}")
+    clean = {}
+    for key, item in value.items():
+        if key == "split_seed":
+            if isinstance(item, bool) or not isinstance(item, int):
+                raise ValueError(f"{source}: split_seed must be an integer")
+            clean[key] = item
+        else:
+            clean[key] = _bounded_string(item, f"{source}: corpus.{key}")
+    return clean
+
+
 def load_corpus(path: str | Path) -> dict:
-    with Path(path).open(encoding="utf-8") as handle:
+    source = Path(path)
+    if source.stat().st_size > MAX_INPUT_BYTES:
+        raise ValueError(f"{path}: input exceeds {MAX_INPUT_BYTES} bytes")
+    with source.open(encoding="utf-8") as handle:
         data = json.load(handle)
     validate_corpus(data, str(path))
+    data["corpus"] = _metadata(data.get("corpus"), str(path))
     return data
 
 
 def validate_corpus(data: dict, source: str = "corpus") -> None:
+    if not isinstance(data, dict):
+        raise ValueError(f"{source}: root must be an object")
     if data.get("schema_version") != 1 or not isinstance(data.get("sessions"), list):
         raise ValueError(f"{source}: expected schema_version 1 and sessions[]")
     unknown_root = set(data) - ROOT_KEYS
     if unknown_root:
         raise ValueError(f"{source}: unknown root fields: {', '.join(sorted(unknown_root))}")
-    seen: set[str] = set()
+    _metadata(data.get("corpus"), source)
+    if not data["sessions"]:
+        raise ValueError(f"{source}: at least one session is required")
+    if len(data["sessions"]) > MAX_SESSIONS:
+        raise ValueError(f"{source}: too many sessions (max {MAX_SESSIONS})")
+    seen: set[str] = set(); checkpoints_total = 0
     for s_idx, session in enumerate(data["sessions"]):
+        if not isinstance(session, dict):
+            raise ValueError(f"{source}: session {s_idx} must be an object")
         unknown_session = set(session) - SESSION_KEYS
         if unknown_session:
             raise ValueError(f"{source}: session {s_idx} has unknown fields: {', '.join(sorted(unknown_session))}")
-        sid = session.get("session_id")
-        if not isinstance(sid, str) or not sid or sid in seen:
-            raise ValueError(f"{source}: session {s_idx} has missing or duplicate session_id")
+        sid = _bounded_string(session.get("session_id"), f"{source}: session {s_idx} session_id", identifier=True)
+        _bounded_string(session.get("source_group_id"), f"{source}: {sid} source_group_id", identifier=True)
+        _bounded_string(session.get("host"), f"{source}: {sid} host", identifier=True)
+        if sid in seen:
+            raise ValueError(f"{source}: session {s_idx} has duplicate session_id")
         seen.add(sid)
         if session.get("scenario") not in SCENARIOS:
             raise ValueError(f"{source}: {sid} has unknown scenario")
@@ -62,17 +112,22 @@ def validate_corpus(data: dict, source: str = "corpus") -> None:
         checkpoints = session.get("checkpoints")
         if not isinstance(checkpoints, list) or not checkpoints:
             raise ValueError(f"{source}: {sid} needs at least one checkpoint")
+        checkpoints_total += len(checkpoints)
+        if checkpoints_total > MAX_CHECKPOINTS:
+            raise ValueError(f"{source}: too many checkpoints (max {MAX_CHECKPOINTS})")
         cp_seen: set[str] = set()
         for c_idx, cp in enumerate(checkpoints):
+            if not isinstance(cp, dict):
+                raise ValueError(f"{source}: {sid} checkpoint {c_idx} must be an object")
             unknown_checkpoint = set(cp) - CHECKPOINT_KEYS
             if unknown_checkpoint:
                 raise ValueError(f"{source}: {sid} checkpoint {c_idx} has unknown fields: {', '.join(sorted(unknown_checkpoint))}")
-            cid = cp.get("checkpoint_id")
-            if not isinstance(cid, str) or not cid or cid in cp_seen:
-                raise ValueError(f"{source}: {sid} checkpoint {c_idx} has missing/duplicate id")
+            cid = _bounded_string(cp.get("checkpoint_id"), f"{source}: {sid} checkpoint_id", identifier=True)
+            if cid in cp_seen:
+                raise ValueError(f"{source}: {sid} duplicate checkpoint_id")
             cp_seen.add(cid)
             for key in ("occupancy_pct", "quality_score", "compaction_depth"):
-                if not isinstance(cp.get(key), (int, float)) or not math.isfinite(cp[key]):
+                if isinstance(cp.get(key), bool) or not isinstance(cp.get(key), (int, float)) or not math.isfinite(cp[key]):
                     raise ValueError(f"{source}: {sid}/{cid} invalid {key}")
             if not 0 <= cp["occupancy_pct"] <= 100 or not 0 <= cp["quality_score"] <= 100:
                 raise ValueError(f"{source}: {sid}/{cid} percentage/score out of range")
@@ -84,20 +139,26 @@ def validate_corpus(data: dict, source: str = "corpus") -> None:
             if cp.get("next_turn_needed_older_context") not in (True, False, None):
                 raise ValueError(f"{source}: {sid}/{cid} invalid product-truth label")
             age = cp.get("checkpoint_age_seconds")
-            if age is not None and (not isinstance(age, (int, float)) or age < 0 or not math.isfinite(age)):
+            if age is not None and (isinstance(age, bool) or not isinstance(age, (int, float)) or age < 0 or not math.isfinite(age)):
                 raise ValueError(f"{source}: {sid}/{cid} invalid checkpoint age")
             overrides = cp.get("policy_observed", {})
             if not isinstance(overrides, dict) or any(k not in POLICIES or not isinstance(v, bool) for k, v in overrides.items()):
                 raise ValueError(f"{source}: {sid}/{cid} invalid policy_observed")
+            if session["provenance"] != "synthetic" and "current_advisory" not in overrides:
+                raise ValueError(f"{source}: {sid}/{cid} real-session replay requires policy_observed.current_advisory")
+
+
+def _signature(session: dict) -> str:
+    clean = [{k: v for k, v in cp.items() if k not in {"checkpoint_id", "policy_observed"}} for cp in session["checkpoints"]]
+    return hashlib.sha256(json.dumps(clean, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def assert_disjoint(train: dict, evaluation: dict) -> None:
-    left = {s["session_id"] for s in train["sessions"]}
-    right = {s["session_id"] for s in evaluation["sessions"]}
-    overlap = sorted(left & right)
-    if overlap:
-        raise ValueError("session leakage between train and evaluation: " + ", ".join(overlap[:10]))
-
+    for label, key_fn in (("session", lambda s: s["session_id"]), ("source group", lambda s: s["source_group_id"]), ("content signature", _signature)):
+        left = {key_fn(s) for s in train["sessions"]}; right = {key_fn(s) for s in evaluation["sessions"]}
+        overlap = sorted(left & right)
+        if overlap:
+            raise ValueError(f"{label} leakage between train and evaluation: " + ", ".join(overlap[:10]))
 
 def policy_decision(name: str, cp: dict) -> bool:
     observed = cp.get("policy_observed", {})
@@ -187,9 +248,10 @@ def evaluate(corpus: dict, train: dict | None = None) -> dict:
     rows = [{"session": s, "checkpoint": cp} for s in corpus["sessions"] for cp in s["checkpoints"]]
     report = {
         "schema_version": 1,
-        "corpus": corpus.get("corpus", {}),
+        "corpus": {key: corpus.get("corpus", {}).get(key) for key in ("split_role", "split_seed") if key in corpus.get("corpus", {})},
+        "corpus_label": "synthetic challenge corpus" if all(s["provenance"] == "synthetic" for s in corpus["sessions"]) else "private real-session corpus",
         "sessions": len(corpus["sessions"]), "checkpoints": len(rows),
-        "provenance": dict(sorted(Counter(r["session"]["provenance"] for r in rows).items())),
+        "checkpoints_by_provenance": dict(sorted(Counter(r["session"]["provenance"] for r in rows).items())),
         "policies": {name: _policy_metrics(rows, name, intervals=True) for name in POLICIES},
         "by_occupancy_band": {}, "by_scenario": {}, "by_host": {},
     }
@@ -225,20 +287,30 @@ def split_corpus(corpus: dict, train_fraction: float, seed: int) -> tuple[dict, 
     sessions = list(corpus["sessions"])
     if len(sessions) < 2:
         raise ValueError("at least two sessions are required to split")
-    grouped: dict[str, list[dict]] = defaultdict(list)
+    grouped: dict[str, dict[str, list[dict]]] = defaultdict(lambda: defaultdict(list))
+    signature_group: dict[str, str] = {}
     for session in sessions:
-        grouped[session["scenario"]].append(session)
+        signature = _signature(session)
+        group_id = signature_group.setdefault(signature, session["source_group_id"])
+        grouped[session["scenario"]][group_id].append(session)
     rng = random.Random(seed)
     train_sessions: list[dict] = []
     eval_sessions: list[dict] = []
     for scenario in sorted(grouped):
-        group = grouped[scenario]
-        rng.shuffle(group)
-        if len(group) == 1:
-            (train_sessions if len(train_sessions) <= len(eval_sessions) else eval_sessions).extend(group)
+        units = list(grouped[scenario].values()); rng.shuffle(units)
+        if len(units) == 1:
+            (train_sessions if len(train_sessions) <= len(eval_sessions) else eval_sessions).extend(units[0])
             continue
-        cut = max(1, min(len(group) - 1, round(len(group) * train_fraction)))
-        train_sessions.extend(group[:cut]); eval_sessions.extend(group[cut:])
+        target = train_fraction * sum(len(unit) for unit in units)
+        scenario_train: list[dict] = []
+        scenario_eval: list[dict] = []
+        used = 0
+        for idx, unit in enumerate(units):
+            remaining = len(units) - idx
+            choose_train = used < target and remaining > 1
+            (scenario_train if choose_train else scenario_eval).extend(unit)
+            used += len(unit) if choose_train else 0
+        train_sessions.extend(scenario_train); eval_sessions.extend(scenario_eval)
     if not train_sessions or not eval_sessions:
         raise ValueError("split could not produce non-empty train and evaluation sets")
     def pack(part: list, role: str) -> dict:
@@ -250,11 +322,10 @@ def split_corpus(corpus: dict, train_fraction: float, seed: int) -> tuple[dict, 
 
 
 def markdown(report: dict) -> str:
-    meta = report["corpus"]
     lines = ["# Compaction timing evaluation", "",
-             f"Corpus: **{meta.get('name', 'unnamed')}**. Sessions: **{report['sessions']}**. Checkpoints: **{report['checkpoints']}**.", ""]
-    if meta.get("limitations"):
-        lines += [f"> Limitation: {meta['limitations']}", ""]
+             f"Corpus: **{report['corpus_label']}**. Sessions: **{report['sessions']}**. Checkpoints: **{report['checkpoints']}**.", ""]
+    if report["corpus_label"].startswith("synthetic"):
+        lines += ["> Limitation: Synthetic challenge cases test policy behavior and evaluator integrity; they do not estimate production prevalence. Run this evaluator on private, session-grouped real data before changing runtime policy.", ""]
     lines += ["## Overall advisory results", "",
               "| Policy | Recommendations | Boundary precision | Boundary recall | Product-truth precision |",
               "|---|---:|---:|---:|---:|"]
@@ -296,7 +367,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.output: Path(args.output).write_text(rendered, encoding="utf-8")
         else: print(rendered, end="" if rendered.endswith("\n") else "\n")
         return 0
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
+    except (OSError, ValueError, TypeError, AttributeError, json.JSONDecodeError) as exc:
         print(f"compaction-timing-eval: {exc}", file=sys.stderr); return 2
 
 if __name__ == "__main__":

@@ -70,8 +70,8 @@ def test_split_is_deterministic_and_session_grouped():
 
 def test_overlap_is_a_hard_error_even_when_checkpoint_ids_differ():
     data = corpus()
-    train = {"schema_version": 1, "sessions": [copy.deepcopy(data["sessions"][0])]}
-    evaluation = {"schema_version": 1, "sessions": [copy.deepcopy(data["sessions"][0])]}
+    train = {"schema_version": 1, "corpus": {}, "sessions": [copy.deepcopy(data["sessions"][0])]}
+    evaluation = {"schema_version": 1, "corpus": {}, "sessions": [copy.deepcopy(data["sessions"][0])]}
     evaluation["sessions"][0]["checkpoints"][0]["checkpoint_id"] = "different"
     with pytest.raises(ValueError, match="session leakage"):
         mod.assert_disjoint(train, evaluation)
@@ -92,6 +92,84 @@ def test_schema_rejects_raw_text_and_unknown_fields():
     with pytest.raises(ValueError, match="unknown fields"):
         mod.validate_corpus(data)
 
+
+
+def test_empty_and_non_object_corpora_are_rejected():
+    with pytest.raises(ValueError, match="root must be an object"):
+        mod.validate_corpus([])
+    with pytest.raises(ValueError, match="at least one session"):
+        mod.validate_corpus({"schema_version": 1, "corpus": {}, "sessions": []})
+
+
+def test_metadata_is_allowlisted_bounded_and_cannot_carry_raw_text():
+    data = corpus(); data["corpus"]["transcript"] = "secret"
+    with pytest.raises(ValueError, match="unknown corpus metadata"):
+        mod.validate_corpus(data)
+    data = corpus(); data["corpus"]["name"] = "x" * (mod.MAX_METADATA_LENGTH + 1)
+    with pytest.raises(ValueError, match="bounded string"):
+        mod.validate_corpus(data)
+
+
+def test_identifiers_and_host_are_bounded_anonymous_strings():
+    for field, value in (("session_id", "has spaces"), ("source_group_id", ["bad"]), ("host", ["bad"])):
+        data = corpus(); data["sessions"][0][field] = value
+        with pytest.raises(ValueError):
+            mod.validate_corpus(data)
+
+
+def test_boolean_is_not_a_number():
+    data = corpus(); data["sessions"][0]["checkpoints"][0]["occupancy_pct"] = True
+    with pytest.raises(ValueError, match="occupancy_pct"):
+        mod.validate_corpus(data)
+
+
+def test_group_and_renamed_duplicate_leakage_are_rejected():
+    data = corpus(); left = copy.deepcopy(data["sessions"][0]); right = copy.deepcopy(left)
+    right["session_id"] = "renamed-session"; right["source_group_id"] = "renamed-group"
+    train = {"schema_version": 1, "corpus": {}, "sessions": [left]}
+    evaluation = {"schema_version": 1, "corpus": {}, "sessions": [right]}
+    with pytest.raises(ValueError, match="content signature leakage"):
+        mod.assert_disjoint(train, evaluation)
+    right["checkpoints"][0]["quality_score"] -= 1; right["source_group_id"] = left["source_group_id"]
+    with pytest.raises(ValueError, match="source group leakage"):
+        mod.assert_disjoint(train, evaluation)
+
+
+def test_randomized_splits_keep_groups_and_signatures_disjoint():
+    data = corpus()
+    # Deliberately add renamed byte-equivalent sessions under the same source group.
+    for original in list(data["sessions"][:5]):
+        duplicate = copy.deepcopy(original); duplicate["session_id"] += "-duplicate"
+        data["sessions"].append(duplicate)
+    for seed in range(30):
+        train, evaluation = mod.split_corpus(data, .7, seed)
+        mod.assert_disjoint(train, evaluation)
+
+
+def test_cli_malformed_inputs_exit_two_without_traceback(tmp_path):
+    for value in ([], {"schema_version": 1, "corpus": {}, "sessions": []},
+                  {"schema_version": 1, "corpus": {}, "sessions": [{"host": []}]}):
+        path = tmp_path / "bad.json"; path.write_text(json.dumps(value))
+        run = subprocess.run([sys.executable, str(SCRIPT), "run", "--corpus", str(path)], text=True, capture_output=True)
+        assert run.returncode == 2
+        assert "Traceback" not in run.stderr
+
+
+def test_free_text_metadata_never_enters_report():
+    data = corpus(); secret = "PRIVATE TRANSCRIPT WORDS"
+    data["corpus"].update(name=secret, description=secret, limitations=secret, labeling=secret)
+    report = mod.evaluate(data)
+    assert secret not in json.dumps(report)
+    assert secret not in mod.markdown(report)
+
+
+def test_real_rows_require_observed_current_advisory():
+    data = corpus(); data["sessions"][0]["provenance"] = "sanitized_real"
+    with pytest.raises(ValueError, match="requires policy_observed.current_advisory"):
+        mod.validate_corpus(data)
+    for cp in data["sessions"][0]["checkpoints"]:
+        cp["policy_observed"] = {"current_advisory": False}
+    mod.validate_corpus(data)
 
 def test_cli_rejects_session_leakage(tmp_path):
     data = corpus(); train = tmp_path / "train.json"; evaluation = tmp_path / "eval.json"
