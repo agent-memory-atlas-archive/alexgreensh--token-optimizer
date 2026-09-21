@@ -35,8 +35,8 @@ At import time we add the plugin directory itself (``_PLUGIN_DIR``) to
 ``sys.path`` so the three sibling modules resolve correctly, whether the plugin
 is loaded from the install tree OR from the repo checkout (where scripts/ is the
 parent of all four files).  We append it so Hermes core modules keep import
-precedence. No Hermes modules are imported; we touch ``agent.usage_pricing``
-only for live per-call cost estimation, wrapped in try/except (fail-open).
+precedence. Host configuration is probed lazily only to avoid competing with
+Hermes's native compressor; every host import is wrapped fail-open.
 
 Activation: Hermes (v0.15.x) does NOT auto-discover plugins by directory
 presence — the plugin must be allow-listed in the Hermes config under
@@ -155,6 +155,34 @@ def _estimate_fill_from_history(conversation_history: list[Any]) -> int:
                     chars += len(str(part.get("text") or ""))
     return int(chars / 3.3)
 
+
+
+def _native_compression_needs_help(session_id: str) -> bool:
+    """True only when Token Optimizer should intervene in Hermes compression.
+
+    Hermes owns context compression. We stay silent while its native compressor
+    is enabled and healthy, avoiding a competing threshold/policy. A nudge is
+    useful when compression is explicitly disabled or its persisted session
+    health says the compressor failed or was ineffective. Any probe failure
+    defaults to silent observer mode.
+    """
+    try:
+        from hermes_cli.config import load_config_readonly  # noqa: PLC0415
+        cfg = load_config_readonly() or {}
+        if not bool((cfg.get("compression") or {}).get("enabled", True)):
+            return True
+    except Exception:
+        return False
+    try:
+        import hermes_state  # noqa: PLC0415
+        row = hermes_state.get_session(session_id) or {}
+        return bool(
+            row.get("compression_failure_error")
+            or int(row.get("compression_fallback_streak") or 0) > 0
+            or int(row.get("compression_ineffective_count") or 0) > 0
+        )
+    except Exception:
+        return False
 
 def _quality_grade(fill_ratio: float, message_count: int, model: str = "", ctx_win: int = 0) -> str:
     """Grade from fill and message count for the nudge line.
@@ -293,6 +321,10 @@ def on_pre_llm_call(**kwargs: Any) -> dict[str, str] | None:
         if fill < _NUDGE_THRESHOLD:
             # Threshold is inclusive: fill >= 0.70 triggers the nudge.
             return None
+        if not _native_compression_needs_help(session_id):
+            # Hermes already owns compression. Do not inject a second policy
+            # while the native compressor is enabled and healthy.
+            return None
 
         # Compute grade via compute_quality_score for consistency with stored grade (Q1).
         grade = _quality_grade(fill, message_count, model=model, ctx_win=ctx_win)
@@ -343,12 +375,14 @@ def _do_rollup(session_id: str, platform: str, reason: str) -> None:
             logger.debug("[token-optimizer] rollup already fired for %s, skipping", session_id)
             return
         _ROLLED_UP.add(session_id)
+    with _LOCK:
+        context_tokens = int((_TALLY.get(session_id) or {}).get("last_prompt", 0) or 0)
     bridge = _import_bridge()
     if bridge is None:
         logger.debug("[token-optimizer] bridge unavailable, skipping rollup for %s", session_id)
     else:
         try:
-            bridge.run_rollup(session_id=session_id, platform=platform, reason=reason)
+            bridge.run_rollup(session_id=session_id, platform=platform, reason=reason, context_tokens=context_tokens or None)
         except Exception as exc:
             logger.debug("[token-optimizer] rollup error for %s: %s", session_id, exc)
     # Clear per-session state regardless of rollup outcome.

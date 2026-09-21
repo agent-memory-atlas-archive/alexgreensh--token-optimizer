@@ -19833,7 +19833,9 @@ def _collect_hermes_sessions(days=90, quiet=False, rebuild=False):
 
         new_count = 0
         for row in rows:
-            parsed = hermes_session.normalize_session(row)
+            session_id = str(row.get("id") or "")
+            live_context_tokens = globals().get("_HERMES_ROLLUP_CONTEXT", {}).get(session_id)
+            parsed = hermes_session.normalize_session(row, context_tokens=live_context_tokens)
             if not parsed:
                 continue
 
@@ -47748,6 +47750,28 @@ if __name__ == "__main__":
         # Cap at 60s and fail open; a skipped rollup is invisible (the next
         # session re-collects idempotently), a frozen orphan is not.
         quiet = "--quiet" in args or "-q" in args
+        rollup_session = ""
+        rollup_context_tokens = None
+        i = 1
+        while i < len(args):
+            if args[i] == "--session" and i + 1 < len(args):
+                rollup_session = args[i + 1]
+                i += 2
+            elif args[i] == "--context-tokens" and i + 1 < len(args):
+                try:
+                    rollup_context_tokens = max(0, int(args[i + 1]))
+                except ValueError:
+                    rollup_context_tokens = None
+                i += 2
+            elif args[i] in ("--platform", "--reason") and i + 1 < len(args):
+                i += 2
+            else:
+                i += 1
+        _HERMES_ROLLUP_CONTEXT = (
+            {rollup_session: rollup_context_tokens}
+            if rollup_session and rollup_context_tokens is not None
+            else {}
+        )
         _tok_hook_deadline = _install_hook_budget(60)
         try:
             _collect_hermes_sessions(days=90, quiet=quiet)

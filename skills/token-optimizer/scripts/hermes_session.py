@@ -256,28 +256,33 @@ def compute_quality_score(
     *,
     context_window: int | None = None,
     cache_read: int = 0,
+    context_tokens: int | None = None,
 ) -> dict[str, Any]:
     """Score Hermes session context quality from available session-level fields.
 
-    Uses only the three signals available in Hermes session rows.  Missing
-    per-message data is omitted rather than fabricated.  Grade thresholds
+    Uses the two session-level signals plus live prompt occupancy when the
+    plugin supplies it. Missing occupancy is omitted rather than fabricated.
+    Grade thresholds
     reuse measure.py's ``score_to_grade`` / ``score_to_band`` exactly.
 
-    ``cache_read`` is included in the fill numerator because cached tokens
-    occupy the same context window as freshly-billed input: a session that
-    read 160 K tokens from cache against a 200 K window is 80 % full, not 0 %.
+    ``input_tokens`` and ``cache_read`` are lifetime billing counters and never
+    drive occupancy. ``context_tokens`` is the provider-reported latest prompt.
 
     Returns a dict with: score (0-100 int), grade (letter), band (label),
     signals_active (list), signals_omitted (list).
     """
     ctx_win = context_window if context_window and context_window > 0 else _context_window_for_model(model)
 
-    # Signal 1: Context fill (40% weight). Numerator = fresh input + cache_read
-    # because cache-read tokens consume context window space just as fresh tokens
-    # do.  Cap at 1.0 so emitted fill never exceeds 100% downstream (nudges, UI).
-    fill_numerator = input_tokens + max(0, cache_read)
-    fill_ratio = min(1.0, max(0.0, fill_numerator / ctx_win)) if ctx_win > 0 else 0.0
-    if fill_ratio < 0.30:
+    # Signal 1: live context occupancy. Hermes session rows contain lifetime
+    # token totals: every API call re-sends the prompt, so summing those rows is
+    # never a context-window measurement. Only score fill when the plugin passes
+    # the latest request's prompt_tokens. A missed rollup remains honest: omit
+    # the unavailable signal and renormalize the two measured signals below.
+    fill_available = context_tokens is not None and context_tokens >= 0
+    fill_ratio = min(1.0, max(0.0, context_tokens / ctx_win)) if fill_available and ctx_win > 0 else None
+    if not fill_available:
+        fill_score = None
+    elif fill_ratio < 0.30:
         fill_score = 100
     elif fill_ratio < 0.50:
         fill_score = 80
@@ -314,7 +319,17 @@ def compute_quality_score(
     else:
         oi_score = 15
 
-    raw = fill_score * 0.40 + msg_score * 0.35 + oi_score * 0.25
+    if fill_available:
+        weights = {"fill": 0.40, "message_count": 0.35, "output_input_ratio": 0.25}
+        raw = (
+            fill_score * weights["fill"]
+            + msg_score * weights["message_count"]
+            + oi_score * weights["output_input_ratio"]
+        )
+    else:
+        # Preserve the relative 35:25 weighting when occupancy is unavailable.
+        weights = {"fill": 0.0, "message_count": 7 / 12, "output_input_ratio": 5 / 12}
+        raw = msg_score * weights["message_count"] + oi_score * weights["output_input_ratio"]
     final = int(round(min(100, max(0, raw))))
 
     helpers = _get_measure_helpers()
@@ -349,20 +364,17 @@ def compute_quality_score(
         "score": final,
         "grade": grade,
         "band": band,
-        "fill_ratio": round(fill_ratio, 4),
+        "fill_ratio": round(fill_ratio, 4) if fill_ratio is not None else None,
         "context_window_used": ctx_win,
-        "signals_active": list(ACTIVE_QUALITY_SIGNALS),
-        "signals_omitted": list(OMITTED_QUALITY_SIGNALS),
+        "context_source": "provider_prompt_tokens" if fill_available else "unavailable",
+        "signals_active": list(ACTIVE_QUALITY_SIGNALS if fill_available else ACTIVE_QUALITY_SIGNALS[1:]),
+        "signals_omitted": list(OMITTED_QUALITY_SIGNALS) + ([] if fill_available else ["context_fill"]),
         "signal_scores": {
             "fill": fill_score,
             "message_count": msg_score,
             "output_input_ratio": oi_score,
         },
-        "signal_weights": {
-            "fill": 0.40,
-            "message_count": 0.35,
-            "output_input_ratio": 0.25,
-        },
+        "signal_weights": weights,
     }
 
 
@@ -389,7 +401,7 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return default
 
 
-def normalize_session(row: dict[str, Any]) -> dict[str, Any] | None:
+def normalize_session(row: dict[str, Any], *, context_tokens: int | None = None) -> dict[str, Any] | None:
     """Normalize a Hermes sessions row into TO's canonical session shape.
 
     Returns a dict matching the keys that ``measure.py`` / the dashboard
@@ -483,9 +495,8 @@ def normalize_session(row: dict[str, Any]) -> dict[str, Any] | None:
         except (TypeError, ValueError):
             duration_minutes = 0.0
 
-    # Quality score from available signals only.
-    # M3: pass cache_read into compute_quality_score so the fill numerator
-    # includes cached tokens (they occupy the same context window space).
+    # Quality score from available signals only. The session counters remain
+    # useful for cost, but only the latest provider prompt can measure occupancy.
     quality = compute_quality_score(
         input_tokens=input_tokens,
         output_tokens=output_tokens,
@@ -493,6 +504,7 @@ def normalize_session(row: dict[str, Any]) -> dict[str, Any] | None:
         model=model,
         context_window=ctx_window,
         cache_read=cache_read,
+        context_tokens=context_tokens,
     )
 
     # Topic: use title from Hermes if available.

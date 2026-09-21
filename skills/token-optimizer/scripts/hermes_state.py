@@ -76,6 +76,11 @@ _SESSION_COLUMNS = (
     "cwd",
     "billing_provider",
     "billing_mode",
+    "compression_failure_cooldown_until",
+    "compression_failure_error",
+    "compression_fallback_streak",
+    "compression_ineffective_count",
+    "compression_recovery_deadline",
 )
 
 _SESSION_DEFAULTS: dict[str, Any] = {
@@ -101,6 +106,11 @@ _SESSION_DEFAULTS: dict[str, Any] = {
     "cwd": None,
     "billing_provider": None,
     "billing_mode": None,
+    "compression_failure_cooldown_until": None,
+    "compression_failure_error": None,
+    "compression_fallback_streak": 0,
+    "compression_ineffective_count": 0,
+    "compression_recovery_deadline": None,
 }
 
 # Whitelist of tables this module ever inspects.

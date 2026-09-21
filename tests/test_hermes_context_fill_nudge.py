@@ -36,6 +36,7 @@ def plugin():
 
     # Deterministic window: the real resolver reads a model catalog we do not want to couple to.
     module._context_window = lambda model: WINDOW  # noqa: SLF001 — deliberate test seam
+    module._native_compression_needs_help = lambda session_id: True  # fallback-policy seam
 
     module._TALLY.clear()
     module._NUDGED.clear()
@@ -163,3 +164,61 @@ def test_first_turn_without_tally_estimates_from_history(plugin):
         conversation_history=[{"role": "user", "content": "y" * 3_300_000}],
     )
     assert long_history is not None
+
+
+def test_native_healthy_compressor_suppresses_competing_nudge(plugin, monkeypatch):
+    """Hermes owns compression; TO stays observational while it is healthy."""
+    monkeypatch.setattr(plugin, "_native_compression_needs_help", lambda _sid: False)
+    _call(plugin, "s-native-healthy", 800_000)
+    assert _nudge(plugin, "s-native-healthy") is None
+
+
+def test_failed_native_compressor_allows_fallback_nudge(plugin, monkeypatch):
+    monkeypatch.setattr(plugin, "_native_compression_needs_help", lambda _sid: True)
+    _call(plugin, "s-native-failed", 800_000)
+    nudge = _nudge(plugin, "s-native-failed")
+    assert nudge is not None
+    assert "800,000" in nudge["context"]
+
+
+
+def _load_unpatched_plugin():
+    spec = importlib.util.spec_from_file_location("to_hermes_policy_under_test", HERMES_INIT)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_native_compression_disabled_needs_help(monkeypatch):
+    import types
+    actual = _load_unpatched_plugin()
+    config_mod = types.ModuleType("hermes_cli.config")
+    config_mod.load_config_readonly = lambda: {"compression": {"enabled": False}}
+    package = types.ModuleType("hermes_cli")
+    package.__path__ = []
+    monkeypatch.setitem(sys.modules, "hermes_cli", package)
+    monkeypatch.setitem(sys.modules, "hermes_cli.config", config_mod)
+    assert actual._native_compression_needs_help("s-disabled") is True
+
+
+def test_native_compression_failure_needs_help(monkeypatch):
+    import types
+    actual = _load_unpatched_plugin()
+    config_mod = types.ModuleType("hermes_cli.config")
+    config_mod.load_config_readonly = lambda: {"compression": {"enabled": True}}
+    package = types.ModuleType("hermes_cli")
+    package.__path__ = []
+    state_mod = types.ModuleType("hermes_state")
+    state_mod.get_session = lambda _sid: {"compression_ineffective_count": 2}
+    monkeypatch.setitem(sys.modules, "hermes_cli", package)
+    monkeypatch.setitem(sys.modules, "hermes_cli.config", config_mod)
+    monkeypatch.setitem(sys.modules, "hermes_state", state_mod)
+    assert actual._native_compression_needs_help("s-failed") is True
+
+
+def test_native_probe_failure_stays_observational(monkeypatch):
+    actual = _load_unpatched_plugin()
+    monkeypatch.delitem(sys.modules, "hermes_cli", raising=False)
+    monkeypatch.delitem(sys.modules, "hermes_cli.config", raising=False)
+    assert actual._native_compression_needs_help("s-unknown") is False
