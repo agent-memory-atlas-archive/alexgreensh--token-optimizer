@@ -217,6 +217,70 @@ def test_native_compression_failure_needs_help(monkeypatch):
     assert actual._native_compression_needs_help("s-failed") is True
 
 
+def _install_native_policy_modules(monkeypatch, row):
+    import types
+    config_mod = types.ModuleType("hermes_cli.config")
+    config_mod.load_config_readonly = lambda: {"compression": {"enabled": True}}
+    package = types.ModuleType("hermes_cli")
+    package.__path__ = []
+    state_mod = types.ModuleType("hermes_state")
+    state_mod.get_session = lambda _sid: row
+    monkeypatch.setitem(sys.modules, "hermes_cli", package)
+    monkeypatch.setitem(sys.modules, "hermes_cli.config", config_mod)
+    monkeypatch.setitem(sys.modules, "hermes_state", state_mod)
+
+
+def test_expired_failure_cooldown_does_not_need_help(monkeypatch):
+    actual = _load_unpatched_plugin()
+    _install_native_policy_modules(monkeypatch, {
+        "compression_failure_error": "old provider error",
+        "compression_failure_cooldown_until": 2_000.0,
+    })
+    monkeypatch.setattr(actual.time, "time", lambda: 2_001.0)
+    assert actual._native_compression_needs_help("s-recovered") is False
+
+
+def test_active_failure_cooldown_needs_help(monkeypatch):
+    actual = _load_unpatched_plugin()
+    _install_native_policy_modules(monkeypatch, {
+        "compression_failure_error": "current provider error",
+        "compression_failure_cooldown_until": 2_000.0,
+    })
+    monkeypatch.setattr(actual.time, "time", lambda: 1_999.0)
+    assert actual._native_compression_needs_help("s-failed") is True
+
+
+def test_expired_anti_thrash_recovery_does_not_need_help(monkeypatch):
+    actual = _load_unpatched_plugin()
+    _install_native_policy_modules(monkeypatch, {
+        "compression_fallback_streak": 2,
+        "compression_ineffective_count": 2,
+        "compression_recovery_deadline": 2_000.0,
+    })
+    monkeypatch.setattr(actual.time, "time", lambda: 2_001.0)
+    assert actual._native_compression_needs_help("s-probe-due") is False
+
+
+def test_active_anti_thrash_recovery_needs_help(monkeypatch):
+    actual = _load_unpatched_plugin()
+    _install_native_policy_modules(monkeypatch, {
+        "compression_fallback_streak": 2,
+        "compression_recovery_deadline": 2_000.0,
+    })
+    monkeypatch.setattr(actual.time, "time", lambda: 1_999.0)
+    assert actual._native_compression_needs_help("s-blocked") is True
+
+
+def test_recovered_anti_thrash_counter_does_not_need_help(monkeypatch):
+    actual = _load_unpatched_plugin()
+    _install_native_policy_modules(monkeypatch, {
+        "compression_fallback_streak": 1,
+        "compression_ineffective_count": 1,
+        "compression_recovery_deadline": 0.0,
+    })
+    assert actual._native_compression_needs_help("s-probation") is False
+
+
 def test_native_probe_failure_stays_observational(monkeypatch):
     actual = _load_unpatched_plugin()
     monkeypatch.delitem(sys.modules, "hermes_cli", raising=False)

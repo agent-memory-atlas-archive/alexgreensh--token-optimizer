@@ -49,6 +49,7 @@ from __future__ import annotations
 import logging
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -176,11 +177,26 @@ def _native_compression_needs_help(session_id: str) -> bool:
     try:
         import hermes_state  # noqa: PLC0415
         row = hermes_state.get_session(session_id) or {}
-        return bool(
-            row.get("compression_failure_error")
-            or int(row.get("compression_fallback_streak") or 0) > 0
-            or int(row.get("compression_ineffective_count") or 0) > 0
-        )
+        now = time.time()
+
+        # Hermes keeps the last failure text after its cooldown expires. Treat
+        # the failure as current only while that cooldown is live; otherwise a
+        # single historical provider error would make TO compete forever.
+        failure_deadline = float(row.get("compression_failure_cooldown_until") or 0.0)
+        if failure_deadline > now:
+            return True
+
+        # Fallback/ineffective counters are strikes, not a permanent health
+        # verdict. Hermes trips at two strikes and arms a recovery window
+        # lazily. A zero deadline with tripped counters is a current, not-yet-
+        # armed failure epoch. Once an armed deadline expires Hermes permits a
+        # probation probe, so TO must stand down even if the durable counters
+        # have not yet been lowered by that next evaluation.
+        fallback_streak = int(row.get("compression_fallback_streak") or 0)
+        ineffective_count = int(row.get("compression_ineffective_count") or 0)
+        recovery_deadline = float(row.get("compression_recovery_deadline") or 0.0)
+        tripped = fallback_streak >= 2 or ineffective_count >= 2
+        return tripped and (recovery_deadline <= 0.0 or recovery_deadline > now)
     except Exception:
         return False
 
