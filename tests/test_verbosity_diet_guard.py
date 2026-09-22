@@ -13,8 +13,8 @@ Budgets (chars at ~4 chars/token):
     continuity hints all live here. 40 tokens is generous for "number + action"
     but tight enough to catch the reassurance-paragraph regression.
   SESSION_START: 240 chars (60 tokens). Billed once per session, not every
-    turn, so the budget is looser. The dashboard-daemon install notice and
-    the star pitch are the longest; 60 tokens accommodates them while still
+    turn, so the budget is looser. The dashboard-daemon install notice is
+    the longest; 60 tokens accommodates it while still
     catching the 253-char pre-diet dashboard message.
 
 Terminal-only strings (stderr, CLI prints) are NOT checked here: they cost
@@ -59,7 +59,6 @@ MODEL_EVERY_TURN_FUNCS = {
 SESSION_START_FUNCS = {
     "compact_restore",
     "run_ensure_health",
-    "_star_session_pitch",
     "_print_intel_digest",
     "build_lean_resume_context",
 }

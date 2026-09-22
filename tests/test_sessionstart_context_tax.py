@@ -520,7 +520,6 @@ def _stub_ensure_health_to_heal(m, monkeypatch, added):
     monkeypatch.setattr(m, "setup_all_hooks",
                         lambda dry_run=False, verbose=False: {"added": added})
     # Later one-time/repair notices that could print to stdout.
-    monkeypatch.setattr(m, "_star_session_pitch", lambda: "")
     monkeypatch.setattr(m, "_fix_stale_settings_paths", lambda: 0)
     monkeypatch.setattr(m, "_migrate_statusline_to_stable_path", lambda: False)
     monkeypatch.setattr(m, "_heal_keepwarm_plist_path", lambda: False)
