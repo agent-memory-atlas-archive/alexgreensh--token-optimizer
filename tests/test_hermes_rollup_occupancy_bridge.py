@@ -27,3 +27,18 @@ def test_rollup_omits_unknown_occupancy(monkeypatch, tmp_path):
     monkeypatch.setattr(bridge, "spawn_detached", lambda cmd, **kwargs: calls.append(cmd) or object())
     bridge.run_rollup("session-2")
     assert "--context-tokens" not in calls[0]
+
+
+def test_rollup_omits_non_positive_occupancy(monkeypatch, tmp_path):
+    """Zero/negative context_tokens are not real prompt sizes — a session that
+    never recorded a prompt must stay 'unavailable', not ship a fake reading."""
+    measure = tmp_path / "measure.py"
+    measure.write_text("# stub\n", encoding="utf-8")
+    monkeypatch.setattr(bridge, "_locate_measure_py", lambda: measure)
+    calls = []
+    monkeypatch.setattr(bridge, "spawn_detached", lambda cmd, **kwargs: calls.append(cmd) or object())
+    bridge.run_rollup("session-3", context_tokens=0)
+    bridge.run_rollup("session-4", context_tokens=-50)
+    rollups = [cmd for cmd in calls if "hermes-rollup" in cmd]
+    assert len(rollups) == 2
+    assert all("--context-tokens" not in cmd for cmd in rollups)

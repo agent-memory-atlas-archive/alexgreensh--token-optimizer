@@ -194,7 +194,7 @@ def run_rollup(
         cmd += ["--platform", platform]
     if reason:
         cmd += ["--reason", reason]
-    if context_tokens is not None and context_tokens >= 0:
+    if context_tokens is not None and context_tokens > 0:
         cmd += ["--context-tokens", str(int(context_tokens))]
     try:
         _proc = spawn_detached(
