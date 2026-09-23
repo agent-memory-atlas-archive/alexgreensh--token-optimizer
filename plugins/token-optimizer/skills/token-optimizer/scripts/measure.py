@@ -19596,8 +19596,11 @@ def _collect_hermes_sessions(days=90, quiet=False, rebuild=False):
             return 0
 
         new_count = 0
+        updated_count = 0
         for row in rows:
-            parsed = hermes_session.normalize_session(row)
+            session_id = str(row.get("id") or "")
+            live_context_tokens = globals().get("_HERMES_ROLLUP_CONTEXT", {}).get(session_id)
+            parsed = hermes_session.normalize_session(row, context_tokens=live_context_tokens)
             if not parsed:
                 continue
 
@@ -19607,6 +19610,23 @@ def _collect_hermes_sessions(days=90, quiet=False, rebuild=False):
                 continue
 
             if _is_file_collected(conn, dedup_key):
+                # A rollup carries the session's live occupancy, which an
+                # earlier mid-session collect could not see. Refresh the stored
+                # grade in place so the first write does not freeze a
+                # fill-blind score for the life of the DB. Non-rollup
+                # collections (no live reading) keep the dedup's first write.
+                if live_context_tokens is not None:
+                    conn.execute(
+                        """UPDATE session_log
+                           SET quality_score = ?, quality_grade = ?
+                           WHERE jsonl_path = ?""",
+                        (
+                            parsed.get("quality_score", 0),
+                            parsed.get("quality_grade", "F"),
+                            dedup_key,
+                        ),
+                    )
+                    updated_count += 1
                 continue
 
             started_at = row.get("started_at")
@@ -19664,8 +19684,9 @@ def _collect_hermes_sessions(days=90, quiet=False, rebuild=False):
                 continue
             new_count += 1
 
-        # Q2: only rebuild aggregates when new rows were actually inserted.
-        if new_count > 0:
+        # Q2: only rebuild aggregates when rows were actually inserted or
+        # refreshed (daily_stats carries avg_quality_score / worst_grade).
+        if new_count > 0 or updated_count > 0:
             _rebuild_aggregate_tables(conn)
         conn.commit()
         conn.execute("PRAGMA user_version = 3")
@@ -19677,6 +19698,37 @@ def _collect_hermes_sessions(days=90, quiet=False, rebuild=False):
         total = conn_total_sessions() if TRENDS_DB.exists() else new_count
         print(f"[Token Optimizer] Collected {new_count} new Hermes sessions. Total in DB: {total}")
     return new_count
+
+
+def _parse_hermes_rollup_context(args):
+    """Parse ``--session``/``--context-tokens`` out of hermes-rollup CLI args.
+
+    Returns ``{session_id: context_tokens}`` when both are present and the
+    token count is a positive integer; ``{}`` otherwise. A zero, negative, or
+    non-numeric value is not a real occupancy reading — it degrades to
+    "unavailable" so the collected row omits fill instead of storing a fake
+    0% fill. ``--platform``/``--reason`` are accepted and skipped so the
+    bridge's exact call signature never causes an error.
+    """
+    session = ""
+    context_tokens = None
+    i = 0
+    while i < len(args):
+        if args[i] == "--session" and i + 1 < len(args):
+            session = args[i + 1]
+            i += 2
+        elif args[i] == "--context-tokens" and i + 1 < len(args):
+            try:
+                value = int(args[i + 1])
+            except ValueError:
+                value = 0
+            context_tokens = value if value > 0 else None
+            i += 2
+        elif args[i] in ("--platform", "--reason") and i + 1 < len(args):
+            i += 2
+        else:
+            i += 1
+    return {session: context_tokens} if session and context_tokens is not None else {}
 
 
 def _resolve_copilot_home_wsl_aware(mnt_root=None):
@@ -47502,6 +47554,7 @@ if __name__ == "__main__":
         # Cap at 60s and fail open; a skipped rollup is invisible (the next
         # session re-collects idempotently), a frozen orphan is not.
         quiet = "--quiet" in args or "-q" in args
+        _HERMES_ROLLUP_CONTEXT = _parse_hermes_rollup_context(args[1:])
         _tok_hook_deadline = _install_hook_budget(60)
         try:
             _collect_hermes_sessions(days=90, quiet=quiet)

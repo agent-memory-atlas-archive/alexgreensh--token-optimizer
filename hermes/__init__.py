@@ -35,8 +35,8 @@ At import time we add the plugin directory itself (``_PLUGIN_DIR``) to
 ``sys.path`` so the three sibling modules resolve correctly, whether the plugin
 is loaded from the install tree OR from the repo checkout (where scripts/ is the
 parent of all four files).  We append it so Hermes core modules keep import
-precedence. No Hermes modules are imported; we touch ``agent.usage_pricing``
-only for live per-call cost estimation, wrapped in try/except (fail-open).
+precedence. Host configuration is probed lazily only to avoid competing with
+Hermes's native compressor; every host import is wrapped fail-open.
 
 Activation: Hermes (v0.15.x) does NOT auto-discover plugins by directory
 presence — the plugin must be allow-listed in the Hermes config under
@@ -49,6 +49,7 @@ from __future__ import annotations
 import logging
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -87,6 +88,46 @@ def _import_bridge():
         return _bridge
     except Exception as exc:
         logger.debug("[token-optimizer] hermes_hook_bridge not available: %s", exc)
+        # Do NOT cache None — allow retry on next call.
+        return None
+
+
+# Same lazy-cache pattern as _import_bridge, but the state reader is loaded by
+# file path, not by name: Hermes ships its own ``hermes_state`` module, so a
+# bare ``import hermes_state`` inside the host can bind that one instead of
+# TO's read-only reader — the compression-health probe would then read foreign
+# data (or fail) and the gate would silently stay in observer mode.
+_STATE_SENTINEL = object()  # distinct from None: "not yet resolved"
+_state_cache: Any = _STATE_SENTINEL
+
+# Candidate locations for TO's hermes_state.py: the installed plugin dir (the
+# installer copies it next to this file) and the repo checkout's scripts dir.
+_STATE_CANDIDATES = (
+    _PLUGIN_DIR / "hermes_state.py",
+    _PLUGIN_DIR.parent / "skills" / "token-optimizer" / "scripts" / "hermes_state.py",
+)
+
+
+def _import_state():
+    """Return TO's hermes_state module, loaded by explicit file path."""
+    global _state_cache
+    if _state_cache is not _STATE_SENTINEL:
+        return _state_cache
+    try:
+        path = next((p for p in _STATE_CANDIDATES if p.is_file()), None)
+        if path is None:
+            return None
+        import importlib.util  # noqa: PLC0415
+
+        spec = importlib.util.spec_from_file_location("to_hermes_state", path)
+        if spec is None or spec.loader is None:
+            return None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _state_cache = module  # cache only on success
+        return module
+    except Exception as exc:
+        logger.debug("[token-optimizer] hermes_state not available: %s", exc)
         # Do NOT cache None — allow retry on next call.
         return None
 
@@ -156,6 +197,63 @@ def _estimate_fill_from_history(conversation_history: list[Any]) -> int:
     return int(chars / 3.3)
 
 
+
+def _native_compression_needs_help(session_id: str) -> bool:
+    """True only when Token Optimizer should intervene in Hermes compression.
+
+    Hermes owns context compression. We stay silent while its native compressor
+    is enabled and healthy, avoiding a competing threshold/policy. A nudge is
+    useful when compression is explicitly disabled or its persisted session
+    health says the compressor failed or was ineffective. Any probe failure
+    defaults to silent observer mode.
+    """
+    try:
+        from hermes_cli.config import load_config_readonly  # noqa: PLC0415
+        cfg = load_config_readonly() or {}
+        # The config spells the switch two ways: a table
+        # (``compression.enabled = false``) or a flat ``compression = false``.
+        compression = cfg.get("compression")
+        enabled = (
+            bool(compression.get("enabled", True))
+            if isinstance(compression, dict)
+            else (True if compression is None else bool(compression))
+        )
+        if not enabled:
+            return True
+    except Exception:
+        # Config unreadable: keep going — the persisted health probe below can
+        # still see a failing compressor even when the config can't be read.
+        pass
+    try:
+        state = _import_state()
+        if state is None:
+            return False
+        # live=True: the probe runs inside the live host, so it must see
+        # committed WAL writes, not just the last checkpoint.
+        row = state.get_session(session_id, live=True) or {}
+        now = time.time()
+
+        # Hermes keeps the last failure text after its cooldown expires. Treat
+        # the failure as current only while that cooldown is live; otherwise a
+        # single historical provider error would make TO compete forever.
+        failure_deadline = float(row.get("compression_failure_cooldown_until") or 0.0)
+        if failure_deadline > now:
+            return True
+
+        # Fallback/ineffective counters are strikes, not a permanent health
+        # verdict. Hermes trips at two strikes and arms a recovery window
+        # lazily. A zero deadline with tripped counters is a current, not-yet-
+        # armed failure epoch. Once an armed deadline expires Hermes permits a
+        # probation probe, so TO must stand down even if the durable counters
+        # have not yet been lowered by that next evaluation.
+        fallback_streak = int(row.get("compression_fallback_streak") or 0)
+        ineffective_count = int(row.get("compression_ineffective_count") or 0)
+        recovery_deadline = float(row.get("compression_recovery_deadline") or 0.0)
+        tripped = fallback_streak >= 2 or ineffective_count >= 2
+        return tripped and (recovery_deadline <= 0.0 or recovery_deadline > now)
+    except Exception:
+        return False
+
 def _quality_grade(fill_ratio: float, message_count: int, model: str = "", ctx_win: int = 0) -> str:
     """Grade from fill and message count for the nudge line.
 
@@ -174,6 +272,9 @@ def _quality_grade(fill_ratio: float, message_count: int, model: str = "", ctx_w
             message_count=message_count,
             model=model or "",
             context_window=window,
+            # The nudge's fill IS a live occupancy reading — pass it so the
+            # grade matches what the rollup stores for the same session.
+            context_tokens=approx_input,
         )
         return result["grade"]
     except Exception:
@@ -293,6 +394,10 @@ def on_pre_llm_call(**kwargs: Any) -> dict[str, str] | None:
         if fill < _NUDGE_THRESHOLD:
             # Threshold is inclusive: fill >= 0.70 triggers the nudge.
             return None
+        if not _native_compression_needs_help(session_id):
+            # Hermes already owns compression. Do not inject a second policy
+            # while the native compressor is enabled and healthy.
+            return None
 
         # Compute grade via compute_quality_score for consistency with stored grade (Q1).
         grade = _quality_grade(fill, message_count, model=model, ctx_win=ctx_win)
@@ -343,12 +448,14 @@ def _do_rollup(session_id: str, platform: str, reason: str) -> None:
             logger.debug("[token-optimizer] rollup already fired for %s, skipping", session_id)
             return
         _ROLLED_UP.add(session_id)
+    with _LOCK:
+        context_tokens = int((_TALLY.get(session_id) or {}).get("last_prompt", 0) or 0)
     bridge = _import_bridge()
     if bridge is None:
         logger.debug("[token-optimizer] bridge unavailable, skipping rollup for %s", session_id)
     else:
         try:
-            bridge.run_rollup(session_id=session_id, platform=platform, reason=reason)
+            bridge.run_rollup(session_id=session_id, platform=platform, reason=reason, context_tokens=context_tokens or None)
         except Exception as exc:
             logger.debug("[token-optimizer] rollup error for %s: %s", session_id, exc)
     # Clear per-session state regardless of rollup outcome.

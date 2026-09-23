@@ -7,7 +7,7 @@ Native Python plugin. Reads Hermes's own `~/.hermes/state.db` read-only. Model-a
 ## What It Does
 
 - **Per-turn usage capture** via `post_api_request`: accumulates `input_tokens`, `output_tokens`, `cache_read_tokens`, `cache_write_tokens`, and `reasoning_tokens` into a thread-safe in-process tally for each session.
-- **Proactive context nudge** via `pre_llm_call`: injects a one-line warning into the next turn when estimated context fill crosses ~70% of the model's window. Fires once per session crossing to avoid spam.
+- **Proactive context nudge** via `pre_llm_call`: injects a one-line warning into the next turn when estimated context usage crosses ~70% of the model's window. Fires once per session to avoid spam.
 - **Session rollup** via `on_session_finalize` and `on_session_end`: when a session ends, the plugin reads the final sessions row from `state.db` and writes it into Token Optimizer's shared `trends.db`. A double-rollup guard ensures only one subprocess fires even when both hooks arrive for the same session.
 - **`/token-optimizer` slash command**: shows a token and cost summary for the most recent Hermes sessions, available inside Hermes at any time.
 - **`hermes token-optimizer` CLI subcommand**: opens the dashboard at `http://localhost:24844`.
@@ -72,7 +72,7 @@ Once the plugin is installed and allow-listed in `plugins.enabled`, the hooks ac
 
 ## The Context Nudge
 
-Before each turn, the `pre_llm_call` hook estimates how full the context window is. If the estimated fill exceeds 70%, the plugin appends a one-line notice to the user message:
+Before each turn, the `pre_llm_call` hook checks live context usage. Hermes owns compression, so Token Optimizer stays silent while the native compressor is enabled and healthy; it warns only when compression is disabled, failed, or ineffective. If the estimated fill exceeds 70%, the plugin appends a one-line notice to the user message:
 
 ```
 [Token Optimizer] Context ~73% full (~146,000 input tokens vs assumed 200,000 window) Grade: C. Avoid adding large files; prefer targeted reads.
@@ -80,7 +80,7 @@ Before each turn, the `pre_llm_call` hook estimates how full the context window 
 
 At 85% or above, the tip escalates to suggest `/compact`.
 
-**Important caveats:** Hermes does not expose the live context window size to plugins, so the fill percentage is an estimate against an assumed window (200,000 tokens by default, or the mapped window for known models). The displayed percentage is capped at 100 to avoid absurd figures on large-window models. The nudge fires at most once per session crossing. It never raises an exception into the Hermes host.
+**Important caveats:** Hermes does not expose the live context window size to plugins, so the fill percentage is an estimate against an assumed window (200,000 tokens by default, or the mapped window for known models). The displayed percentage is capped at 100 to avoid absurd figures on large-window models. The nudge fires at most once per session. It never raises an exception into the Hermes host.
 
 ## Context-Quality Score
 
@@ -90,7 +90,7 @@ Each session is scored on a 0-100 scale using the signals available in Hermes's 
 
 | Signal | Weight | What it measures |
 |--------|--------|-----------------|
-| Context fill | 40% | `(input_tokens + cache_read_tokens)` divided by model context window. Cache-read tokens count because they occupy the same window as fresh tokens. |
+| Context usage | 40% | Latest provider-reported prompt tokens divided by the mapped model context window. Omitted when live prompt usage is unavailable; cumulative session totals are never used as occupancy. |
 | Message count risk | 35% | Session length relative to a risk curve (<=20 messages scores 100; >100 scores 10). |
 | Output / input ratio | 25% | Productivity signal: output tokens divided by input tokens. Low ratios indicate context-heavy sessions producing little output. |
 
