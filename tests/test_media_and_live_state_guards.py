@@ -167,7 +167,9 @@ def test_guard_allows_entries_without_a_timestamp(tmp_path):
 
 def test_live_state_patterns():
     from refetch_fingerprint import is_live_state_tool
-    for name in ("mcp__claude-in-chrome__computer", "mcp__plugin_playwright_playwright__browser_snapshot",
+    for name in ("mcp__claude-in-chrome__computer", "mcp__Claude_in_Chrome__get_page_text",
+                 "mcp__plugin_claude-in-chrome_claude-in-chrome__read_page", "mcp__chrome__find",
+                 "mcp__plugin_playwright_playwright__browser_snapshot",
                  "mcp__puppeteer__screenshot", "mcp__Chrome-DevTools__take_snapshot"):
         assert is_live_state_tool(name), name
     for name in ("mcp__somechatty__list_issues", "mcp__whatsapp__list_messages", "Bash", ""):
@@ -225,3 +227,28 @@ def test_old_store_without_the_column_migrates(dedup, tmp_path):
     cols = {r[1] for r in conn.execute("PRAGMA table_info(command_outputs)")}
     conn.close()
     assert "last_tool_use_id" in cols
+
+
+def test_pre_fix_twin_without_tool_use_id_is_recognised(dedup):
+    # The stuck Cowork copy runs old code: its row has no last_tool_use_id.
+    from session_store import SessionStore
+    from delta_diff import content_hash
+    store = SessionStore("twin-session")
+    store.insert_command_output(content_hash("cat log"), "cat log", content_hash(OUT), len(OUT), OUT)
+    store.close()
+    assert dedup._crossturn_dedup("cat log", OUT, "toolu_new") is None
+
+
+def test_structured_data_mentioning_images_still_archives(tmp_path):
+    # A Notion/Slack-style payload that DESCRIBES an image node is data, not media.
+    payload = {"results": [{"type": "image", "image": {"url": "https://x/y.png"}, "id": i}
+                           for i in range(300)]}
+    out = _hook("archive_result.py",
+                _post("mcp__notion__search", payload, "toolu_notion", {"q": "x"}), tmp_path)
+    assert "updatedMCPToolOutput" in out
+
+
+def test_read_tool_image_shape_is_media(tmp_path):
+    from archive_result import _contains_media_block
+    assert _contains_media_block({"type": "image", "file": {"base64": "AAA", "type": "image/png"}})
+    assert not _contains_media_block({"type": "text", "file": {"content": "x"}})

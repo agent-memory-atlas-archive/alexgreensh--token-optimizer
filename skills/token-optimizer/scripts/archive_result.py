@@ -843,31 +843,38 @@ def _maybe_log_mcp_cap_savings(tool_name: str, original_char_count: int, session
 _MEDIA_BLOCK_TYPES = frozenset({"image", "document", "audio", "video"})
 
 
-def _contains_media_block(value, _depth: int = 0) -> bool:
+def _is_media_block(block) -> bool:
+    if not isinstance(block, dict):
+        return False
+    if block.get("type") in _MEDIA_BLOCK_TYPES:
+        return True
+    # MCP embedded resource carrying binary: {"type": "resource", "resource": {"blob": ...}}
+    res = block.get("resource")
+    return isinstance(res, dict) and isinstance(res.get("blob"), str) and bool(res.get("mimeType"))
+
+
+def _contains_media_block(value) -> bool:
     """True when a raw tool_response holds an image/document/audio block.
 
-    Covers the Anthropic shape ({"type": "image", "source": {...}}), the MCP
-    shape ({"type": "image", "data": ..., "mimeType": ...}) and embedded MCP
-    resources carrying a blob. Bounded depth; never raises.
+    Only looks where hosts put content blocks: the response itself, a top-level
+    list of blocks, or a "content" list (the MCP result shape). It does not
+    recurse into arbitrary data, so a Notion or Slack payload that merely
+    describes an image node still archives normally. Never raises.
     """
-    if _depth > 8:
-        return False
     try:
-        if isinstance(value, list):
-            return any(_contains_media_block(v, _depth + 1) for v in value)
+        candidates = []
         if isinstance(value, dict):
-            if value.get("type") in _MEDIA_BLOCK_TYPES:
-                return True
-            if isinstance(value.get("blob"), str) and value.get("mimeType"):
-                return True
-            return any(
-                _contains_media_block(v, _depth + 1)
-                for v in value.values()
-                if isinstance(v, (list, dict))
-            )
+            candidates.append(value)
+            if isinstance(value.get("content"), list):
+                candidates.extend(value["content"])
+        elif isinstance(value, list):
+            for item in value:
+                candidates.append(item)
+                if isinstance(item, dict) and isinstance(item.get("content"), list):
+                    candidates.extend(item["content"])
+        return any(_is_media_block(c) for c in candidates)
     except Exception:
         return False
-    return False
 
 
 def _tool_response_to_text(value) -> str:

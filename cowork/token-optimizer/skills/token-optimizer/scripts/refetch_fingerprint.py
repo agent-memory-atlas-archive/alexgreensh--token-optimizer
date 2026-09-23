@@ -27,14 +27,16 @@ ARGS_HASH_KEY = "args_hash"
 # new data, so the re-fetch guard must never redirect these to an old archive.
 # Matched with fnmatch against the full tool name; fnmatch is case-sensitive on
 # POSIX, so names are lowercased first.
+# Hosts spell the same server differently (mcp__claude-in-chrome__,
+# mcp__Claude_in_Chrome__, mcp__plugin_claude-in-chrome_claude-in-chrome__), so
+# match on the server word. Over-matching only means the guard never blocks
+# that tool, which is the safe direction.
 LIVE_STATE_TOOL_PATTERNS: tuple[str, ...] = (
-    "mcp__claude-in-chrome__*",
+    "mcp__*chrome*__*",
     "mcp__*playwright*__*",
     "mcp__*puppeteer*__*",
     "mcp__*browser*__*",
-    "mcp__*chrome-devtools*__*",
-    "mcp__*computer-use*__*",
-    "mcp__*computer_use*__*",
+    "mcp__*computer?use*__*",
 )
 
 # The guard exists to break an immediate loop (the model re-issuing the call it

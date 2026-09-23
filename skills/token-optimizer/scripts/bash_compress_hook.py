@@ -61,6 +61,9 @@ _EXIT_CODE_RESPONSE_RE_CODEX = re.compile(r"^Exit code (\d+)\s*\n?")
 # store. This sentinel is process-local plumbing, never persisted as an id.
 _MAIN_AGENT_SENTINEL = "__main_agent__"
 _DEDUP_AGENT_ENV = "TOKEN_OPTIMIZER_DEDUP_AGENT_ID"
+# Window for recognising a twin hook that predates last_tool_use_id (see
+# _crossturn_dedup). Two processes for one call land well inside it.
+_LEGACY_TWIN_SECONDS = 2.0
 
 
 def _pending_redaction_warning() -> str | None:
@@ -557,6 +560,13 @@ def _crossturn_dedup(command: str, output: str, tool_use_id: str = ""):
             # not a re-run. Referencing it would say "identical to your previous
             # output" about output the model has never seen.
             if tool_use_id and prior.get("last_tool_use_id") == tool_use_id:
+                return None
+            # A pre-fix install writes no tool_use_id, so its twin row can only be
+            # recognised by shape: same bytes, written a moment ago. A genuine
+            # re-run this fast is rare, and missing one dedup costs nothing.
+            if (tool_use_id and not prior.get("last_tool_use_id")
+                    and prior.get("output_hash") == out_h
+                    and time.time() - float(prior.get("timestamp") or 0) < _LEGACY_TWIN_SECONDS):
                 return None
             # Recency guard: only reference a run from the last hour, a rough
             # proxy for "probably still in the agent's context".

@@ -481,6 +481,13 @@ def test_hook_and_cli_resolve_same_root(monkeypatch, tmp_path):
 #          entries on a bad match.
 # ---------------------------------------------------------------------------
 
+def _now_iso():
+    # The guard only denies inside its loop window, so fixtures need a fresh
+    # timestamp like the ones archive_result always writes.
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()
+
+
 def test_refetch_guard_renderable_check(monkeypatch, tmp_path):
     """_lookup_archived only returns a hit when the archive entry file is
     actually renderable (exists, readable JSON, non-empty response)."""
@@ -500,12 +507,14 @@ def test_refetch_guard_renderable_check(monkeypatch, tmp_path):
             "tool_name": "mcp__test__query",
             "args_hash": "abc123",
             "tool_use_id": "bad-entry",
+            "timestamp": _now_iso(),
             "tokens_est": 500,
         }) + "\n" +
         json.dumps({
             "tool_name": "mcp__test__query",
             "args_hash": "abc123",
             "tool_use_id": "good-entry",
+            "timestamp": _now_iso(),
             "tokens_est": 300,
         }) + "\n",
         encoding="utf-8",
