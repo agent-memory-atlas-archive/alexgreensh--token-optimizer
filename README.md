@@ -750,19 +750,19 @@ Resolves the latest GitHub Release tag, checks out that tag, fetches CHECKSUMS.s
 
 ## License
 
-**PolyForm Noncommercial 1.0.0**. Source-available. Personal, research, educational, and non-commercial use requires no license purchase.
+**PolyForm Noncommercial 1.0.0**, plus a written [small business permission](LICENSE-SMALL-BUSINESS.md). Source-available.
 
 ### Personal / hobby / research / education?
-Go for it. Full source, runs locally, no license purchase needed.
+Go for it. Full source, runs locally, no license purchase needed. That includes your own open-source side projects. What counts is who the work is for, not where it runs: work for your employer is your employer's use, even from home.
 
-### Small team (under 5 people OR under $20k/month revenue)?
-Small teams get a no-cost commercial license automatically. Just use it.
+### Small business (fewer than 5 people AND under $20k/month revenue)?
+No-cost commercial license, in writing: [LICENSE-SMALL-BUSINESS.md](LICENSE-SMALL-BUSINESS.md). Both limits apply to your **whole company** (including any parent or sister companies), not to the team or the number of people using Token Optimizer. A small team inside a larger company needs a commercial license.
 
 ### Started personal, now it's turning into a business?
-Your past use is totally fine. The license has a built-in 32-day grace period after any written notice. Reach out for a commercial license when you're ready.
+Your past use is totally fine. You get 32 days after you stop qualifying to sort out a commercial license.
 
 ### Larger company / commercial use?
-Contact [Alex Greenshpun](https://linkedin.com/in/alexgreensh) or me@alexgreenshpun.com.
+Contact [Alex Greenshpun](https://linkedin.com/in/alexgreensh) or me@alexgreenshpun.com. Terms are reasonable and scale with company size.
 
 ---
 

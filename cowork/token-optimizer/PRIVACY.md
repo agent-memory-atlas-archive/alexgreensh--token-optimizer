@@ -29,7 +29,7 @@ These files are read locally and never transmitted.
 
 ## What Token Optimizer Stores
 
-Token Optimizer writes several local data stores. All are stored with restrictive file permissions (`0o700` directories, `0o600` files).
+Token Optimizer writes several local data stores. On macOS and Linux, all are stored with restrictive file permissions (`0o700` directories, `0o600` files). On Windows, Python cannot apply these POSIX modes (`os.chmod` only toggles the read-only flag), so the stores inherit the access rules of your user profile folder, which by default grants access only to your account, Administrators, and SYSTEM.
 
 ### Session Metrics Database (trends.db)
 
@@ -77,7 +77,7 @@ JSON files with per-session quality score snapshots (6-signal metric).
 - **Checkpoint event log:** `~/.claude/token-optimizer/checkpoint-events.jsonl` (rotated at 1000 entries)
 - **Live fill cache:** `~/.claude/token-optimizer/live-fill.json`
 - **Dashboard:** `<plugin-data>/data/dashboard.html` (generated visualization)
-- **Daemon token:** `<plugin-data>/data/daemon-token` (32-byte random secret, 0600 permissions)
+- **Daemon token:** `<plugin-data>/data/daemon-token` (32-byte random secret, 0600 permissions on macOS and Linux)
 - **Daemon logs:** `<plugin-data>/data/logs/` (stdout/stderr from dashboard server)
 
 ### Antigravity adapter data

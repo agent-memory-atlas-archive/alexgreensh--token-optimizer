@@ -671,19 +671,19 @@ python3 measure.py inject-routing              # 注入
 
 ## 许可证
 
-**PolyForm Noncommercial 1.0.0**。源码可见。个人、研究、教育和非商业使用无需购买许可证。
+**PolyForm Noncommercial 1.0.0**,另附书面的[小型企业许可](LICENSE-SMALL-BUSINESS.md)。源码可见。
 
 ### 个人 / 爱好 / 研究 / 教育?
-放手去做。完整源码,本地运行,无需购买许可证。
+放手去做。完整源码,本地运行,无需购买许可证。你自己的开源业余项目也包括在内。关键在于这项工作为谁而做,而不是在哪里运行:为雇主做的工作,即使在家里做,也属于雇主的使用。
 
-### 小团队(5 人以下或月收入 $20k 以下)?
-小团队自动获得免费商业许可证。尽管用。
+### 小型企业(少于 5 人 且 月收入低于 $20k)?
+免费商业许可证,以书面形式授予:[LICENSE-SMALL-BUSINESS.md](LICENSE-SMALL-BUSINESS.md)。两个条件都针对**整个公司**(包括母公司和关联公司),而不是团队或使用人数。大公司里的小团队需要商业许可证。
 
 ### 从个人开始,现在要变成生意了?
-你过去的使用完全没问题。许可证内置任何书面通知后 32 天的宽限期。准备好时联系获取商业许可证。
+你过去的使用完全没问题。不再符合条件后,你有 32 天时间办理商业许可证。
 
 ### 更大的公司 / 商业使用?
-联系 [Alex Greenshpun](https://linkedin.com/in/alexgreensh) 或 me@alexgreenshpun.com。
+联系 [Alex Greenshpun](https://linkedin.com/in/alexgreensh) 或 me@alexgreenshpun.com。条款合理,并按公司规模确定。
 
 ---
 

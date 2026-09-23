@@ -57,7 +57,7 @@ No data leaves the machine at any point in this flow.
 
 ### File Permissions
 
-All directories created with mode `0o700` (owner read/write/execute only). All files created with mode `0o600` (owner read/write only). Enforced at creation time via `os.makedirs(mode=0o700)` and `os.open(..., 0o600)`.
+All directories created with mode `0o700` (owner read/write/execute only). All files created with mode `0o600` (owner read/write only). Enforced at creation time via `os.makedirs(mode=0o700)` and `os.open(..., 0o600)` on macOS and Linux. On Windows, Python cannot apply these POSIX modes (`os.chmod` only toggles the read-only flag), so the stores inherit the access rules of your user profile folder, which by default grants access only to your account, Administrators, and SYSTEM.
 
 ### Dashboard API Security
 
@@ -106,7 +106,7 @@ Bash compression output preserves credential-containing lines verbatim (not reda
 
 ## Encryption
 
-**At rest:** Token Optimizer does not encrypt local data stores. Data protection relies on filesystem permissions (`0o700` directories, `0o600` files). For environments requiring encryption at rest, enable FileVault (macOS) or LUKS (Linux) at the OS level.
+**At rest:** Token Optimizer does not encrypt local data stores. Data protection relies on filesystem permissions (`0o700` directories, `0o600` files on macOS and Linux; the user profile folder's access rules on Windows). For environments requiring encryption at rest, enable FileVault (macOS), LUKS (Linux), or BitLocker (Windows) at the OS level.
 
 **In transit:** No data is transmitted. The dashboard server uses plain HTTP but is bound to loopback only (`127.0.0.1`), so traffic never leaves the network stack.
 
@@ -180,6 +180,7 @@ Token Optimizer installs hooks into the host platform's `settings.json` via the 
 | Limitation | Mitigation |
 |-----------|------------|
 | No encryption at rest | Filesystem permissions (0o700/0o600). Use OS-level encryption for additional protection. |
+| POSIX permission modes not applied on Windows | Stores inherit the user profile folder's access rules (your account, Administrators, SYSTEM by default). Use BitLocker for encryption at rest. |
 | No admin policy enforcement / MDM | Single-user local tool. Config is per-user, no org-wide lockdown. |
 | No structured audit log | Functional telemetry (checkpoint events, compression events) provides partial coverage. |
 | No TLS on dashboard | Loopback-only binding. Traffic never leaves the machine. |
