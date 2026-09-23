@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.16
+
+- Fix: honor `CLAUDE_CONFIG_DIR`. With a relocated Claude Code config, the companion now reads live fill, usage limits, quality scores, sessions, and effort from that directory instead of a stale `~/.claude` (#198).
+
 ## 0.1.15
 
 - Improve: the install funnel's savings block is now a per-usage tier ladder (Light ~$150/mo, Medium ~$600/mo, Power up to ~$1,900/mo) instead of a single averaged range, so a user can find their own row. The Power row is metered on real 30-day data; lighter rows scale that per-session saving by session volume. Framing stays API-equivalent with the rate-limit-headroom caveat for subscription users.
