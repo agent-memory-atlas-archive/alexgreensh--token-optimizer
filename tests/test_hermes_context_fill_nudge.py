@@ -17,12 +17,17 @@ the cumulative tally stays available for cost/usage reporting.
 from __future__ import annotations
 
 import importlib.util
+import shutil
 import sys
+import types
 from pathlib import Path
 
 import pytest
 
-HERMES_INIT = Path(__file__).resolve().parents[1] / "hermes" / "__init__.py"
+REPO = Path(__file__).resolve().parents[1]
+HERMES_INIT = REPO / "hermes" / "__init__.py"
+SCRIPTS = REPO / "skills" / "token-optimizer" / "scripts"
+sys.path.insert(0, str(SCRIPTS))
 WINDOW = 1_000_000
 
 
@@ -181,6 +186,16 @@ def test_failed_native_compressor_allows_fallback_nudge(plugin, monkeypatch):
     assert "800,000" in nudge["context"]
 
 
+def test_nudge_grade_matches_stored_grade_at_high_fill(plugin):
+    """The nudge must grade with live occupancy, same as the stored rollup.
+    ~90% full is a D (fill 10*.40 + msg 100*.35 + oi 15*.25 = 43) — the
+    fill-blind renormalized path would report a softer C (65)."""
+    _call(plugin, "s-grade", input_tokens=900_000)
+    nudge = _nudge(plugin, "s-grade")
+    assert nudge is not None
+    assert "Grade: D" in nudge["context"]
+
+
 
 def _load_unpatched_plugin():
     spec = importlib.util.spec_from_file_location("to_hermes_policy_under_test", HERMES_INIT)
@@ -191,7 +206,6 @@ def _load_unpatched_plugin():
 
 
 def test_native_compression_disabled_needs_help(monkeypatch):
-    import types
     actual = _load_unpatched_plugin()
     config_mod = types.ModuleType("hermes_cli.config")
     config_mod.load_config_readonly = lambda: {"compression": {"enabled": False}}
@@ -202,37 +216,99 @@ def test_native_compression_disabled_needs_help(monkeypatch):
     assert actual._native_compression_needs_help("s-disabled") is True
 
 
-def test_native_compression_failure_needs_help(monkeypatch):
-    import types
+def test_native_compression_flat_bool_disabled_needs_help(monkeypatch):
+    """``compression = false`` as a bare boolean (not a table) must also read
+    as disabled — a config that style would otherwise silently keep the gate
+    in observer mode while the native compressor never runs."""
     actual = _load_unpatched_plugin()
     config_mod = types.ModuleType("hermes_cli.config")
-    config_mod.load_config_readonly = lambda: {"compression": {"enabled": True}}
+    config_mod.load_config_readonly = lambda: {"compression": False}
     package = types.ModuleType("hermes_cli")
     package.__path__ = []
-    state_mod = types.ModuleType("hermes_state")
-    state_mod.get_session = lambda _sid: {"compression_ineffective_count": 2}
     monkeypatch.setitem(sys.modules, "hermes_cli", package)
     monkeypatch.setitem(sys.modules, "hermes_cli.config", config_mod)
-    monkeypatch.setitem(sys.modules, "hermes_state", state_mod)
+    assert actual._native_compression_needs_help("s-flat-disabled") is True
+
+
+def test_native_compression_failure_needs_help(monkeypatch):
+    actual = _load_unpatched_plugin()
+    _install_native_policy_modules(
+        monkeypatch, actual, {"compression_ineffective_count": 2}
+    )
     assert actual._native_compression_needs_help("s-failed") is True
 
 
-def _install_native_policy_modules(monkeypatch, row):
-    import types
+def test_config_probe_failure_still_consults_health_probe(monkeypatch):
+    """An unreadable config must fall through to the persisted session-health
+    probe, not mask a compressor that is actually failing."""
+    actual = _load_unpatched_plugin()
+    config_mod = types.ModuleType("hermes_cli.config")
+
+    def _unreadable():
+        raise RuntimeError("config unreadable")
+
+    config_mod.load_config_readonly = _unreadable
+    package = types.ModuleType("hermes_cli")
+    package.__path__ = []
+    state_mod = types.ModuleType("hermes_state")
+    state_mod.get_session = lambda _sid, **_kw: {"compression_ineffective_count": 2}
+    monkeypatch.setitem(sys.modules, "hermes_cli", package)
+    monkeypatch.setitem(sys.modules, "hermes_cli.config", config_mod)
+    monkeypatch.setattr(actual, "_import_state", lambda: state_mod, raising=False)
+    assert actual._native_compression_needs_help("s-failed") is True
+
+
+def test_health_probe_loads_sibling_state_module_by_path(tmp_path, monkeypatch):
+    """In the installed layout the plugin must not rely on ``import
+    hermes_state``: the host can already have its own same-named module bound
+    in sys.modules, which would silently feed the health probe foreign data.
+    The sibling file shipped next to __init__.py is loaded by path instead."""
+    plugin_dir = tmp_path / "token-optimizer"
+    plugin_dir.mkdir()
+    shutil.copy(HERMES_INIT, plugin_dir / "__init__.py")
+    shutil.copy(SCRIPTS / "hermes_state.py", plugin_dir / "hermes_state.py")
+
+    # A foreign same-named module already bound, as a host's own hermes_state
+    # would be: its tripped counters would wrongly force a "needs help" verdict.
+    foreign = types.ModuleType("hermes_state")
+    foreign.get_session = lambda *_a, **_kw: {"compression_ineffective_count": 99}
+    monkeypatch.setitem(sys.modules, "hermes_state", foreign)
+
+    # Point the real reader at an empty Hermes home so get_session finds no DB.
+    empty_home = tmp_path / "hermes-home"
+    empty_home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(empty_home))
+    monkeypatch.setenv("TOKEN_OPTIMIZER_ALLOW_UNSAFE_RUNTIME_HOME", "1")
+
+    spec = importlib.util.spec_from_file_location(
+        "to_hermes_init_sibling_test", plugin_dir / "__init__.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+
+    state = module._import_state()
+    assert state is not foreign
+    assert Path(state.__file__).resolve() == (plugin_dir / "hermes_state.py").resolve()
+    # And the probe used it: the foreign row would have returned True.
+    assert module._native_compression_needs_help("s-nonexistent-test-session") is False
+
+
+def _install_native_policy_modules(monkeypatch, module, row):
     config_mod = types.ModuleType("hermes_cli.config")
     config_mod.load_config_readonly = lambda: {"compression": {"enabled": True}}
     package = types.ModuleType("hermes_cli")
     package.__path__ = []
     state_mod = types.ModuleType("hermes_state")
-    state_mod.get_session = lambda _sid: row
+    state_mod.get_session = lambda _sid, **_kw: row
     monkeypatch.setitem(sys.modules, "hermes_cli", package)
     monkeypatch.setitem(sys.modules, "hermes_cli.config", config_mod)
-    monkeypatch.setitem(sys.modules, "hermes_state", state_mod)
+    monkeypatch.setattr(module, "_import_state", lambda: state_mod)
 
 
 def test_expired_failure_cooldown_does_not_need_help(monkeypatch):
     actual = _load_unpatched_plugin()
-    _install_native_policy_modules(monkeypatch, {
+    _install_native_policy_modules(monkeypatch, actual, {
         "compression_failure_error": "old provider error",
         "compression_failure_cooldown_until": 2_000.0,
     })
@@ -242,7 +318,7 @@ def test_expired_failure_cooldown_does_not_need_help(monkeypatch):
 
 def test_active_failure_cooldown_needs_help(monkeypatch):
     actual = _load_unpatched_plugin()
-    _install_native_policy_modules(monkeypatch, {
+    _install_native_policy_modules(monkeypatch, actual, {
         "compression_failure_error": "current provider error",
         "compression_failure_cooldown_until": 2_000.0,
     })
@@ -252,7 +328,7 @@ def test_active_failure_cooldown_needs_help(monkeypatch):
 
 def test_expired_anti_thrash_recovery_does_not_need_help(monkeypatch):
     actual = _load_unpatched_plugin()
-    _install_native_policy_modules(monkeypatch, {
+    _install_native_policy_modules(monkeypatch, actual, {
         "compression_fallback_streak": 2,
         "compression_ineffective_count": 2,
         "compression_recovery_deadline": 2_000.0,
@@ -263,7 +339,7 @@ def test_expired_anti_thrash_recovery_does_not_need_help(monkeypatch):
 
 def test_active_anti_thrash_recovery_needs_help(monkeypatch):
     actual = _load_unpatched_plugin()
-    _install_native_policy_modules(monkeypatch, {
+    _install_native_policy_modules(monkeypatch, actual, {
         "compression_fallback_streak": 2,
         "compression_recovery_deadline": 2_000.0,
     })
@@ -273,7 +349,7 @@ def test_active_anti_thrash_recovery_needs_help(monkeypatch):
 
 def test_recovered_anti_thrash_counter_does_not_need_help(monkeypatch):
     actual = _load_unpatched_plugin()
-    _install_native_policy_modules(monkeypatch, {
+    _install_native_policy_modules(monkeypatch, actual, {
         "compression_fallback_streak": 1,
         "compression_ineffective_count": 1,
         "compression_recovery_deadline": 0.0,
@@ -285,4 +361,5 @@ def test_native_probe_failure_stays_observational(monkeypatch):
     actual = _load_unpatched_plugin()
     monkeypatch.delitem(sys.modules, "hermes_cli", raising=False)
     monkeypatch.delitem(sys.modules, "hermes_cli.config", raising=False)
+    monkeypatch.setattr(actual, "_import_state", lambda: None, raising=False)
     assert actual._native_compression_needs_help("s-unknown") is False

@@ -92,6 +92,46 @@ def _import_bridge():
         return None
 
 
+# Same lazy-cache pattern as _import_bridge, but the state reader is loaded by
+# file path, not by name: Hermes ships its own ``hermes_state`` module, so a
+# bare ``import hermes_state`` inside the host can bind that one instead of
+# TO's read-only reader — the compression-health probe would then read foreign
+# data (or fail) and the gate would silently stay in observer mode.
+_STATE_SENTINEL = object()  # distinct from None: "not yet resolved"
+_state_cache: Any = _STATE_SENTINEL
+
+# Candidate locations for TO's hermes_state.py: the installed plugin dir (the
+# installer copies it next to this file) and the repo checkout's scripts dir.
+_STATE_CANDIDATES = (
+    _PLUGIN_DIR / "hermes_state.py",
+    _PLUGIN_DIR.parent / "skills" / "token-optimizer" / "scripts" / "hermes_state.py",
+)
+
+
+def _import_state():
+    """Return TO's hermes_state module, loaded by explicit file path."""
+    global _state_cache
+    if _state_cache is not _STATE_SENTINEL:
+        return _state_cache
+    try:
+        path = next((p for p in _STATE_CANDIDATES if p.is_file()), None)
+        if path is None:
+            return None
+        import importlib.util  # noqa: PLC0415
+
+        spec = importlib.util.spec_from_file_location("to_hermes_state", path)
+        if spec is None or spec.loader is None:
+            return None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _state_cache = module  # cache only on success
+        return module
+    except Exception as exc:
+        logger.debug("[token-optimizer] hermes_state not available: %s", exc)
+        # Do NOT cache None — allow retry on next call.
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Per-session token accumulation (thread-safe, in-process)
 #
@@ -170,13 +210,27 @@ def _native_compression_needs_help(session_id: str) -> bool:
     try:
         from hermes_cli.config import load_config_readonly  # noqa: PLC0415
         cfg = load_config_readonly() or {}
-        if not bool((cfg.get("compression") or {}).get("enabled", True)):
+        # The config spells the switch two ways: a table
+        # (``compression.enabled = false``) or a flat ``compression = false``.
+        compression = cfg.get("compression")
+        enabled = (
+            bool(compression.get("enabled", True))
+            if isinstance(compression, dict)
+            else (True if compression is None else bool(compression))
+        )
+        if not enabled:
             return True
     except Exception:
-        return False
+        # Config unreadable: keep going — the persisted health probe below can
+        # still see a failing compressor even when the config can't be read.
+        pass
     try:
-        import hermes_state  # noqa: PLC0415
-        row = hermes_state.get_session(session_id) or {}
+        state = _import_state()
+        if state is None:
+            return False
+        # live=True: the probe runs inside the live host, so it must see
+        # committed WAL writes, not just the last checkpoint.
+        row = state.get_session(session_id, live=True) or {}
         now = time.time()
 
         # Hermes keeps the last failure text after its cooldown expires. Treat
@@ -218,6 +272,9 @@ def _quality_grade(fill_ratio: float, message_count: int, model: str = "", ctx_w
             message_count=message_count,
             model=model or "",
             context_window=window,
+            # The nudge's fill IS a live occupancy reading — pass it so the
+            # grade matches what the rollup stores for the same session.
+            context_tokens=approx_input,
         )
         return result["grade"]
     except Exception:
