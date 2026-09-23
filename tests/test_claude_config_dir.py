@@ -109,3 +109,11 @@ if __name__ == "__main__":
             print(f"  ERROR {t.__name__}: {type(e).__name__}: {e}")
     print(f"\n{len(tests) - failed}/{len(tests)} passed")
     sys.exit(1 if failed else 0)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows maps ~other to a sibling of USERPROFILE instead of raising")
+def test_unknown_tilde_user_falls_back_instead_of_raising():
+    # expanduser() raises RuntimeError for an unknown ~user. Uncaught, a typo'd
+    # CLAUDE_CONFIG_DIR crashed every hook at import (found alongside #198).
+    for value in ("~no-such-user-zz9/claude", "~\\claude"):
+        assert _claude_home_with(value) == Path.home() / ".claude", value

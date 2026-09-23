@@ -30,14 +30,23 @@ export function resolveClaudeDir(
   const raw = (env.CLAUDE_CONFIG_DIR || '').trim();
   if (!raw) return fallback;
   try {
-    const p = /^~(?=$|[\\/])/.test(raw) ? path.join(homeDir, raw.slice(1)) : raw;
     const win = process.platform === 'win32';
+    const tilde = win ? /^~(?=$|[\\/])/ : /^~(?=$|\/)/;
+    let p = tilde.test(raw) ? homeDir + raw.slice(1) : raw;
+    // pathlib parity: drop empty and '.' segments, keep '..' (see statusline.js).
+    const root = path.parse(p).root;
+    const segs = p.slice(root.length).split(win ? /[\\/]+/ : /\/+/);
+    p = root + segs.filter((s) => s && s !== '.').join(path.sep);
     const absolute = win ? /^([a-zA-Z]:[\\/]|[\\/]{2})/.test(p) : path.isAbsolute(p);
     if (absolute) {
       const st = fs.lstatSync(p);
-      if (st.isDirectory()) return path.resolve(p);
+      // .native: the JS realpathSync collapses '..' lexically before resolving.
+      const real = (): string => {
+        try { return fs.realpathSync.native(p); } catch { return path.resolve(p); }
+      };
+      if (st.isDirectory()) return real();
       // Windows junctions show up as symlinks in Node; the plugin accepts them.
-      if (win && st.isSymbolicLink() && fs.statSync(p).isDirectory()) return path.resolve(p);
+      if (win && st.isSymbolicLink() && fs.statSync(p).isDirectory()) return real();
     }
   } catch {
     // unusable override: fall back like the plugin does

@@ -91,22 +91,33 @@ function _claudeHome() {
   const raw = (process.env.CLAUDE_CONFIG_DIR || '').trim();
   if (!raw) return fallback;
   try {
-    // Path.expanduser() parity: only a bare ~ or ~/ (~\ on Windows) expands.
-    const p = /^~(?=$|[\\/])/.test(raw) ? path.join(os.homedir(), raw.slice(1)) : raw;
     const win = process.platform === 'win32';
+    // Path.expanduser() parity: only a bare ~ or ~/ (also ~\ on Windows).
+    const tilde = win ? /^~(?=$|[\\/])/ : /^~(?=$|\/)/;
+    let p = tilde.test(raw) ? os.homedir() + raw.slice(1) : raw;
+    // pathlib parity: drop empty and '.' segments, keep '..'. A trailing slash
+    // would make lstat follow a symlink pathlib rejects, and collapsing '..'
+    // lexically lands somewhere else under a symlinked parent.
+    const root = path.parse(p).root;
+    const segs = p.slice(root.length).split(win ? /[\\/]+/ : /\/+/);
+    p = root + segs.filter(s => s && s !== '.').join(path.sep);
     // pathlib on Windows needs a drive or UNC root: a bare \foo is relative
     // there, while Node's isAbsolute() would accept it.
     const absolute = win ? /^([a-zA-Z]:[\\/]|[\\/]{2})/.test(p) : path.isAbsolute(p);
     if (absolute) {
       const st = fs.lstatSync(p);  // lstat: a symlink is never isDirectory()
-      if (st.isDirectory()) return path.resolve(p);
+      // realpath, like Python's resolve(), so '..' after a symlinked parent
+      // names the same physical dir on both sides. .native on purpose: the JS
+      // realpathSync collapses '..' lexically before resolving.
+      const real = () => { try { return fs.realpathSync.native(p); } catch (e) { return path.resolve(p); } };
+      if (st.isDirectory()) return real();
       // Python's is_symlink() is False for a Windows junction (the usual way to
       // relocate a dir without admin rights), so it accepts one. Node's lstat
       // reports junctions as symlinks and cannot tell them apart, so accept any
       // reparse point that resolves to a directory on Windows. The one residual
       // mismatch is a true directory symlink there, which needs admin rights or
       // Developer Mode and is far rarer than a junction.
-      if (win && st.isSymbolicLink() && fs.statSync(p).isDirectory()) return path.resolve(p);
+      if (win && st.isSymbolicLink() && fs.statSync(p).isDirectory()) return real();
     }
   } catch (e) {}
   return fallback;

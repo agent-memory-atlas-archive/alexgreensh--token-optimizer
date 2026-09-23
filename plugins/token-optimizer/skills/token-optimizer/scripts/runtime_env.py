@@ -1251,16 +1251,22 @@ def claude_home() -> Path:
     EXISTING, NON-SYMLINK directory (keeping the symlink + relative-path
     rejection for traversal safety) and only falls back to ~/.claude when the
     override is unset or unusable.
+
+    statusline.js (_claudeHome) and vscode-extension/src/paths.ts
+    (resolveClaudeDir) reimplement these rules; change all three together or
+    the status line and the hooks read different dirs (#198).
     """
     fallback = _safe_home() / ".claude"
     raw = os.environ.get(_CLAUDE_CONFIG_DIR_ENV, "").strip()
     if not raw:
         return fallback
-    candidate = Path(raw).expanduser()
     try:
+        # expanduser() raises RuntimeError for an unknown ~user (a typo, or ~\x
+        # on POSIX). Uncaught, that crashed every hook at import; reject instead.
+        candidate = Path(raw).expanduser()
         if candidate.is_absolute() and candidate.is_dir() and not candidate.is_symlink():
             return candidate.resolve(strict=False)
-    except OSError:
+    except (OSError, RuntimeError):
         pass
     print(
         f"[Token Optimizer] Warning: {_CLAUDE_CONFIG_DIR_ENV}={raw!r} rejected "

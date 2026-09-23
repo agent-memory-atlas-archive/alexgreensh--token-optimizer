@@ -132,20 +132,39 @@ def _cases(tmp_path):
     tilde = home / "tilde-cfg"
     (tilde / "token-optimizer").mkdir(parents=True)
     cases["tilde"] = "~/tilde-cfg"
+    cases["trailing_sep"] = str(cfg) + os.sep
+    cases["dot_segment"] = str(tmp_path / "." / "claude-config")
     if os.name != "nt":
         link = tmp_path / "cfg-link"
         link.symlink_to(cfg, target_is_directory=True)
         cases["symlink"] = str(link)
+        # pathlib drops the trailing slash and still sees the symlink; a raw
+        # lstat("link/") follows it. Both sides must reject.
+        cases["symlink_trailing_sep"] = str(link) + "/"
+        cases["symlink_dot"] = str(link) + "/."
+        # '..' after a symlinked parent is physical, not lexical: Python
+        # resolves to real/cfg2, a lexical join would give tmp/cfg2.
+        (tmp_path / "real" / "sub").mkdir(parents=True)
+        (tmp_path / "real" / "cfg2" / "token-optimizer").mkdir(parents=True)
+        (tmp_path / "sublink").symlink_to(tmp_path / "real" / "sub", target_is_directory=True)
+        cases["dotdot_via_symlink"] = str(tmp_path / "sublink" / ".." / "cfg2")
+        # ~\foo is not a tilde path on POSIX.
+        cases["tilde_backslash"] = "~\\tilde-cfg"
     return home, cases
 
 
-@pytest.mark.parametrize("case", [
-    "unset", "empty", "valid", "padded", "missing", "relative", "file", "tilde", "symlink",
-])
+CASES = [
+    "unset", "empty", "valid", "padded", "missing", "relative", "file", "tilde",
+    "trailing_sep", "dot_segment", "symlink", "symlink_trailing_sep", "symlink_dot",
+    "dotdot_via_symlink", "tilde_backslash",
+]
+
+
+@pytest.mark.parametrize("case", CASES)
 def test_statusline_matches_python_claude_home(tmp_path, case):
     home, cases = _cases(tmp_path)
     if case not in cases:
-        pytest.skip("symlink case is POSIX-only (Windows junction rules differ by design)")
+        pytest.skip("symlink cases are POSIX-only (Windows junction rules differ by design)")
     value = cases[case]
     expected = _python_claude_home(home, value)
     (expected / "token-optimizer").mkdir(parents=True, exist_ok=True)
@@ -154,3 +173,36 @@ def test_statusline_matches_python_claude_home(tmp_path, case):
     assert written == [expected], (
         f"CLAUDE_CONFIG_DIR={value!r}: python claude_home()={expected}, "
         f"statusline wrote live-fill.json under {written}")
+
+
+# The VS Code companion keeps its own copy of the resolver (vscode-extension/src/
+# paths.ts). It has no JS test harness, so run the .ts directly through Node's
+# type stripping and hold it to the same Python answers. Skips on a Node too old
+# to strip types rather than failing.
+PATHS_TS = ROOT / "vscode-extension" / "src" / "paths.ts"
+
+
+def _ts_claude_dir(tmp_path: Path, home: Path, value):
+    runner = tmp_path / "resolve.mjs"
+    runner.write_text(
+        f"import {{ resolveClaudeDir }} from {PATHS_TS.as_uri()!r};\n"
+        "const v = process.argv[3];\n"
+        "const env = v === '__UNSET__' ? {} : { CLAUDE_CONFIG_DIR: v };\n"
+        "console.log(resolveClaudeDir(process.argv[2], env));\n")
+    arg = "__UNSET__" if value is None else value
+    p = subprocess.run(["node", "--experimental-strip-types", "--no-warnings",
+                        str(runner), str(home), arg],
+                       env=_env(home, None), capture_output=True, text=True, timeout=60)
+    if p.returncode != 0:
+        pytest.skip(f"node cannot run paths.ts directly: {p.stderr.strip()[:200]}")
+    return Path(p.stdout.strip())
+
+
+@pytest.mark.parametrize("case", CASES)
+def test_vscode_paths_matches_python_claude_home(tmp_path, case):
+    home, cases = _cases(tmp_path)
+    if case not in cases:
+        pytest.skip("symlink cases are POSIX-only (Windows junction rules differ by design)")
+    value = cases[case]
+    assert _ts_claude_dir(tmp_path, home, value) == _python_claude_home(home, value), \
+        f"paths.ts and claude_home() disagree for CLAUDE_CONFIG_DIR={value!r}"

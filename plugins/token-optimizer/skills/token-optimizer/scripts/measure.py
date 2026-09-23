@@ -17265,17 +17265,11 @@ def _keepwarm_rate_limits_path():
     divergence: RUNTIME_DIR (= claude_home() for the Claude runtime) is stable
     across Cowork, matching where the statusline writes in the common case.
 
-    KNOWN GAP (pre-existing, not introduced here, tracked separately): RUNTIME_DIR
-    resolves through claude_home(), which HONORS CLAUDE_CONFIG_DIR, but statusline.js
-    (and the VS Code extension) hardcode os.homedir()/.claude and IGNORE
-    CLAUDE_CONFIG_DIR. So a user who relocates their Claude config via
-    CLAUDE_CONFIG_DIR reads the meter from claude_home() while the statusline writes
-    it under os.homedir()/.claude -- they diverge and the runway card empties, the
-    same symptom by a different trigger. The old QUALITY_CACHE_DIR base had the
-    identical divergence on desktop, so this is unchanged by the fix. The complete
-    cure is to make the JS/TS writers honor CLAUDE_CONFIG_DIR too (hot-path change,
-    separate follow-up). With CLAUDE_CONFIG_DIR unset (the common case) all three
-    resolve to ~/.claude/token-optimizer and agree.
+    RUNTIME_DIR resolves through claude_home(), which honors CLAUDE_CONFIG_DIR.
+    statusline.js and the VS Code companion resolve the same dir with the same
+    rules (#198), so a relocated config reads and writes the meter in one place.
+    Keep all three resolvers in step; tests/test_statusline_claude_config_dir.py
+    holds them to parity.
 
     Foreign runtimes (codex/copilot/hermes) have no meter writer, so their
     runtime-scoped RUNTIME_DIR path stays empty. runway_snapshot then returns a card
