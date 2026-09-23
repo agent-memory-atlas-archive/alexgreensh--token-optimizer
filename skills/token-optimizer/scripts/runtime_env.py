@@ -1275,6 +1275,34 @@ def codex_home() -> Path:
     return _safe_home_from_env(_CODEX_HOME_ENV, _safe_home() / ".codex")
 
 
+def settings_env_value(name: str) -> str:
+    """Read ``name`` from the ``env`` block of the user's settings.json.
+
+    The single resolver for ``TOKEN_OPTIMIZER_*`` env knobs that out-of-process
+    callers (hooks, tests, the daemon) need even when the host did not inject
+    them. Scope is deliberately narrow: only the GLOBAL settings file
+    (``claude_home() / "settings.json"``) is read — hooks run with the repo as
+    cwd, so consulting project-level settings would let a checked-in
+    ``.claude/settings.json`` silently repoint a security feature's config.
+
+    Only a regular file is read: ``is_file()`` is False for a FIFO, socket,
+    directory or broken symlink, so a special file at that path can never
+    block ``open()`` on a hot hook path. Never raises; returns "" when unset.
+    """
+    try:
+        path = claude_home() / "settings.json"
+        if not path.is_file() or path.stat().st_size > 1_048_576:
+            return ""
+        with open(path, "r", encoding="utf-8") as f:
+            settings = json.load(f)
+        env_block = settings.get("env", {}) if isinstance(settings, dict) else {}
+        if not isinstance(env_block, dict):
+            return ""
+        return str(env_block.get(name, "") or "").strip()
+    except Exception:
+        return ""
+
+
 def hermes_home() -> Path:
     """Return Hermes's home directory, safely honoring HERMES_HOME when valid."""
     return _safe_home_from_env(_HERMES_HOME_ENV, _safe_home() / ".hermes")

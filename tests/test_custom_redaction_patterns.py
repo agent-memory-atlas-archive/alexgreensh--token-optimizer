@@ -3,7 +3,9 @@
 Custom patterns come from a JSON file (default
 <runtime-home>/token-optimizer/redact-patterns.json, or the path in
 TOKEN_OPTIMIZER_REDACT_PATTERNS_FILE). They are additive to the built-in set,
-never raise, and never corrupt existing placeholders.
+run BEFORE the built-ins, and never corrupt existing placeholders. A file that
+cannot be trusted fails closed: redact_credentials raises RedactionConfigError
+so disk writers skip persisting the content.
 
 Each behavior is paired with a negative control: the same input WITHOUT the
 custom file keeps the value, so a passing test proves the custom pattern did
@@ -182,19 +184,40 @@ def test_builtins_still_run_with_custom_file(tmp_path, monkeypatch):
                    "[CREDENTIAL REDACTED: custom pattern]")
 
 
-def test_builtin_label_wins_on_overlap(tmp_path, monkeypatch):
-    """Built-ins run first; a custom regex covering a built-in shape does not relabel it."""
+def test_custom_label_wins_on_overlap(tmp_path, monkeypatch):
+    """Customs run first; a custom regex covering a built-in shape claims it."""
     _use(monkeypatch, _write(tmp_path, {"patterns": [
         {"label": "any AKIA", "regex": r"AKIA[0-9A-Z]+"}]}))
-    assert cp.redact_credentials(AWS_KEY) == "[CREDENTIAL REDACTED: AWS access key]"
+    assert cp.redact_credentials(AWS_KEY) == "[CREDENTIAL REDACTED: any AKIA]"
+
+
+def test_custom_claims_composite_before_builtins(tmp_path, monkeypatch):
+    """A custom pattern must claim the whole composite fragment; without it the
+    id prefix survives beside a built-in JWT placeholder (the leak this
+    ordering exists to prevent)."""
+    jwt = "eyJ" + "a" * 12 + "." + "b" * 12 + "." + "c" * 12
+    text = f"patient MEDX-123456-{jwt} discharged"
+    # Negative control: built-ins alone fragment the composite.
+    out = cp.redact_credentials(text)
+    assert "MEDX-123456" in out
+    assert "[CREDENTIAL REDACTED: JWT]" in out
+    # With the org pattern the whole fragment becomes one placeholder.
+    cp.reset_custom_patterns_cache()
+    _use(monkeypatch, _write(tmp_path, {"patterns": [
+        {"label": "MedX record", "regex": r"MEDX-\d{6}-eyJ\S+"}]}))
+    out = cp.redact_credentials(text)
+    assert out == "patient [CREDENTIAL REDACTED: MedX record] discharged"
+    assert "MEDX-123456" not in out
 
 
 def test_broad_custom_pattern_cannot_corrupt_placeholders(tmp_path, monkeypatch):
     """A custom regex that matches words inside a placeholder must not touch it."""
     _use(monkeypatch, _write(tmp_path, {"patterns": [
         {"label": "caps", "regex": r"[A-Z]{5,}"}]}))
-    out = cp.redact_credentials(f"{AWS_KEY} and SECRETWORD")
-    assert out == "[CREDENTIAL REDACTED: AWS access key] and [CREDENTIAL REDACTED: caps]"
+    out = cp.redact_credentials(
+        "[CREDENTIAL REDACTED: AWS access key] and SECRETWORD")
+    assert out == ("[CREDENTIAL REDACTED: AWS access key] and "
+                   "[CREDENTIAL REDACTED: caps]")
     # idempotent: a second pass over already-redacted text changes nothing
     assert cp.redact_credentials(out) == out
 
@@ -232,7 +255,9 @@ def test_same_regex_different_flags_is_not_a_duplicate(tmp_path, monkeypatch):
 
 
 # --------------------------------------------------------------------------
-# Bad input: never raises, skips the entry, reports why
+# Bad input: bad ENTRIES are skipped individually; an untrusted FILE fails
+# closed — redact_credentials raises RedactionConfigError so disk writers
+# skip persisting the content entirely.
 # --------------------------------------------------------------------------
 
 def test_missing_default_file_is_silent(capsys):
@@ -242,13 +267,63 @@ def test_missing_default_file_is_silent(capsys):
     assert capsys.readouterr().err == ""
 
 
-def test_missing_explicit_file_warns_once(tmp_path, monkeypatch, capsys):
+def test_missing_explicit_file_fails_closed(tmp_path, monkeypatch, capsys):
     _use(monkeypatch, tmp_path / "nope.json")
-    assert cp.redact_credentials(ORG_KEY) == ORG_KEY
+    with pytest.raises(cp.RedactionConfigError):
+        cp.redact_credentials(ORG_KEY)
+    status = cp.custom_patterns_status()
+    assert status["active"] is False
+    assert "not a regular file" in status["failure"]
+    assert "not a regular file" in capsys.readouterr().err
+
+
+def test_failed_file_also_fails_scan(tmp_path, monkeypatch):
+    _use(monkeypatch, tmp_path / "nope.json")
+    with pytest.raises(cp.RedactionConfigError):
+        cp.scan_for_credentials(ORG_KEY)
+
+
+def test_status_file_persisted(tmp_path, monkeypatch):
+    """The load outcome lands under <runtime-home>/token-optimizer/ so the
+    security report can show it even when the hook process is gone."""
+    _use(monkeypatch, _write(tmp_path, {"patterns": [ORG_KEY_RE]}))
     cp.redact_credentials(ORG_KEY)
-    err = capsys.readouterr().err
-    assert err.count("missing file") == 1
-    assert cp.custom_patterns_status()["errors"]
+    import runtime_env
+    status_path = (runtime_env.runtime_home() / "token-optimizer"
+                   / cp._CUSTOM_STATUS_FILENAME)
+    assert status_path.is_file()
+    status = json.loads(status_path.read_text())
+    assert status["active"] is True
+    assert status["patterns_loaded"] == 1
+    assert status["sha256"]
+
+    # And on failure:
+    _use(monkeypatch, _write(tmp_path, None, name="bad.json", raw=b"{oops"))
+    with pytest.raises(cp.RedactionConfigError):
+        cp.redact_credentials("x")
+    status = json.loads(status_path.read_text())
+    assert status["active"] is False
+    assert status["failure"]
+
+
+def test_user_warning_once_per_file_hash(tmp_path, monkeypatch):
+    """Hooks surface a one-time systemMessage; the flag is keyed by the file's
+    content hash so it fires once per distinct broken file, process or not."""
+    bad = _write(tmp_path, None, raw=b"{oops")
+    _use(monkeypatch, bad)
+    msg1 = cp.pop_redaction_warning()
+    assert msg1 and "INACTIVE" in msg1
+    assert cp.pop_redaction_warning() is None  # once only
+    cp.reset_custom_patterns_cache()
+    assert cp.pop_redaction_warning() is None  # persists across processes
+    # A different broken file is a new hash: warns again.
+    _use(monkeypatch, _write(tmp_path, None, name="bad2.json", raw=b"{nope"))
+    assert cp.pop_redaction_warning() is not None
+
+
+def test_no_warning_when_healthy(tmp_path, monkeypatch):
+    _use(monkeypatch, _write(tmp_path, {"patterns": [ORG_KEY_RE]}))
+    assert cp.pop_redaction_warning() is None
 
 
 @pytest.mark.parametrize("value", ["", "   "])
@@ -301,12 +376,25 @@ def test_bad_entries_are_skipped(tmp_path, monkeypatch, entry, needle):
     b'{"other": []}',
     b"\xff\xfe\x00bad",
 ])
-def test_malformed_files_never_raise(tmp_path, monkeypatch, raw):
+def test_malformed_files_fail_closed(tmp_path, monkeypatch, raw):
     _use(monkeypatch, _write(tmp_path, None, raw=raw))
-    assert cp.redact_credentials(f"{AWS_KEY}") == "[CREDENTIAL REDACTED: AWS access key]"
+    with pytest.raises(cp.RedactionConfigError):
+        cp.redact_credentials(AWS_KEY)
     status = cp.custom_patterns_status()
+    assert status["active"] is False
     assert status["count"] == 0
     assert status["errors"]
+
+
+def test_malformed_default_location_file_fails_closed(tmp_path, monkeypatch):
+    """A broken file at the DEFAULT location fails closed too — 'present but
+    unloadable' is the same trust failure whether or not the env var named it."""
+    default = cp._default_custom_patterns_path()
+    default.parent.mkdir(parents=True)
+    default.write_text("{oops", encoding="utf-8")
+    cp.reset_custom_patterns_cache()
+    with pytest.raises(cp.RedactionConfigError):
+        cp.redact_credentials(AWS_KEY)
 
 
 def test_empty_patterns_list_is_fine(tmp_path, monkeypatch):
@@ -315,15 +403,18 @@ def test_empty_patterns_list_is_fine(tmp_path, monkeypatch):
     assert status["count"] == 0 and status["errors"] == []
 
 
-def test_directory_path_is_reported(tmp_path, monkeypatch):
+def test_directory_path_fails_closed(tmp_path, monkeypatch):
     _use(monkeypatch, tmp_path)
+    with pytest.raises(cp.RedactionConfigError):
+        cp.redact_credentials(AWS_KEY)
     assert cp.custom_patterns_status()["errors"]
 
 
-def test_oversized_file_ignored(tmp_path, monkeypatch):
+def test_oversized_file_fails_closed(tmp_path, monkeypatch):
     big = {"patterns": [ORG_KEY_RE], "pad": "x" * (cp._CUSTOM_MAX_FILE_BYTES + 10)}
     _use(monkeypatch, _write(tmp_path, big))
-    assert ORG_KEY in cp.redact_credentials(ORG_KEY)
+    with pytest.raises(cp.RedactionConfigError):
+        cp.redact_credentials(ORG_KEY)
     assert any("1 MB" in e for e in cp.custom_patterns_status()["errors"])
 
 
@@ -434,3 +525,157 @@ def test_placeholder_anchor_between_segments_still_redacts(tmp_path, monkeypatch
     out = cp.redact_credentials(f"{AWS_KEY}{ORG_KEY}")
     assert ORG_KEY not in out
     assert out == "[CREDENTIAL REDACTED: AWS access key][CREDENTIAL REDACTED: custom pattern]"
+
+
+# --------------------------------------------------------------------------
+# ReDoS guards: static lint + timed subprocess probe, cached per file hash
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("regex", [
+    r"(x+x+)+y",          # the canonical catastrophic shape
+    r"(x+x+)*y",
+    r"(\w+)*x",
+    r"((ab)+)+",
+    r"(a|aa)+",           # ambiguous alternation, same branch start
+    r"(a|)+b",            # alternation with an empty branch
+    r"(x+){2,}y",         # open-ended repeat over an unbounded group
+])
+def test_redos_lint_rejects_pathological(tmp_path, monkeypatch, regex):
+    _use(monkeypatch, _write(tmp_path, {"patterns": [regex, ORG_KEY_RE]}))
+    out = cp.redact_credentials(f"k {ORG_KEY} k")
+    assert ORG_KEY not in out  # the healthy pattern still loads
+    status = cp.custom_patterns_status()
+    assert status["count"] == 1
+    assert status["rejected"] == 1
+    assert any("unsafe regex" in e for e in status["errors"]), status["errors"]
+
+
+def test_probe_rejects_pattern_that_times_out(tmp_path, monkeypatch):
+    """([ab]|a[ab])+c evades the static lint (distinct branch starts) but tiles
+    a run of a's in Fibonacci ways — the probe must catch it."""
+    _use(monkeypatch, _write(tmp_path, {"patterns": [r"([ab]|a[ab])+c", ORG_KEY_RE]}))
+    cp.redact_credentials("hello")
+    status = cp.custom_patterns_status()
+    assert status["count"] == 1  # ORG_KEY_RE survived
+    assert any("safety probe timed out" in e for e in status["errors"]), status["errors"]
+
+
+def test_probe_cache_avoids_reprobing(tmp_path, monkeypatch):
+    """Verdicts are keyed by the pattern file's sha256: a second process
+    loading the same bytes never spawns the probe subprocess again."""
+    import subprocess
+    path = _write(tmp_path, {"patterns": [ORG_KEY_RE]})
+    _use(monkeypatch, path)
+    cp.redact_credentials(ORG_KEY)
+    assert cp.custom_patterns_status()["count"] == 1
+
+    cp.reset_custom_patterns_cache()
+    def _boom(*a, **kw):
+        raise AssertionError("probe subprocess ran despite cached verdicts")
+    monkeypatch.setattr(subprocess, "run", _boom)
+    assert ORG_KEY not in cp.redact_credentials(ORG_KEY)
+
+
+def test_probe_cache_is_per_file_hash(tmp_path, monkeypatch):
+    """Editing the file is a new hash and gets a fresh probe."""
+    import subprocess
+    path = _write(tmp_path, {"patterns": [ORG_KEY_RE]})
+    _use(monkeypatch, path)
+    cp.redact_credentials(ORG_KEY)
+
+    calls = []
+    real_run = subprocess.run
+    def _spy(*a, **kw):
+        calls.append(1)
+        return real_run(*a, **kw)
+    path.write_text(json.dumps({"patterns": [ORG_KEY_RE, r"acme_[0-9]{6}"]}))
+    cp.reset_custom_patterns_cache()
+    monkeypatch.setattr(subprocess, "run", _spy)
+    cp.redact_credentials(ORG_KEY)
+    assert calls, "edited file should have been probed fresh"
+
+
+# --------------------------------------------------------------------------
+# Over-broad patterns
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("regex, needle", [
+    (r"[a-z]", "single characters"),
+    (r"\w", "single characters"),
+    (r"\S+", "ordinary paragraph"),
+    (r".{3,}", "ordinary paragraph"),
+])
+def test_overbroad_patterns_rejected(tmp_path, monkeypatch, regex, needle):
+    _use(monkeypatch, _write(tmp_path, {"patterns": [regex, ORG_KEY_RE]}))
+    cp.redact_credentials("hi")
+    status = cp.custom_patterns_status()
+    assert status["count"] == 1
+    assert any(needle in e for e in status["errors"]), status["errors"]
+
+
+# --------------------------------------------------------------------------
+# Configured path must be absolute (after ~ / env expansion); quotes stripped
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("value", [
+    "redact-patterns.json",
+    "./patterns.json",
+    "subdir/patterns.json",
+    "patterns/../x.json",
+])
+def test_relative_env_path_fails_closed(tmp_path, monkeypatch, value):
+    monkeypatch.setenv(ENV, value)
+    cp.reset_custom_patterns_cache()
+    with pytest.raises(cp.RedactionConfigError):
+        cp.redact_credentials(AWS_KEY)
+    status = cp.custom_patterns_status()
+    assert status["active"] is False
+    assert "absolute path" in status["failure"]
+
+
+@pytest.mark.parametrize("quote", ['"', "'"])
+def test_quoted_absolute_path_is_accepted(tmp_path, monkeypatch, quote):
+    path = _write(tmp_path, {"patterns": [ORG_KEY_RE]})
+    monkeypatch.setenv(ENV, f"{quote}{path}{quote}")
+    cp.reset_custom_patterns_cache()
+    assert ORG_KEY not in cp.redact_credentials(ORG_KEY)
+
+
+def test_quoted_relative_path_still_rejected(tmp_path, monkeypatch):
+    monkeypatch.setenv(ENV, '"rel/patterns.json"')
+    cp.reset_custom_patterns_cache()
+    with pytest.raises(cp.RedactionConfigError):
+        cp.redact_credentials(AWS_KEY)
+
+
+# --------------------------------------------------------------------------
+# Fail-closed at the disk writers
+# --------------------------------------------------------------------------
+
+def test_archive_original_skips_write_on_redaction_failure(tmp_path, monkeypatch):
+    """archive_original returns None (caller serves raw in memory) and writes
+    nothing to the archive directory."""
+    import archive_result
+    archive_dir = tmp_path / "plugdata"
+    monkeypatch.setattr(archive_result, "SNAPSHOT_DIR", archive_dir)
+    _use(monkeypatch, _write(tmp_path, None, name="bad.json", raw=b"{oops"))
+    assert archive_result.archive_original(
+        f"output {ORG_KEY}", "sess1", "k1", "Bash") is None
+    leaked = [p for p in archive_dir.rglob("*") if p.is_file()] if archive_dir.exists() else []
+    assert all(ORG_KEY not in p.read_text(errors="replace") for p in leaked)
+
+
+def test_read_cache_redact_for_storage_refuses(tmp_path, monkeypatch):
+    """read_cache's persistence helper returns None — never the raw text."""
+    import read_cache
+    _use(monkeypatch, _write(tmp_path, None, name="bad.json", raw=b"{oops"))
+    assert read_cache._redact_for_storage(f"content {ORG_KEY}") is None
+
+
+def test_redact_wrapper_propagates_failure(tmp_path, monkeypatch):
+    """archive_result._redact_credentials must not swallow the config error —
+    callers decide how to fail closed."""
+    import archive_result
+    _use(monkeypatch, _write(tmp_path, None, name="bad.json", raw=b"{oops"))
+    with pytest.raises(cp.RedactionConfigError):
+        archive_result._redact_credentials(f"x {ORG_KEY}")

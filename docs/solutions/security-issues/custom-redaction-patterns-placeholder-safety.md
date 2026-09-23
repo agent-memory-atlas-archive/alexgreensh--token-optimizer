@@ -25,9 +25,13 @@ for built-ins break for them.
    the sentinel (`\x00\x01REDACTED\x00\x01`) contains letters a user regex can
    match, and sentinels are restored by position (`str.replace(..., 1)`), so a
    second protection pass would restore labels in the wrong order.
-   **Fix:** after built-ins and the M-16 restore, run each custom pattern only
-   on the text between `_PLACEHOLDER_RE` matches (`_redact_custom`). Placeholders
-   are never part of any string a custom regex sees.
+   **Fix:** run each custom pattern only on the text between `_PLACEHOLDER_RE`
+   matches (`_redact_custom`), then protect all placeholders — the pre-existing
+   ones and the ones the custom patterns just inserted — before the built-ins
+   run. Placeholders are never part of any string a regex sees. Custom patterns
+   run first so an org pattern can claim a composite secret
+   (`MEDX-123456-<jwt>`) whole instead of leaving a readable id beside a
+   built-in placeholder.
 
 2. **Labels are user text.** `pat.sub(f"[CREDENTIAL REDACTED: {label}]", text)`
    treats `\1` or `\g<0>` in a label as a backreference and can raise or leak
