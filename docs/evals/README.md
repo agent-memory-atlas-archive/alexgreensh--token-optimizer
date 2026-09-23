@@ -51,9 +51,9 @@ Raw message text is rejected. Unknown fields fail validation.
 | checkpoint | `occupancy_pct`, `quality_score` | yes | finite number 0-100; booleans rejected |
 | checkpoint | `compaction_depth` | yes | finite nonnegative number; booleans rejected |
 | checkpoint | `settled`, `completion_cue`, `pending_work` | yes | boolean |
-| checkpoint | `checkpoint_age_seconds` | yes | finite nonnegative number or `null` |
+| checkpoint | `checkpoint_age_seconds` | no | finite nonnegative number, `null`, or omitted |
 | checkpoint | `cold_resume_available`, `safe_boundary` | yes | boolean |
-| checkpoint | `next_turn_needed_older_context` | yes | boolean or `null` |
+| checkpoint | `next_turn_needed_older_context` | no | boolean, `null`, or omitted |
 | checkpoint | `policy_observed` | required for real data | boolean decisions; real rows require `current_advisory` |
 
 Metadata cannot contain descriptions, limitations, labels, or other free text. Split files contain only anonymous `corpus_id`, `split_role`, and `split_seed`. The entire file is limited to 10 MB. Create IDs by hashing a private source identifier with a local salt and keeping 16-64 lowercase hex characters after the required type prefix (`corpus-`, `session-`, or `group-`). Never use names, paths, prompts, or message text as IDs. Use one `source_group_id` for retries, forks, copied sessions, or other related examples that must stay in one partition.
