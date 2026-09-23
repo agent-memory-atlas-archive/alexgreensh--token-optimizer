@@ -7,8 +7,12 @@ tool archive writers.
 
 from __future__ import annotations
 
+import json
+import os
 import re
-from typing import List, Tuple
+import sys
+from pathlib import Path
+from typing import List, Optional, Tuple
 
 # (label, compiled_regex) pairs. Label is used in redaction placeholders.
 CREDENTIAL_PATTERNS: List[Tuple[str, "re.Pattern[str]"]] = [
@@ -179,11 +183,239 @@ def _text_may_contain_credentials(text: str) -> bool:
     return False
 
 
+# ---------------------------------------------------------------------------
+# Custom (user-defined) redaction patterns.
+#
+# Organizations have secret shapes no built-in list can know about: internal
+# API keys, service tokens, record identifiers. Users add them in a JSON file
+# instead of editing this module:
+#
+#   <runtime-home>/token-optimizer/redact-patterns.json   (default location)
+#
+# or point TOKEN_OPTIMIZER_REDACT_PATTERNS_FILE at another path (process env
+# first, then the settings.json "env" block, like the other TOKEN_OPTIMIZER_*
+# knobs). Format:
+#
+#   {"patterns": [
+#       "acme_[A-Za-z0-9]{32}",
+#       {"label": "Acme service token", "regex": "(?P<keep>ACME_TOKEN=)\\S+",
+#        "ignore_case": true}
+#   ]}
+#
+# Custom patterns are ADDITIVE: every built-in pattern still runs first, and
+# custom patterns run after it on the text with built-in placeholders
+# protected. They apply to redact_credentials() and scan_for_credentials(),
+# i.e. everything written to disk. CREDENTIAL_PATTERNS and PATTERNS_ONLY stay
+# the built-in set (import-time constants, used by compressors to decide which
+# lines to keep verbatim).
+#
+# Loading is lazy (first redaction call), cached per process, and never raises:
+# a bad entry is skipped with one stderr warning, so a typo cannot break a hook.
+# ---------------------------------------------------------------------------
+CUSTOM_PATTERNS_FILE_ENV = "TOKEN_OPTIMIZER_REDACT_PATTERNS_FILE"
+CUSTOM_PATTERNS_FILENAME = "redact-patterns.json"
+_CUSTOM_DEFAULT_LABEL = "custom pattern"
+_CUSTOM_MAX_FILE_BYTES = 1_048_576
+_CUSTOM_MAX_PATTERNS = 200
+_CUSTOM_MAX_REGEX_CHARS = 1000
+_CUSTOM_MAX_LABEL_CHARS = 60
+# Characters that would break the "[CREDENTIAL REDACTED: <label>]" placeholder
+# (and _PLACEHOLDER_RE, which stops at "]") or the one-line archive format.
+_LABEL_UNSAFE_RE = re.compile(r"[\]\[\x00-\x1f\x7f]")
+
+_BUILTIN_KEYS = frozenset((pat.pattern, pat.flags) for _, pat in CREDENTIAL_PATTERNS)
+
+
+class _CustomPatternState:
+    """Result of one load: the compiled patterns, where they came from, and
+    human-readable problems (for the security report and stderr)."""
+
+    __slots__ = ("patterns", "source", "errors", "duplicates")
+
+    def __init__(self) -> None:
+        self.patterns: List[Tuple[str, "re.Pattern[str]"]] = []
+        self.source: Optional[str] = None
+        self.errors: List[str] = []
+        self.duplicates: int = 0
+
+
+_CUSTOM_STATE: Optional[_CustomPatternState] = None
+
+
+def _warn(msg: str) -> None:
+    try:
+        print(f"[token-optimizer] {msg}", file=sys.stderr)
+    except Exception:
+        pass
+
+
+def _settings_env_value(name: str) -> str:
+    """Read ``name`` from the settings.json "env" block. Never raises."""
+    try:
+        from runtime_env import claude_home
+        path = claude_home() / "settings.json"
+        if path.stat().st_size > _CUSTOM_MAX_FILE_BYTES:
+            return ""
+        with open(path, "r", encoding="utf-8") as f:
+            settings = json.load(f)
+        env_block = settings.get("env", {}) if isinstance(settings, dict) else {}
+        if not isinstance(env_block, dict):
+            return ""
+        return str(env_block.get(name, "") or "").strip()
+    except Exception:
+        return ""
+
+
+def _default_custom_patterns_path() -> Optional[Path]:
+    try:
+        from runtime_env import runtime_home
+        return runtime_home() / "token-optimizer" / CUSTOM_PATTERNS_FILENAME
+    except Exception:
+        return None
+
+
+def _resolve_custom_patterns_path() -> Tuple[Optional[Path], bool]:
+    """Return (path, explicit). ``explicit`` is True when the user named the
+    file via TOKEN_OPTIMIZER_REDACT_PATTERNS_FILE, so a missing file warns."""
+    raw = os.environ.get(CUSTOM_PATTERNS_FILE_ENV, "").strip()
+    if not raw:
+        raw = _settings_env_value(CUSTOM_PATTERNS_FILE_ENV)
+    if raw:
+        return Path(os.path.expanduser(os.path.expandvars(raw))), True
+    return _default_custom_patterns_path(), False
+
+
+def _clean_label(raw: object) -> str:
+    if not isinstance(raw, str):
+        return _CUSTOM_DEFAULT_LABEL
+    label = _LABEL_UNSAFE_RE.sub("", raw).strip()
+    label = " ".join(label.split())[:_CUSTOM_MAX_LABEL_CHARS].strip()
+    return label or _CUSTOM_DEFAULT_LABEL
+
+
+def _compile_custom_entry(entry: object, index: int, state: _CustomPatternState,
+                          seen: set) -> None:
+    where = f"entry {index}"
+    if isinstance(entry, str):
+        regex, label, ignore_case = entry, _CUSTOM_DEFAULT_LABEL, False
+    elif isinstance(entry, dict):
+        regex = entry.get("regex")
+        label = _clean_label(entry.get("label"))
+        ignore_case = entry.get("ignore_case", False)
+        if not isinstance(ignore_case, bool):
+            state.errors.append(f"{where}: ignore_case must be true or false")
+            return
+    else:
+        state.errors.append(f"{where}: must be a string or an object with a \"regex\" key")
+        return
+    if not isinstance(regex, str) or not regex.strip():
+        state.errors.append(f"{where}: regex is missing or empty")
+        return
+    if len(regex) > _CUSTOM_MAX_REGEX_CHARS:
+        state.errors.append(f"{where}: regex longer than {_CUSTOM_MAX_REGEX_CHARS} characters")
+        return
+    try:
+        pat = re.compile(regex, re.I if ignore_case else 0)
+    except (re.error, RecursionError, OverflowError, ValueError) as exc:
+        state.errors.append(f"{where}: invalid regex ({exc})")
+        return
+    # A pattern that matches the empty string would insert a placeholder
+    # between every character of every archived output.
+    try:
+        matches_empty = pat.fullmatch("") is not None or pat.search("") is not None
+    except Exception:
+        matches_empty = True
+    if matches_empty:
+        state.errors.append(f"{where}: regex matches empty text")
+        return
+    key = (pat.pattern, pat.flags)
+    if key in _BUILTIN_KEYS or key in seen:
+        state.duplicates += 1
+        return
+    seen.add(key)
+    state.patterns.append((label, pat))
+
+
+def _load_custom_patterns() -> _CustomPatternState:
+    state = _CustomPatternState()
+    try:
+        path, explicit = _resolve_custom_patterns_path()
+        if path is None:
+            return state
+        state.source = str(path)
+        try:
+            if not path.is_file():
+                if explicit:
+                    state.errors.append(f"{CUSTOM_PATTERNS_FILE_ENV} points to a missing file")
+                return state
+            if path.stat().st_size > _CUSTOM_MAX_FILE_BYTES:
+                state.errors.append("file is larger than 1 MB; ignored")
+                return state
+            # utf-8-sig: Windows Notepad saves UTF-8 with a BOM.
+            with open(path, "r", encoding="utf-8-sig") as f:
+                data = json.load(f)
+        except (OSError, ValueError) as exc:
+            state.errors.append(f"could not read file ({exc.__class__.__name__}: {exc})")
+            return state
+        if isinstance(data, dict):
+            entries = data.get("patterns")
+        else:
+            entries = None
+        if not isinstance(entries, list):
+            state.errors.append('top level must be an object with a "patterns" list')
+            return state
+        if len(entries) > _CUSTOM_MAX_PATTERNS:
+            state.errors.append(
+                f"{len(entries)} patterns listed; only the first {_CUSTOM_MAX_PATTERNS} are used"
+            )
+            entries = entries[:_CUSTOM_MAX_PATTERNS]
+        seen: set = set()
+        for i, entry in enumerate(entries, 1):
+            _compile_custom_entry(entry, i, state, seen)
+    except Exception as exc:  # pragma: no cover - defense in depth
+        state.errors.append(f"unexpected error ({exc.__class__.__name__})")
+    return state
+
+
+def _custom_state() -> _CustomPatternState:
+    global _CUSTOM_STATE
+    if _CUSTOM_STATE is None:
+        state = _load_custom_patterns()
+        _CUSTOM_STATE = state
+        for err in state.errors:
+            _warn(f"custom redaction patterns ({state.source}): {err}")
+    return _CUSTOM_STATE
+
+
+def get_custom_patterns() -> List[Tuple[str, "re.Pattern[str]"]]:
+    """User-defined (label, compiled_regex) pairs, loaded once per process."""
+    return list(_custom_state().patterns)
+
+
+def custom_patterns_status() -> dict:
+    """Summary for diagnostics: count, labels, source path, problems."""
+    state = _custom_state()
+    return {
+        "count": len(state.patterns),
+        "labels": [label for label, _ in state.patterns],
+        "source": state.source,
+        "errors": list(state.errors),
+        "duplicates_skipped": state.duplicates,
+    }
+
+
+def reset_custom_patterns_cache() -> None:
+    """Forget the loaded custom patterns (tests, long-lived processes)."""
+    global _CUSTOM_STATE
+    _CUSTOM_STATE = None
+
+
 def scan_for_credentials(text: str) -> List[Tuple[str, str, int]]:
     """Scan text for credentials. Returns [(label, matched_text, line_number), ...]."""
     results = []
+    all_patterns = CREDENTIAL_PATTERNS + get_custom_patterns()
     for line_num, line in enumerate(text.splitlines()):
-        for label, pat in CREDENTIAL_PATTERNS:
+        for label, pat in all_patterns:
             m = pat.search(line)
             if m:
                 results.append((label, m.group(), line_num))
@@ -222,6 +454,36 @@ _PATTERN_ANCHORS = {
 }
 
 
+def _sub_with_placeholder(pat: "re.Pattern[str]", label: str, text: str) -> str:
+    # A function replacement, not a template string: a custom label is user
+    # text and must never be interpreted as a backreference ("\\1", "\\g<0>").
+    placeholder = f"[CREDENTIAL REDACTED: {label}]"
+    if "keep" in pat.groupindex:
+        def _repl(m):
+            if m.group("keep") is None:
+                if m.start() == m.end():
+                    return m.group(0)
+                return placeholder
+            ks, ke = m.span("keep")
+            # The kept group covers the whole match: nothing to redact.
+            if ks == m.start() and ke == m.end():
+                return m.group(0)
+            # Keep the group where it sits; replace what comes before and/or
+            # after it. Built-in patterns always put `keep` first, so for them
+            # this is exactly "<keep>[CREDENTIAL REDACTED: label]".
+            return ((placeholder if ks > m.start() else "")
+                    + m.group("keep")
+                    + (placeholder if ke < m.end() else ""))
+    else:
+        def _repl(m):
+            # Zero-width matches (\b, lookaheads) would otherwise sprinkle
+            # placeholders between characters without removing anything.
+            if m.start() == m.end():
+                return m.group(0)
+            return placeholder
+    return pat.sub(_repl, text)
+
+
 def redact_credentials(text: str) -> str:
     """Replace credential matches with [CREDENTIAL REDACTED: <type>] placeholders.
 
@@ -256,12 +518,29 @@ def redact_credentials(text: str) -> str:
         anchors = _PATTERN_ANCHORS.get(label)
         if anchors and not any(a in lowered for a in anchors):
             continue
-        if "keep" in pat.groupindex:
-            text = pat.sub(rf"\g<keep>[CREDENTIAL REDACTED: {label}]", text)
-        else:
-            text = pat.sub(f"[CREDENTIAL REDACTED: {label}]", text)
+        text = _sub_with_placeholder(pat, label, text)
 
     # M-16: restore protected placeholders.
     for ph in placeholders:
         text = text.replace(_PLACEHOLDER_SENTINEL, ph, 1)
+
+    # Custom patterns run after every built-in, and only on the text BETWEEN
+    # placeholders, so a broad custom regex can never match inside an existing
+    # "[CREDENTIAL REDACTED: ...]" (built-in or pre-existing) and corrupt it.
+    custom = get_custom_patterns()
+    if custom:
+        text = _redact_custom(text, custom)
+    return text
+
+
+def _redact_custom(text: str, custom: List[Tuple[str, "re.Pattern[str]"]]) -> str:
+    for label, pat in custom:
+        parts = []
+        last = 0
+        for m in _PLACEHOLDER_RE.finditer(text):
+            parts.append(_sub_with_placeholder(pat, label, text[last:m.start()]))
+            parts.append(m.group(0))
+            last = m.end()
+        parts.append(_sub_with_placeholder(pat, label, text[last:]))
+        text = "".join(parts)
     return text

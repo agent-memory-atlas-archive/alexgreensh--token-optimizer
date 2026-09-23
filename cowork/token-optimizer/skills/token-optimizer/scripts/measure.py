@@ -32793,6 +32793,11 @@ def _security_report(as_json=False):
     except ImportError:
         cred_count = 0
         cred_types = []
+    try:
+        from credential_patterns import custom_patterns_status
+        cred_custom = custom_patterns_status()
+    except Exception:
+        cred_custom = {"count": 0, "labels": [], "source": None, "errors": [], "duplicates_skipped": 0}
 
     runtime = detect_runtime()
     runtime_label = runtime_name_for_humans()
@@ -32891,7 +32896,7 @@ def _security_report(as_json=False):
             "session_store_hours": 48,
             "checkpoint_event_max": _CHECKPOINT_EVENT_MAX,
         },
-        "credential_scanning": {"pattern_count": cred_count, "types": cred_types},
+        "credential_scanning": {"pattern_count": cred_count, "types": cred_types, "custom": cred_custom},
         "hooks": {"count": len(hooks_list), "source": str(hooks_json_path) if hooks_json_path else None},
         "dashboard": {"daemon_pid": daemon_pid, "daemon_running": daemon_running, "token_file_exists": DAEMON_TOKEN_PATH.exists(), "token_file_permissions": _file_info(DAEMON_TOKEN_PATH).get("permissions"), "bind_address": (_read_dashboard_host_file() or "127.0.0.1")},  # reflect persisted host
         "transcript_preservation": {"cleanup_period_days": cleanup_period, "note": "Intentional: preserves transcripts for trend analysis. Transcripts are host platform data."},
@@ -32950,6 +32955,11 @@ def _security_report(as_json=False):
             print(f"     - {t}")
         if len(cred_types) > 5:
             print(f"     ... and {len(cred_types) - 5} more")
+    print(f"   Custom patterns: {cred_custom['count']}")
+    if cred_custom.get("source"):
+        print(f"     Source: {cred_custom['source']}")
+    for err in cred_custom.get("errors", [])[:5]:
+        print(f"     ! {err}")
     print()
 
     print(f"7. DASHBOARD SECURITY")

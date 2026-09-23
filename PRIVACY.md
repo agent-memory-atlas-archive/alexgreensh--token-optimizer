@@ -103,6 +103,27 @@ Token Optimizer scans for 23 credential patterns (AWS keys, API tokens, GitHub P
 
 Bash compression output preserves credential-containing lines verbatim (not redacted) to ensure compressed output returned to the coding assistant doesn't mangle secrets.
 
+### Custom redaction patterns
+
+You can add your own secret shapes (internal API keys, service tokens, record identifiers) to the built-in list without editing code. Put them in `~/.claude/token-optimizer/redact-patterns.json` (on other platforms, `token-optimizer/redact-patterns.json` under that platform's home, e.g. `~/.codex/`), or set `TOKEN_OPTIMIZER_REDACT_PATTERNS_FILE` to the path of the file, either in your environment or in the `env` block of `settings.json`:
+
+```json
+{
+  "patterns": [
+    "acme_[A-Za-z0-9]{32}",
+    {"label": "Acme service token", "regex": "(?P<keep>ACME_TOKEN=)\\S+", "ignore_case": true}
+  ]
+}
+```
+
+- Each entry is a Python regular expression, either as a plain string or as an object with `regex`, an optional `label` (shown in the placeholder, default `custom pattern`), and an optional `ignore_case`. JSON strings need doubled backslashes (`\\d` for `\d`).
+- Text matched by a named group `keep` stays in place and only the rest of the match is replaced, the same way the built-in `?token=` pattern keeps the parameter name. The path in `TOKEN_OPTIMIZER_REDACT_PATTERNS_FILE` may use `~` and environment variables.
+- Custom patterns are additive. Every built-in pattern still runs first, and custom patterns run after them without touching existing `[CREDENTIAL REDACTED: ...]` placeholders. They apply everywhere the built-in redaction applies. They do not change which lines Bash compression keeps verbatim.
+- The file is read once per process. Invalid entries (bad regex, empty regex, a regex that matches empty text, wrong types) are skipped with a warning on stderr; the rest still load. A missing file at the default location is ignored; a missing file named by `TOKEN_OPTIMIZER_REDACT_PATTERNS_FILE` produces a warning. Limits: 200 entries, 1,000 characters per regex, 1 MB per file.
+- `measure.py security-report` shows how many custom patterns loaded, from which file, and any problems.
+- Custom patterns run on every stored output, so keep them simple. A regex with heavy backtracking slows down every hook that writes to disk.
+- This is pattern-based redaction of known shapes. It is not a general PII or PHI scrubber, and it cannot catch values that have no recognizable shape.
+
 ## Consent
 
 On first activation, Token Optimizer shows a data notice describing what is stored locally and requires acknowledgment before data collection begins. Hooks exit early (no data collection, no blocking tool calls) until consent is granted.
