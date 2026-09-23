@@ -1,0 +1,1838 @@
+{
+  "schema_version": 1,
+  "corpus": {
+    "corpus_id": "corpus-17b5c7859182adec"
+  },
+  "sessions": [
+    {
+      "session_id": "session-ae4f75684ef4ff41",
+      "host": "claude",
+      "scenario": "mid_task_coding",
+      "provenance": "synthetic",
+      "checkpoints": [
+        {
+          "checkpoint_id": "checkpoint-1",
+          "occupancy_pct": 42,
+          "quality_score": 66,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": false,
+          "pending_work": false,
+          "checkpoint_age_seconds": 900,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-2",
+          "occupancy_pct": 58,
+          "quality_score": 58,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-3",
+          "occupancy_pct": 74,
+          "quality_score": 50,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-4",
+          "occupancy_pct": 86,
+          "quality_score": 44,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": true,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        }
+      ],
+      "source_group_id": "group-ae4f75684ef4ff41"
+    },
+    {
+      "session_id": "session-2c64784c613164d1",
+      "host": "claude",
+      "scenario": "mid_task_coding",
+      "provenance": "synthetic",
+      "checkpoints": [
+        {
+          "checkpoint_id": "checkpoint-1",
+          "occupancy_pct": 42,
+          "quality_score": 66,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": false,
+          "pending_work": false,
+          "checkpoint_age_seconds": 900,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-2",
+          "occupancy_pct": 58,
+          "quality_score": 58,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-3",
+          "occupancy_pct": 74,
+          "quality_score": 50,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-4",
+          "occupancy_pct": 86,
+          "quality_score": 44,
+          "compaction_depth": 1,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        }
+      ],
+      "source_group_id": "group-2c64784c613164d1"
+    },
+    {
+      "session_id": "session-773cddca8fbf91b1",
+      "host": "claude",
+      "scenario": "mid_task_coding",
+      "provenance": "synthetic",
+      "checkpoints": [
+        {
+          "checkpoint_id": "checkpoint-1",
+          "occupancy_pct": 42,
+          "quality_score": 66,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": false,
+          "pending_work": false,
+          "checkpoint_age_seconds": 900,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-2",
+          "occupancy_pct": 58,
+          "quality_score": 58,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-3",
+          "occupancy_pct": 74,
+          "quality_score": 50,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-4",
+          "occupancy_pct": 86,
+          "quality_score": 44,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        }
+      ],
+      "source_group_id": "group-773cddca8fbf91b1"
+    },
+    {
+      "session_id": "session-8cf123a88e9a136a",
+      "host": "claude",
+      "scenario": "mid_task_coding",
+      "provenance": "synthetic",
+      "checkpoints": [
+        {
+          "checkpoint_id": "checkpoint-1",
+          "occupancy_pct": 42,
+          "quality_score": 66,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": false,
+          "pending_work": false,
+          "checkpoint_age_seconds": 900,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-2",
+          "occupancy_pct": 58,
+          "quality_score": 58,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-3",
+          "occupancy_pct": 74,
+          "quality_score": 50,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-4",
+          "occupancy_pct": 86,
+          "quality_score": 44,
+          "compaction_depth": 1,
+          "settled": true,
+          "completion_cue": true,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        }
+      ],
+      "source_group_id": "group-8cf123a88e9a136a"
+    },
+    {
+      "session_id": "session-31edd653d2ad231e",
+      "host": "claude",
+      "scenario": "mid_task_coding",
+      "provenance": "synthetic",
+      "checkpoints": [
+        {
+          "checkpoint_id": "checkpoint-1",
+          "occupancy_pct": 42,
+          "quality_score": 66,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": false,
+          "pending_work": false,
+          "checkpoint_age_seconds": 900,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-2",
+          "occupancy_pct": 58,
+          "quality_score": 58,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-3",
+          "occupancy_pct": 74,
+          "quality_score": 50,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-4",
+          "occupancy_pct": 86,
+          "quality_score": 44,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        }
+      ],
+      "source_group_id": "group-31edd653d2ad231e"
+    },
+    {
+      "session_id": "session-2b6ad547268ba137",
+      "host": "claude",
+      "scenario": "mid_task_coding",
+      "provenance": "synthetic",
+      "checkpoints": [
+        {
+          "checkpoint_id": "checkpoint-1",
+          "occupancy_pct": 42,
+          "quality_score": 66,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": false,
+          "pending_work": false,
+          "checkpoint_age_seconds": 900,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-2",
+          "occupancy_pct": 58,
+          "quality_score": 58,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-3",
+          "occupancy_pct": 74,
+          "quality_score": 50,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-4",
+          "occupancy_pct": 86,
+          "quality_score": 44,
+          "compaction_depth": 1,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        }
+      ],
+      "source_group_id": "group-2b6ad547268ba137"
+    },
+    {
+      "session_id": "session-5d8c28860fb28006",
+      "host": "codex",
+      "scenario": "coordination",
+      "provenance": "synthetic",
+      "checkpoints": [
+        {
+          "checkpoint_id": "checkpoint-1",
+          "occupancy_pct": 42,
+          "quality_score": 74,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 900,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-2",
+          "occupancy_pct": 58,
+          "quality_score": 66,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": true,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-3",
+          "occupancy_pct": 74,
+          "quality_score": 58,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": false,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-4",
+          "occupancy_pct": 86,
+          "quality_score": 52,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": true,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        }
+      ],
+      "source_group_id": "group-5d8c28860fb28006"
+    },
+    {
+      "session_id": "session-0d6ca316f3f0daae",
+      "host": "codex",
+      "scenario": "coordination",
+      "provenance": "synthetic",
+      "checkpoints": [
+        {
+          "checkpoint_id": "checkpoint-1",
+          "occupancy_pct": 42,
+          "quality_score": 74,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 900,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-2",
+          "occupancy_pct": 58,
+          "quality_score": 66,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": true,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-3",
+          "occupancy_pct": 74,
+          "quality_score": 58,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": false,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-4",
+          "occupancy_pct": 86,
+          "quality_score": 52,
+          "compaction_depth": 1,
+          "settled": true,
+          "completion_cue": true,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        }
+      ],
+      "source_group_id": "group-0d6ca316f3f0daae"
+    },
+    {
+      "session_id": "session-c4b24056d0044372",
+      "host": "codex",
+      "scenario": "coordination",
+      "provenance": "synthetic",
+      "checkpoints": [
+        {
+          "checkpoint_id": "checkpoint-1",
+          "occupancy_pct": 42,
+          "quality_score": 74,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 900,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-2",
+          "occupancy_pct": 58,
+          "quality_score": 66,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": true,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-3",
+          "occupancy_pct": 74,
+          "quality_score": 58,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": false,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-4",
+          "occupancy_pct": 86,
+          "quality_score": 52,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": true,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        }
+      ],
+      "source_group_id": "group-c4b24056d0044372"
+    },
+    {
+      "session_id": "session-715ed84d9f30d27f",
+      "host": "codex",
+      "scenario": "coordination",
+      "provenance": "synthetic",
+      "checkpoints": [
+        {
+          "checkpoint_id": "checkpoint-1",
+          "occupancy_pct": 42,
+          "quality_score": 74,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 900,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-2",
+          "occupancy_pct": 58,
+          "quality_score": 66,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": true,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-3",
+          "occupancy_pct": 74,
+          "quality_score": 58,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": false,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-4",
+          "occupancy_pct": 86,
+          "quality_score": 52,
+          "compaction_depth": 1,
+          "settled": true,
+          "completion_cue": true,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        }
+      ],
+      "source_group_id": "group-715ed84d9f30d27f"
+    },
+    {
+      "session_id": "session-a62c90586004ad41",
+      "host": "codex",
+      "scenario": "coordination",
+      "provenance": "synthetic",
+      "checkpoints": [
+        {
+          "checkpoint_id": "checkpoint-1",
+          "occupancy_pct": 42,
+          "quality_score": 74,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 900,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-2",
+          "occupancy_pct": 58,
+          "quality_score": 66,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": true,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-3",
+          "occupancy_pct": 74,
+          "quality_score": 58,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": false,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-4",
+          "occupancy_pct": 86,
+          "quality_score": 52,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": true,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        }
+      ],
+      "source_group_id": "group-a62c90586004ad41"
+    },
+    {
+      "session_id": "session-8e02fa220acdad6e",
+      "host": "codex",
+      "scenario": "coordination",
+      "provenance": "synthetic",
+      "checkpoints": [
+        {
+          "checkpoint_id": "checkpoint-1",
+          "occupancy_pct": 42,
+          "quality_score": 74,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 900,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-2",
+          "occupancy_pct": 58,
+          "quality_score": 66,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": true,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-3",
+          "occupancy_pct": 74,
+          "quality_score": 58,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": false,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-4",
+          "occupancy_pct": 86,
+          "quality_score": 52,
+          "compaction_depth": 1,
+          "settled": true,
+          "completion_cue": true,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        }
+      ],
+      "source_group_id": "group-8e02fa220acdad6e"
+    },
+    {
+      "session_id": "session-0e07276b620cbf13",
+      "host": "opencode",
+      "scenario": "blocked_work",
+      "provenance": "synthetic",
+      "checkpoints": [
+        {
+          "checkpoint_id": "checkpoint-1",
+          "occupancy_pct": 42,
+          "quality_score": 74,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 900,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-2",
+          "occupancy_pct": 58,
+          "quality_score": 66,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": false,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-3",
+          "occupancy_pct": 74,
+          "quality_score": 58,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": false,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-4",
+          "occupancy_pct": 86,
+          "quality_score": 52,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": true,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        }
+      ],
+      "source_group_id": "group-0e07276b620cbf13"
+    },
+    {
+      "session_id": "session-e575b5457d14280b",
+      "host": "opencode",
+      "scenario": "blocked_work",
+      "provenance": "synthetic",
+      "checkpoints": [
+        {
+          "checkpoint_id": "checkpoint-1",
+          "occupancy_pct": 42,
+          "quality_score": 74,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 900,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-2",
+          "occupancy_pct": 58,
+          "quality_score": 66,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": false,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-3",
+          "occupancy_pct": 74,
+          "quality_score": 58,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": false,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-4",
+          "occupancy_pct": 86,
+          "quality_score": 52,
+          "compaction_depth": 1,
+          "settled": true,
+          "completion_cue": false,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": true
+        }
+      ],
+      "source_group_id": "group-e575b5457d14280b"
+    },
+    {
+      "session_id": "session-0db279dbd7ffe2c9",
+      "host": "opencode",
+      "scenario": "blocked_work",
+      "provenance": "synthetic",
+      "checkpoints": [
+        {
+          "checkpoint_id": "checkpoint-1",
+          "occupancy_pct": 42,
+          "quality_score": 74,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 900,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-2",
+          "occupancy_pct": 58,
+          "quality_score": 66,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": false,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-3",
+          "occupancy_pct": 74,
+          "quality_score": 58,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": false,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-4",
+          "occupancy_pct": 86,
+          "quality_score": 52,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": true,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        }
+      ],
+      "source_group_id": "group-0db279dbd7ffe2c9"
+    },
+    {
+      "session_id": "session-1bdee964c7fbbdc4",
+      "host": "opencode",
+      "scenario": "blocked_work",
+      "provenance": "synthetic",
+      "checkpoints": [
+        {
+          "checkpoint_id": "checkpoint-1",
+          "occupancy_pct": 42,
+          "quality_score": 74,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 900,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-2",
+          "occupancy_pct": 58,
+          "quality_score": 66,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": false,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-3",
+          "occupancy_pct": 74,
+          "quality_score": 58,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": false,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-4",
+          "occupancy_pct": 86,
+          "quality_score": 52,
+          "compaction_depth": 1,
+          "settled": true,
+          "completion_cue": false,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": true
+        }
+      ],
+      "source_group_id": "group-1bdee964c7fbbdc4"
+    },
+    {
+      "session_id": "session-1c7646e8d440016a",
+      "host": "opencode",
+      "scenario": "blocked_work",
+      "provenance": "synthetic",
+      "checkpoints": [
+        {
+          "checkpoint_id": "checkpoint-1",
+          "occupancy_pct": 42,
+          "quality_score": 74,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 900,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-2",
+          "occupancy_pct": 58,
+          "quality_score": 66,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": false,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-3",
+          "occupancy_pct": 74,
+          "quality_score": 58,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": false,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-4",
+          "occupancy_pct": 86,
+          "quality_score": 52,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": true,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        }
+      ],
+      "source_group_id": "group-1c7646e8d440016a"
+    },
+    {
+      "session_id": "session-c6675d5179ca802d",
+      "host": "opencode",
+      "scenario": "blocked_work",
+      "provenance": "synthetic",
+      "checkpoints": [
+        {
+          "checkpoint_id": "checkpoint-1",
+          "occupancy_pct": 42,
+          "quality_score": 74,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 900,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-2",
+          "occupancy_pct": 58,
+          "quality_score": 66,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": false,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-3",
+          "occupancy_pct": 74,
+          "quality_score": 58,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": false,
+          "pending_work": false,
+          "checkpoint_age_seconds": 780,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-4",
+          "occupancy_pct": 86,
+          "quality_score": 52,
+          "compaction_depth": 1,
+          "settled": true,
+          "completion_cue": false,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": true
+        }
+      ],
+      "source_group_id": "group-c6675d5179ca802d"
+    },
+    {
+      "session_id": "session-dd2274f44c02dbce",
+      "host": "hermes",
+      "scenario": "agent_fanout",
+      "provenance": "synthetic",
+      "checkpoints": [
+        {
+          "checkpoint_id": "checkpoint-1",
+          "occupancy_pct": 42,
+          "quality_score": 66,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": false,
+          "pending_work": false,
+          "checkpoint_age_seconds": 900,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-2",
+          "occupancy_pct": 58,
+          "quality_score": 58,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-3",
+          "occupancy_pct": 74,
+          "quality_score": 50,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-4",
+          "occupancy_pct": 86,
+          "quality_score": 44,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        }
+      ],
+      "source_group_id": "group-dd2274f44c02dbce"
+    },
+    {
+      "session_id": "session-21d7fdfca0478ba7",
+      "host": "hermes",
+      "scenario": "agent_fanout",
+      "provenance": "synthetic",
+      "checkpoints": [
+        {
+          "checkpoint_id": "checkpoint-1",
+          "occupancy_pct": 42,
+          "quality_score": 66,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": false,
+          "pending_work": false,
+          "checkpoint_age_seconds": 900,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-2",
+          "occupancy_pct": 58,
+          "quality_score": 58,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-3",
+          "occupancy_pct": 74,
+          "quality_score": 50,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-4",
+          "occupancy_pct": 86,
+          "quality_score": 44,
+          "compaction_depth": 1,
+          "settled": true,
+          "completion_cue": true,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        }
+      ],
+      "source_group_id": "group-21d7fdfca0478ba7"
+    },
+    {
+      "session_id": "session-72544553de560b72",
+      "host": "hermes",
+      "scenario": "agent_fanout",
+      "provenance": "synthetic",
+      "checkpoints": [
+        {
+          "checkpoint_id": "checkpoint-1",
+          "occupancy_pct": 42,
+          "quality_score": 66,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": false,
+          "pending_work": false,
+          "checkpoint_age_seconds": 900,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-2",
+          "occupancy_pct": 58,
+          "quality_score": 58,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-3",
+          "occupancy_pct": 74,
+          "quality_score": 50,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-4",
+          "occupancy_pct": 86,
+          "quality_score": 44,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        }
+      ],
+      "source_group_id": "group-72544553de560b72"
+    },
+    {
+      "session_id": "session-77b6ff92301e10d5",
+      "host": "hermes",
+      "scenario": "agent_fanout",
+      "provenance": "synthetic",
+      "checkpoints": [
+        {
+          "checkpoint_id": "checkpoint-1",
+          "occupancy_pct": 42,
+          "quality_score": 66,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": false,
+          "pending_work": false,
+          "checkpoint_age_seconds": 900,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-2",
+          "occupancy_pct": 58,
+          "quality_score": 58,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-3",
+          "occupancy_pct": 74,
+          "quality_score": 50,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-4",
+          "occupancy_pct": 86,
+          "quality_score": 44,
+          "compaction_depth": 1,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        }
+      ],
+      "source_group_id": "group-77b6ff92301e10d5"
+    },
+    {
+      "session_id": "session-220ecc83a84f5af4",
+      "host": "hermes",
+      "scenario": "agent_fanout",
+      "provenance": "synthetic",
+      "checkpoints": [
+        {
+          "checkpoint_id": "checkpoint-1",
+          "occupancy_pct": 42,
+          "quality_score": 66,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": false,
+          "pending_work": false,
+          "checkpoint_age_seconds": 900,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-2",
+          "occupancy_pct": 58,
+          "quality_score": 58,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-3",
+          "occupancy_pct": 74,
+          "quality_score": 50,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-4",
+          "occupancy_pct": 86,
+          "quality_score": 44,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": true,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        }
+      ],
+      "source_group_id": "group-220ecc83a84f5af4"
+    },
+    {
+      "session_id": "session-b0b2e8ceff1add5d",
+      "host": "hermes",
+      "scenario": "agent_fanout",
+      "provenance": "synthetic",
+      "checkpoints": [
+        {
+          "checkpoint_id": "checkpoint-1",
+          "occupancy_pct": 42,
+          "quality_score": 66,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": false,
+          "pending_work": false,
+          "checkpoint_age_seconds": 900,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-2",
+          "occupancy_pct": 58,
+          "quality_score": 58,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-3",
+          "occupancy_pct": 74,
+          "quality_score": 50,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-4",
+          "occupancy_pct": 86,
+          "quality_score": 44,
+          "compaction_depth": 1,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": false,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        }
+      ],
+      "source_group_id": "group-b0b2e8ceff1add5d"
+    },
+    {
+      "session_id": "session-c3e69027ff9ccd6a",
+      "host": "claude",
+      "scenario": "long_supervision",
+      "provenance": "synthetic",
+      "checkpoints": [
+        {
+          "checkpoint_id": "checkpoint-1",
+          "occupancy_pct": 42,
+          "quality_score": 74,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": true,
+          "pending_work": false,
+          "checkpoint_age_seconds": 900,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-2",
+          "occupancy_pct": 58,
+          "quality_score": 66,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-3",
+          "occupancy_pct": 74,
+          "quality_score": 58,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": true,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-4",
+          "occupancy_pct": 86,
+          "quality_score": 52,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": true,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": true
+        }
+      ],
+      "source_group_id": "group-c3e69027ff9ccd6a"
+    },
+    {
+      "session_id": "session-91c3edbbc611b649",
+      "host": "claude",
+      "scenario": "long_supervision",
+      "provenance": "synthetic",
+      "checkpoints": [
+        {
+          "checkpoint_id": "checkpoint-1",
+          "occupancy_pct": 42,
+          "quality_score": 74,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": true,
+          "pending_work": false,
+          "checkpoint_age_seconds": 900,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-2",
+          "occupancy_pct": 58,
+          "quality_score": 66,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-3",
+          "occupancy_pct": 74,
+          "quality_score": 58,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": true,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-4",
+          "occupancy_pct": 86,
+          "quality_score": 52,
+          "compaction_depth": 1,
+          "settled": true,
+          "completion_cue": true,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        }
+      ],
+      "source_group_id": "group-91c3edbbc611b649"
+    },
+    {
+      "session_id": "session-dc2631857c1da999",
+      "host": "claude",
+      "scenario": "long_supervision",
+      "provenance": "synthetic",
+      "checkpoints": [
+        {
+          "checkpoint_id": "checkpoint-1",
+          "occupancy_pct": 42,
+          "quality_score": 74,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": true,
+          "pending_work": false,
+          "checkpoint_age_seconds": 900,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-2",
+          "occupancy_pct": 58,
+          "quality_score": 66,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-3",
+          "occupancy_pct": 74,
+          "quality_score": 58,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": true,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-4",
+          "occupancy_pct": 86,
+          "quality_score": 52,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": true,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": true
+        }
+      ],
+      "source_group_id": "group-dc2631857c1da999"
+    },
+    {
+      "session_id": "session-6d78ed292026ff31",
+      "host": "claude",
+      "scenario": "long_supervision",
+      "provenance": "synthetic",
+      "checkpoints": [
+        {
+          "checkpoint_id": "checkpoint-1",
+          "occupancy_pct": 42,
+          "quality_score": 74,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": true,
+          "pending_work": false,
+          "checkpoint_age_seconds": 900,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-2",
+          "occupancy_pct": 58,
+          "quality_score": 66,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-3",
+          "occupancy_pct": 74,
+          "quality_score": 58,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": true,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-4",
+          "occupancy_pct": 86,
+          "quality_score": 52,
+          "compaction_depth": 1,
+          "settled": true,
+          "completion_cue": true,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        }
+      ],
+      "source_group_id": "group-6d78ed292026ff31"
+    },
+    {
+      "session_id": "session-e1dd7e831811ac29",
+      "host": "claude",
+      "scenario": "long_supervision",
+      "provenance": "synthetic",
+      "checkpoints": [
+        {
+          "checkpoint_id": "checkpoint-1",
+          "occupancy_pct": 42,
+          "quality_score": 74,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": true,
+          "pending_work": false,
+          "checkpoint_age_seconds": 900,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-2",
+          "occupancy_pct": 58,
+          "quality_score": 66,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-3",
+          "occupancy_pct": 74,
+          "quality_score": 58,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": true,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-4",
+          "occupancy_pct": 86,
+          "quality_score": 52,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": true,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": true
+        }
+      ],
+      "source_group_id": "group-e1dd7e831811ac29"
+    },
+    {
+      "session_id": "session-7d30231e02339f2f",
+      "host": "claude",
+      "scenario": "long_supervision",
+      "provenance": "synthetic",
+      "checkpoints": [
+        {
+          "checkpoint_id": "checkpoint-1",
+          "occupancy_pct": 42,
+          "quality_score": 74,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": true,
+          "pending_work": false,
+          "checkpoint_age_seconds": 900,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-2",
+          "occupancy_pct": 58,
+          "quality_score": 66,
+          "compaction_depth": 0,
+          "settled": false,
+          "completion_cue": false,
+          "pending_work": true,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": false,
+          "next_turn_needed_older_context": true
+        },
+        {
+          "checkpoint_id": "checkpoint-3",
+          "occupancy_pct": 74,
+          "quality_score": 58,
+          "compaction_depth": 0,
+          "settled": true,
+          "completion_cue": true,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        },
+        {
+          "checkpoint_id": "checkpoint-4",
+          "occupancy_pct": 86,
+          "quality_score": 52,
+          "compaction_depth": 1,
+          "settled": true,
+          "completion_cue": true,
+          "pending_work": false,
+          "checkpoint_age_seconds": 240,
+          "cold_resume_available": true,
+          "safe_boundary": true,
+          "next_turn_needed_older_context": false
+        }
+      ],
+      "source_group_id": "group-7d30231e02339f2f"
+    }
+  ]
+}
