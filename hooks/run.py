@@ -385,10 +385,68 @@ def _plugin_disabled_by_host() -> bool:
         return False
 
 
+_COWORK_PLUGIN_NAME = "token-optimizer-cowork"
+_STANDARD_PLUGIN_NAME = "token-optimizer"
+# Marker present in every hook command a script install writes into settings.json.
+_SCRIPT_INSTALL_HOOK_MARKER = "skills/token-optimizer/scripts/"
+
+
+def _cowork_copy_should_stand_down() -> bool:
+    """True when this is the Cowork build running on a desktop host that already
+    has the standard Token Optimizer installed.
+
+    Account-synced plugins land in desktop Claude Code as well as Cowork, so a
+    user with both the standard plugin and the Cowork build would otherwise get
+    every hook twice: duplicate context injected on each prompt, duplicate
+    archives, duplicate nudges. The Cowork build exists for Cowork, so on a
+    desktop host it defers to the standard install.
+
+    Desktop vs Cowork is decided only by the Cowork host environment
+    (CLAUDE_CODE_REMOTE / CLAUDE_CODE_CONTAINER_ID), never by the plugin's
+    install path: a synced plugin sits under /plugins/synced/ on desktop too.
+
+    Fail-open (return False) on any error, so the Cowork build keeps running
+    whenever we cannot tell.
+    """
+    try:
+        if os.environ.get("CLAUDE_CODE_REMOTE", "").strip().lower() in ("1", "true", "yes", "on"):
+            return False
+        if os.environ.get("CLAUDE_CODE_CONTAINER_ID", "").strip():
+            return False
+        plugin_root = os.environ.get("CLAUDE_PLUGIN_ROOT", "").strip()
+        if not plugin_root:
+            return False
+        plugin_json = Path(plugin_root) / ".claude-plugin" / "plugin.json"
+        if not plugin_json.is_file() or plugin_json.stat().st_size > 4_000_000:
+            return False
+        name = json.loads(plugin_json.read_text(encoding="utf-8")).get("name", "")
+        if not isinstance(name, str) or name.strip() != _COWORK_PLUGIN_NAME:
+            return False
+        settings_path = _claude_settings_path()
+        if settings_path is None or settings_path.stat().st_size > 4_000_000:
+            return False
+        settings = json.loads(settings_path.read_text(encoding="utf-8"))
+        if not isinstance(settings, dict):
+            return False
+        enabled = settings.get("enabledPlugins")
+        if isinstance(enabled, dict):
+            for key, value in enabled.items():
+                if value is True and isinstance(key, str) and key.split("@", 1)[0] == _STANDARD_PLUGIN_NAME:
+                    return True
+        hooks = settings.get("hooks")
+        if hooks and _SCRIPT_INSTALL_HOOK_MARKER in json.dumps(hooks).replace("\\\\", "/"):
+            return True
+        return False
+    except Exception:
+        return False
+
+
 def main() -> int:
     if len(sys.argv) < 2:
         return 0
     if _plugin_disabled_by_host():
+        return 0
+    if _cowork_copy_should_stand_down():
         return 0
 
     script_rel = sys.argv[1]
