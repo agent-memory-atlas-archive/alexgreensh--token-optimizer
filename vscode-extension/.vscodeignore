@@ -11,3 +11,4 @@ src/__tests__/**
 .vscodeignore
 **/*.ts
 !out/**/*.js
+.forensicsignore

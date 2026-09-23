@@ -3,6 +3,7 @@
 ## 0.1.16
 
 - Fix: honor `CLAUDE_CONFIG_DIR`. With a relocated Claude Code config, the companion now reads live fill, usage limits, quality scores, sessions, and effort from that directory instead of a stale `~/.claude` (#198).
+- Package: builds now start from a clean `out/`, so compiled files from removed features can no longer ship. 0.1.15 carried two such leftovers (never loaded by the extension); 0.1.16 drops them.
 
 ## 0.1.15
 
