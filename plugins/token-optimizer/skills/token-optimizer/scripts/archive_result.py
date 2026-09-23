@@ -45,7 +45,7 @@ from bash_compress import _TOKEN_PATTERNS
 from hook_io import read_stdin_hook_input
 from hook_runtime import LeaseLock
 from plugin_env import resolve_snapshot_dir, snapshot_dir_candidates
-from refetch_fingerprint import ARGS_HASH_KEY, expand_command, tool_fingerprint
+from refetch_fingerprint import ARGS_HASH_KEY, expand_command, is_live_state_tool, tool_fingerprint
 from runtime_env import detect_runtime, settings_env_value
 from session_store import SessionStore, _sanitize_session_id as sanitize_sid
 
@@ -836,6 +836,40 @@ def _maybe_log_mcp_cap_savings(tool_name: str, original_char_count: int, session
     )
 
 
+# Content-block types that carry media rather than text. The model needs these
+# verbatim: an archive pointer in place of a screenshot leaves it blind, and
+# counting base64 chars as tokens logs savings that never happened (images are
+# billed by pixel dimensions, not encoded length).
+_MEDIA_BLOCK_TYPES = frozenset({"image", "document", "audio", "video"})
+
+
+def _contains_media_block(value, _depth: int = 0) -> bool:
+    """True when a raw tool_response holds an image/document/audio block.
+
+    Covers the Anthropic shape ({"type": "image", "source": {...}}), the MCP
+    shape ({"type": "image", "data": ..., "mimeType": ...}) and embedded MCP
+    resources carrying a blob. Bounded depth; never raises.
+    """
+    if _depth > 8:
+        return False
+    try:
+        if isinstance(value, list):
+            return any(_contains_media_block(v, _depth + 1) for v in value)
+        if isinstance(value, dict):
+            if value.get("type") in _MEDIA_BLOCK_TYPES:
+                return True
+            if isinstance(value.get("blob"), str) and value.get("mimeType"):
+                return True
+            return any(
+                _contains_media_block(v, _depth + 1)
+                for v in value.values()
+                if isinstance(v, (list, dict))
+            )
+    except Exception:
+        return False
+    return False
+
+
 def _tool_response_to_text(value) -> str:
     """Normalize Claude PostToolUse response shapes into archiveable text."""
     if value is None:
@@ -947,6 +981,13 @@ def _expand_instruction(key: str, tool_name: str | None = None) -> str:
     re-fetch guard via expand_command, so the two can never diverge) plus an
     explicit anti-re-fetch instruction so the correct path is unambiguous.
     """
+    if tool_name and is_live_state_tool(tool_name):
+        # A browser/screen read is a snapshot; calling again is how you get the
+        # CURRENT state, so don't tell the model not to.
+        return (
+            "This is a snapshot of that moment; call the tool again for current state. "
+            f"To re-read this snapshot, run in Bash:\n    {expand_command(key)}"
+        )
     dont = f"Do NOT call {tool_name} again" if tool_name else "Do NOT re-run the original tool"
     return (
         f"{dont} to get this data — read the saved copy by running this in Bash:\n"
@@ -1280,7 +1321,13 @@ def archive_result(quiet: bool = False) -> None:
 
     tool_name = hook_input.get("tool_name", "")
     tool_use_id = hook_input.get("tool_use_id", "")
-    tool_response = _tool_response_to_text(hook_input.get("tool_response", ""))
+    raw_response = hook_input.get("tool_response", "")
+    # Screenshots and other media pass through untouched: no archive, no
+    # replacement, no fingerprint (so the re-fetch guard can never block a
+    # fresh screenshot either).
+    if _contains_media_block(raw_response):
+        return
+    tool_response = _tool_response_to_text(raw_response)
     session_id = hook_input.get("session_id", "")
 
     if not tool_response:
@@ -1325,7 +1372,7 @@ def archive_result(quiet: bool = False) -> None:
     # ONLY for MCP tools whose result we actually replace with a preview. Exempt
     # allowlisted tools serve their full fresh result (see below), so the guard
     # must NOT block a re-call of them — record args_hash=None so it never matches.
-    if "__" in tool_name and not _is_archive_exempt(tool_name):
+    if "__" in tool_name and not _is_archive_exempt(tool_name) and not is_live_state_tool(tool_name):
         args_hash = tool_fingerprint(tool_name, hook_input.get("tool_input", {}))
     else:
         args_hash = None

@@ -331,7 +331,7 @@ def _run(payload: dict) -> None:
         # run, emit a compact delta reference instead. Catches repeats even when
         # single-output compression did not help (a small repeated `git status`),
         # which per-command tools cannot do -- they have no session memory.
-        deduped = _crossturn_dedup(command, best)
+        deduped = _crossturn_dedup(command, best, str(payload.get("tool_use_id", "") or ""))
         _log_feature = "bash_compress_pipeline"
         if deduped is not None:
             best, comp_helped = deduped, True
@@ -499,7 +499,7 @@ def _dedup_store_id(session_id: str, agent_id: str) -> str:
     return f"{session_id}-agent-{agent_digest}"
 
 
-def _crossturn_dedup(command: str, output: str):
+def _crossturn_dedup(command: str, output: str, tool_use_id: str = ""):
     """Return a compact delta-reference when this command's output repeats a
     recent same-session run, else None.
 
@@ -546,8 +546,17 @@ def _crossturn_dedup(command: str, output: str):
             # Record THIS run (redacted output) for the next comparison BEFORE we
             # return a delta, so deltas always chain off full (redacted) outputs,
             # not refs.
-            store.insert_command_output(cmd_h, safe_command, out_h, len(output), safe_output)
+            store.insert_command_output(
+                cmd_h, safe_command, out_h, len(output), safe_output,
+                tool_use_id=tool_use_id,
+            )
             if not prior or not prior.get("compressed_output"):
+                return None
+            # Same tool_use_id = the SAME command seen by a second Token Optimizer
+            # install (e.g. a synced Cowork copy that predates the stand-down fix),
+            # not a re-run. Referencing it would say "identical to your previous
+            # output" about output the model has never seen.
+            if tool_use_id and prior.get("last_tool_use_id") == tool_use_id:
                 return None
             # Recency guard: only reference a run from the last hour, a rough
             # proxy for "probably still in the agent's context".
