@@ -148,6 +148,110 @@ def test_randomized_splits_keep_groups_and_signatures_disjoint():
         mod.assert_disjoint(train, evaluation)
 
 
+def test_relabeled_copy_is_still_content_leakage():
+    # Labels are annotator-supplied truth, not content: re-annotating a copied
+    # session must not change its signature or the leak guard is bypassed.
+    data = corpus()
+    left = copy.deepcopy(data["sessions"][0])
+    right = copy.deepcopy(left)
+    right["session_id"] = "session-" + "a" * 16
+    right["source_group_id"] = "group-" + "b" * 16
+    for cp in right["checkpoints"]:
+        cp["safe_boundary"] = not cp["safe_boundary"]
+        cp["next_turn_needed_older_context"] = (
+            None if cp["next_turn_needed_older_context"] is not None else True)
+    train = {"schema_version": 1, "corpus": {}, "sessions": [left]}
+    evaluation = {"schema_version": 1, "corpus": {}, "sessions": [right]}
+    with pytest.raises(ValueError, match="content signature leakage"):
+        mod.assert_disjoint(train, evaluation)
+
+
+def test_reexported_numbers_and_missing_null_fields_share_signature():
+    # JSON re-exports may emit 70.0 for 70 or drop keys explicitly set to null;
+    # neither changes session content, so the signature must not change either.
+    data = corpus()
+    left = copy.deepcopy(data["sessions"][0])
+    for cp in left["checkpoints"]:
+        cp["checkpoint_age_seconds"] = None
+    right = copy.deepcopy(left)
+    right["session_id"] = "session-" + "a" * 16
+    right["source_group_id"] = "group-" + "b" * 16
+    for cp in right["checkpoints"]:
+        del cp["checkpoint_age_seconds"]
+        cp["occupancy_pct"] = float(cp["occupancy_pct"])
+        cp["compaction_depth"] = float(cp["compaction_depth"])
+    train = {"schema_version": 1, "corpus": {}, "sessions": [left]}
+    evaluation = {"schema_version": 1, "corpus": {}, "sessions": [right]}
+    with pytest.raises(ValueError, match="content signature leakage"):
+        mod.assert_disjoint(train, evaluation)
+
+
+def test_split_unions_identical_sessions_across_source_groups():
+    # A copied session exported under a second group must union both groups
+    # into one split unit instead of straddling the train/evaluation boundary.
+    data = corpus()
+    duplicate = copy.deepcopy(data["sessions"][0])
+    duplicate["session_id"] = "session-" + "c" * 16
+    duplicate["source_group_id"] = "group-" + "d" * 16
+    groupmate = copy.deepcopy(data["sessions"][1])
+    groupmate["session_id"] = "session-" + "e" * 16
+    groupmate["source_group_id"] = "group-" + "d" * 16
+    groupmate["scenario"] = duplicate["scenario"]
+    for cp in groupmate["checkpoints"]:
+        cp["quality_score"] = max(0, cp["quality_score"] - 1)
+    data["sessions"].extend([duplicate, groupmate])
+    for seed in range(30):
+        train, evaluation = mod.split_corpus(data, .7, seed)
+        mod.assert_disjoint(train, evaluation)
+
+
+def test_cli_refuses_output_paths_that_alias_inputs(tmp_path):
+    corpus_path = tmp_path / "corpus.json"
+    original = FIXTURE.read_text()
+    corpus_path.write_text(original)
+    split = subprocess.run([sys.executable, str(SCRIPT), "split", "--corpus", str(corpus_path),
+                            "--train-output", str(corpus_path), "--eval-output", str(tmp_path / "eval.json")],
+                           capture_output=True, text=True)
+    assert split.returncode == 2
+    assert corpus_path.read_text() == original
+    run = subprocess.run([sys.executable, str(SCRIPT), "run", "--corpus", str(corpus_path),
+                          "--output", str(corpus_path)], capture_output=True, text=True)
+    assert run.returncode == 2
+    assert corpus_path.read_text() == original
+    same = tmp_path / "same.json"
+    collide = subprocess.run([sys.executable, str(SCRIPT), "split", "--corpus", str(corpus_path),
+                              "--train-output", str(same), "--eval-output", str(same)],
+                             capture_output=True, text=True)
+    assert collide.returncode == 2
+    assert not same.exists()
+    train = tmp_path / "train.json"; evaluation = tmp_path / "eval.json"
+    subprocess.run([sys.executable, str(SCRIPT), "split", "--corpus", str(corpus_path),
+                    "--train-output", str(train), "--eval-output", str(evaluation)],
+                   capture_output=True, text=True, check=True)
+    clobber = subprocess.run([sys.executable, str(SCRIPT), "run", "--corpus", str(evaluation),
+                              "--train-corpus", str(train), "--output", str(train)],
+                             capture_output=True, text=True)
+    assert clobber.returncode == 2
+    mod.load_corpus(train)
+
+
+def test_shared_content_is_flagged_in_report_and_on_stderr(tmp_path):
+    baseline = mod.evaluate(corpus())["content_reuse"]
+    data = corpus()
+    duplicate = copy.deepcopy(data["sessions"][0])
+    duplicate["session_id"] = "session-" + "c" * 16
+    duplicate["source_group_id"] = "group-" + "d" * 16
+    data["sessions"].append(duplicate)
+    report = mod.evaluate(data)
+    assert report["content_reuse"]["sessions_with_shared_content"] == baseline["sessions_with_shared_content"] + 2
+    assert report["content_reuse"]["signatures_spanning_source_groups"] == baseline["signatures_spanning_source_groups"] + 1
+    path = tmp_path / "corpus.json"; path.write_text(json.dumps(data))
+    run = subprocess.run([sys.executable, str(SCRIPT), "run", "--corpus", str(path)],
+                         capture_output=True, text=True)
+    assert run.returncode == 0
+    assert "multiple source_group_id" in run.stderr
+
+
 def test_cli_malformed_inputs_exit_two_without_traceback(tmp_path):
     for value in ([], {"schema_version": 1, "corpus": {}, "sessions": []},
                   {"schema_version": 1, "corpus": {}, "sessions": [{"host": []}]}):

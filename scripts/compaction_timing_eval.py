@@ -8,12 +8,14 @@ session are never split across train/evaluation partitions.
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import hashlib
 import json
 import math
 import random
 import sys
+import tempfile
 from collections import Counter, defaultdict
 from pathlib import Path
 
@@ -166,9 +168,43 @@ def validate_corpus(data: dict, source: str = "corpus") -> None:
                 raise ValueError(f"{source}: {sid}/{cid} real-session replay requires policy_observed.current_advisory")
 
 
+# Checkpoint fields that describe what was observed at capture time, plus the
+# session's scenario context. Annotator labels (safe_boundary,
+# next_turn_needed_older_context), identifiers, and recorded policy decisions
+# are excluded so that re-labeling or re-exporting a session cannot change its
+# signature and slip a copy past the leak guard.
+OBSERVATION_KEYS = (
+    "occupancy_pct", "quality_score", "compaction_depth",
+    "settled", "completion_cue", "pending_work",
+    "checkpoint_age_seconds", "cold_resume_available",
+)
+
+
+def _canonical(value):
+    # Re-exporters may emit integral measurements as floats (70.0 vs 70); both
+    # describe the same observation, so they must hash identically.
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return value
+
+
 def _signature(session: dict) -> str:
-    clean = [{k: v for k, v in cp.items() if k not in {"checkpoint_id", "policy_observed"}} for cp in session["checkpoints"]]
-    return hashlib.sha256(json.dumps(clean, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    checkpoints = [{key: _canonical(cp.get(key)) for key in OBSERVATION_KEYS} for cp in session["checkpoints"]]
+    content = {"scenario": session.get("scenario"), "checkpoints": checkpoints}
+    return hashlib.sha256(json.dumps(content, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def _content_reuse(sessions: list[dict]) -> dict:
+    """Surface repeated session content: identical observations under another
+    session_id double-count the same underlying session, and a signature spread
+    across source groups undermines group-level split/bootstrap guarantees."""
+    signatures: dict[str, list[str]] = defaultdict(list)
+    for session in sessions:
+        signatures[_signature(session)].append(session["source_group_id"])
+    return {
+        "sessions_with_shared_content": sum(len(ids) for ids in signatures.values() if len(ids) > 1),
+        "signatures_spanning_source_groups": sum(1 for ids in signatures.values() if len(set(ids)) > 1),
+    }
 
 
 def assert_disjoint(train: dict, evaluation: dict) -> None:
@@ -270,6 +306,7 @@ def evaluate(corpus: dict, train: dict | None = None) -> dict:
         "corpus_label": "synthetic challenge corpus" if all(s["provenance"] == "synthetic" for s in corpus["sessions"]) else "private real-session corpus",
         "sessions": len(corpus["sessions"]), "checkpoints": len(rows),
         "checkpoints_by_provenance": dict(sorted(Counter(r["session"]["provenance"] for r in rows).items())),
+        "content_reuse": _content_reuse(corpus["sessions"]),
         "policies": {name: _policy_metrics(rows, name, intervals=True) for name in POLICIES},
         "by_occupancy_band": {}, "by_scenario": {}, "by_host": {},
     }
@@ -305,12 +342,27 @@ def split_corpus(corpus: dict, train_fraction: float, seed: int) -> tuple[dict, 
     sessions = list(corpus["sessions"])
     if len(sessions) < 2:
         raise ValueError("at least two sessions are required to split")
-    grouped: dict[str, dict[str, list[dict]]] = defaultdict(lambda: defaultdict(list))
+    # Union-find over source groups: sessions with identical observation content
+    # belong to one split unit even when exports disagree on source_group_id,
+    # so a copied session can never straddle the train/evaluation boundary.
+    parent: dict[str, str] = {}
+    def find(group: str) -> str:
+        root = group
+        while parent.get(root, root) != root:
+            root = parent[root]
+        while parent.get(group, group) != group:
+            parent[group], group = root, parent[group]
+        return root
     signature_group: dict[str, str] = {}
     for session in sessions:
-        signature = _signature(session)
-        group_id = signature_group.setdefault(signature, session["source_group_id"])
-        grouped[session["scenario"]][group_id].append(session)
+        group_id = session["source_group_id"]
+        prior = signature_group.setdefault(_signature(session), group_id)
+        if prior != group_id:
+            low, high = sorted((find(prior), find(group_id)))
+            parent[high] = low
+    grouped: dict[str, dict[str, list[dict]]] = defaultdict(lambda: defaultdict(list))
+    for session in sessions:
+        grouped[session["scenario"]][find(session["source_group_id"])].append(session)
     rng = random.Random(seed)
     train_sessions: list[dict] = []
     eval_sessions: list[dict] = []
@@ -367,6 +419,43 @@ def markdown(report: dict) -> str:
     return "\n".join(lines)
 
 
+def _resolve(path: str | Path) -> Path:
+    return Path(path).expanduser().resolve()
+
+
+def _output_target(path: str, inputs: set[Path], option: str) -> Path:
+    # An output that resolves to an input would silently destroy a private
+    # corpus (e.g. `split --train-output` equal to `--corpus`).
+    target = _resolve(path)
+    for source in inputs:
+        if target == source or (target.exists() and os.path.samefile(target, source)):
+            raise ValueError(f"{option} must not overwrite an input corpus")
+    return target
+
+
+def _write_output(target: Path, content: str) -> None:
+    # Write to a sibling temp file and rename so an interrupted run never
+    # leaves a half-written corpus or report behind.
+    fd, temp = tempfile.mkstemp(dir=str(target.parent), prefix=f"{target.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(content)
+        os.replace(temp, target)
+    except BaseException:
+        try:
+            os.unlink(temp)
+        except OSError:
+            pass
+        raise
+
+
+def _warn_content_reuse(reuse: dict, consequence: str) -> None:
+    spanning = reuse["signatures_spanning_source_groups"]
+    if spanning:
+        print(f"compaction-timing-eval: {spanning} content signature(s) appear under multiple "
+              f"source_group_id values; {consequence}", file=sys.stderr)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -376,15 +465,25 @@ def main(argv: list[str] | None = None) -> int:
     split.add_argument("--eval-output", required=True); split.add_argument("--train-fraction", type=float, default=.7); split.add_argument("--seed", type=int, default=42)
     args = parser.parse_args(argv)
     try:
+        inputs = {_resolve(args.corpus)}
         if args.command == "split":
-            train, evaluation = split_corpus(load_corpus(args.corpus), args.train_fraction, args.seed)
-            for path, value in ((args.train_output, train), (args.eval_output, evaluation)):
-                Path(path).write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+            train_path = _output_target(args.train_output, inputs, "--train-output")
+            eval_path = _output_target(args.eval_output, inputs, "--eval-output")
+            if train_path == eval_path:
+                raise ValueError("--train-output and --eval-output must be different paths")
+            data = load_corpus(args.corpus)
+            _warn_content_reuse(_content_reuse(data["sessions"]), "they are kept in one split partition")
+            train, evaluation = split_corpus(data, args.train_fraction, args.seed)
+            _write_output(train_path, json.dumps(train, indent=2) + "\n")
+            _write_output(eval_path, json.dumps(evaluation, indent=2) + "\n")
             return 0
+        if args.train_corpus:
+            inputs.add(_resolve(args.train_corpus))
         corpus = load_corpus(args.corpus); train = load_corpus(args.train_corpus) if args.train_corpus else None
         report = evaluate(corpus, train)
+        _warn_content_reuse(report["content_reuse"], "check that copied sessions share one source_group_id")
         rendered = json.dumps(report, indent=2) + "\n" if args.json else markdown(report)
-        if args.output: Path(args.output).write_text(rendered, encoding="utf-8")
+        if args.output: _write_output(_output_target(args.output, inputs, "--output"), rendered)
         else: print(rendered, end="" if rendered.endswith("\n") else "\n")
         return 0
     except (OSError, ValueError, TypeError, AttributeError, json.JSONDecodeError) as exc:
