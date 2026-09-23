@@ -87,6 +87,10 @@ python3 skills/token-optimizer/scripts/cowork_doctor.py
 
 The doctor reports what is verifiable from the local machine: the desktop build, the live domain-allowlist state, the local VM session tree, whether the payload is built with the right hook events, the probe fire matrix, and OTel wiring. What it cannot see, the org admin console state and whether hooks fired in a cloud session, it reports as `NEEDS-LIVE` so the live-verification checklist is explicit rather than silently green. It exits non-zero only on a real `FAIL`.
 
+## Updates and plugin reloads
+
+Cowork installs arrive through Claude's plugin sync, which swaps in each new version automatically. If you reload plugins or start a session in the moment an update is being swapped in, Claude Code can briefly report `commands path not found` for a folder ending in `~g2` (or another `~g` number). The update itself is fine: run `/reload-plugins` once and the error clears. No reinstall or cleanup is needed.
+
 ## License note
 
-Token Optimizer is licensed PolyForm-Noncommercial-1.0.0. An org-wide Cowork rollout at a company is commercial use, so an org-console push is a terms decision, a commercial license or a separate agreement, before it is a technical one. Personal-upload testing and evaluation are what the noncommercial license covers.
+Token Optimizer is licensed PolyForm-Noncommercial-1.0.0, plus a written [small business permission](/reference/license/). An org-wide Cowork rollout at a company is commercial use, so an org-console push is a terms decision before it is a technical one: it needs a commercial license unless the whole company qualifies for the small business permission (fewer than 5 people and under $20k/month revenue). Personal, noncommercial use is what the noncommercial license covers.
