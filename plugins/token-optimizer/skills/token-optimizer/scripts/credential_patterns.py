@@ -239,7 +239,7 @@ _CUSTOM_MAX_LABEL_CHARS = 60
 # number of probe passes (each timeout rejects the in-flight pattern and the
 # remainder get one more pass).
 _CUSTOM_PROBE_TIMEOUT_SECONDS = 2.0
-_CUSTOM_PROBE_MAX_PASSES = 4
+_CUSTOM_PROBE_MAX_PASSES = 3
 # Probe children must not flash a console window when the hook runs under a
 # GUI process on Windows; 0 is a no-op off Windows.
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
