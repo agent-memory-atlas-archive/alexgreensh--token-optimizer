@@ -248,6 +248,13 @@ def _resolve_model_family(model: str) -> str:
 # Quality scoring
 # ---------------------------------------------------------------------------
 
+# Distinguishes "caller did not opt in" from "opted in but occupancy is
+# unavailable": callers that never pass ``context_tokens`` keep the lifetime
+# fill their scores shipped with, while Hermes callers pass an explicit value
+# (``None`` = measured-but-unavailable) to get live-occupancy scoring.
+_LIVE_CONTEXT_UNSET: Any = object()
+
+
 def compute_quality_score(
     input_tokens: int,
     output_tokens: int,
@@ -256,30 +263,45 @@ def compute_quality_score(
     *,
     context_window: int | None = None,
     cache_read: int = 0,
-    context_tokens: int | None = None,
+    context_tokens: int | None | object = _LIVE_CONTEXT_UNSET,
 ) -> dict[str, Any]:
     """Score Hermes session context quality from available session-level fields.
 
-    Uses the two session-level signals plus live prompt occupancy when the
-    plugin supplies it. Missing occupancy is omitted rather than fabricated.
-    Grade thresholds
-    reuse measure.py's ``score_to_grade`` / ``score_to_band`` exactly.
+    Two fill modes, chosen by whether the caller passes ``context_tokens``:
 
-    ``input_tokens`` and ``cache_read`` are lifetime billing counters and never
-    drive occupancy. ``context_tokens`` is the provider-reported latest prompt.
+    - Not passed (the Cursor/Copilot/Grok/Antigravity adapters): the legacy
+      lifetime fill numerator ``input_tokens + cache_read`` — both occupy the
+      same context window, so a session that read 160K cached tokens against
+      a 200K window is 80% full, not 0%.
+    - Passed (the Hermes path): live prompt occupancy only. Hermes session
+      rows store lifetime totals — every API call re-sends the prompt, so
+      summing them is never a context-window measurement — and only the
+      provider-reported latest prompt counts. A non-positive or non-numeric
+      value is "measured but unavailable": fill is omitted rather than
+      fabricated and the two remaining signals renormalize below.
+
+    Grade thresholds reuse measure.py's ``score_to_grade`` / ``score_to_band``
+    exactly.
 
     Returns a dict with: score (0-100 int), grade (letter), band (label),
     signals_active (list), signals_omitted (list).
     """
     ctx_win = context_window if context_window and context_window > 0 else _context_window_for_model(model)
 
-    # Signal 1: live context occupancy. Hermes session rows contain lifetime
-    # token totals: every API call re-sends the prompt, so summing those rows is
-    # never a context-window measurement. Only score fill when the plugin passes
-    # the latest request's prompt_tokens. A missed rollup remains honest: omit
-    # the unavailable signal and renormalize the two measured signals below.
-    fill_available = context_tokens is not None and context_tokens >= 0
-    fill_ratio = min(1.0, max(0.0, context_tokens / ctx_win)) if fill_available and ctx_win > 0 else None
+    # Signal 1: Context fill (40% weight when present).
+    if context_tokens is _LIVE_CONTEXT_UNSET:
+        fill_available = True
+        fill_numerator = input_tokens + max(0, cache_read)
+        fill_ratio = min(1.0, max(0.0, fill_numerator / ctx_win)) if ctx_win > 0 else 0.0
+        context_source = "lifetime_tokens"
+    else:
+        fill_available = (
+            isinstance(context_tokens, (int, float))
+            and not isinstance(context_tokens, bool)
+            and context_tokens > 0
+        )
+        fill_ratio = min(1.0, max(0.0, context_tokens / ctx_win)) if fill_available and ctx_win > 0 else None
+        context_source = "provider_prompt_tokens" if fill_available else "unavailable"
     if not fill_available:
         fill_score = None
     elif fill_ratio < 0.30:
@@ -366,7 +388,7 @@ def compute_quality_score(
         "band": band,
         "fill_ratio": round(fill_ratio, 4) if fill_ratio is not None else None,
         "context_window_used": ctx_win,
-        "context_source": "provider_prompt_tokens" if fill_available else "unavailable",
+        "context_source": context_source,
         "signals_active": list(ACTIVE_QUALITY_SIGNALS if fill_available else ACTIVE_QUALITY_SIGNALS[1:]),
         "signals_omitted": list(OMITTED_QUALITY_SIGNALS) + ([] if fill_available else ["context_fill"]),
         "signal_scores": {
