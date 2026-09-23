@@ -89,7 +89,7 @@ The doctor reports what is verifiable from the local machine: the desktop build,
 
 ## Updates and plugin reloads
 
-Cowork installs arrive through Claude's plugin sync, which swaps in each new version automatically. If you reload plugins or start a session in the moment an update is being swapped in, Claude Code can briefly report `commands path not found` for a folder ending in `~g2` (or another `~g` number). The update itself is fine: run `/reload-plugins` once and the error clears. No reinstall or cleanup is needed.
+Cowork installs arrive through Claude's plugin sync, which swaps in each new version automatically. If you reload plugins or start a session in the moment an update is being swapped in, that session can keep a path to a temporary folder ending in `~g2` (or another `~g` number) that Claude Code removes a few seconds later. You will see `commands path not found`, or `Stop hook error: Failed to run: Plugin directory does not exist`, on every hook in that session until it reloads. The update itself is fine: run `/reload-plugins` in the affected session (or restart it) and the errors stop. Sessions started before or after the update are not affected, and no reinstall or cleanup is needed.
 
 ## License note
 
