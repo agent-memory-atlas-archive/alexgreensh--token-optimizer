@@ -63,6 +63,19 @@ _MAIN_AGENT_SENTINEL = "__main_agent__"
 _DEDUP_AGENT_ENV = "TOKEN_OPTIMIZER_DEDUP_AGENT_ID"
 
 
+def _pending_redaction_warning() -> str | None:
+    """One-time user-facing warning that custom redaction is inactive.
+
+    Populated only when a configured pattern file failed to load; folds into
+    the hook's own JSON envelope as ``systemMessage`` so the user sees it
+    instead of only a stderr line."""
+    try:
+        from credential_patterns import pop_redaction_warning
+        return pop_redaction_warning()
+    except Exception:
+        return None
+
+
 def main() -> None:
     """Read PostToolUse hook input, compress Bash stdout if eligible."""
     try:
@@ -201,11 +214,15 @@ def _run(payload: dict) -> None:
     # loses nothing. The nudge still reaches the model via additionalContext,
     # which every host honors (Claude Code, Codex, Cowork). One nudge, once.
     if os.environ.get("TOKEN_OPTIMIZER_NO_UPDATED_TOOL_OUTPUT", "").strip():
-        if _nudge:
-            print(json.dumps({"hookSpecificOutput": {
+        _redact_warn = _pending_redaction_warning()
+        if _nudge or _redact_warn:
+            _payload = {"hookSpecificOutput": {
                 "hookEventName": "PostToolUse",
                 "additionalContext": _nudge,
-            }}))
+            }}
+            if _redact_warn:
+                _payload["systemMessage"] = _redact_warn
+            print(json.dumps(_payload))
         return
 
     # Too small to compress
@@ -714,6 +731,11 @@ def _emit_updated_tool_output(stdout: str, stderr: str,
     }
     if nudge:
         envelope["hookSpecificOutput"]["additionalContext"] = nudge
+    # A broken custom pattern file keeps redacted writes out of every cache —
+    # surface that once per file hash as a user-visible systemMessage.
+    _redact_warn = _pending_redaction_warning()
+    if _redact_warn:
+        envelope["systemMessage"] = _redact_warn
     print(json.dumps(envelope))
 
 

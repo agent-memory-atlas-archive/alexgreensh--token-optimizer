@@ -19,6 +19,7 @@ if str(SCRIPTS) not in sys.path:
     sys.path.insert(0, str(SCRIPTS))
 
 import archive_result  # noqa: E402
+import runtime_env  # noqa: E402
 
 
 @pytest.fixture
@@ -27,7 +28,7 @@ def clean_exempt(monkeypatch):
     monkeypatch.delenv("TOKEN_OPTIMIZER_ARCHIVE_EXEMPT_TOOLS", raising=False)
     monkeypatch.delenv("TOKEN_OPTIMIZER_ARCHIVE_EXEMPT_DEFAULTS", raising=False)
     # Point settings.json lookup at an empty dir so no real user config leaks in.
-    monkeypatch.setattr(archive_result, "claude_home", lambda: Path("/nonexistent-xyzzy"))
+    monkeypatch.setattr(runtime_env, "claude_home", lambda: Path("/nonexistent-xyzzy"))
     archive_result._EXEMPT_PATTERNS_CACHE = archive_result._EXEMPT_PATTERNS_UNSET
     yield
     archive_result._EXEMPT_PATTERNS_CACHE = archive_result._EXEMPT_PATTERNS_UNSET

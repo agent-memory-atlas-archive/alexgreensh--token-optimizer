@@ -36,14 +36,17 @@ import time
 
 try:
     from credential_patterns import redact_credentials as _redact_creds_shared
+    from credential_patterns import RedactionConfigError, pop_redaction_warning
 except ImportError:
     _redact_creds_shared = None
+    RedactionConfigError = None
+    pop_redaction_warning = None
 from bash_compress import _TOKEN_PATTERNS
 from hook_io import read_stdin_hook_input
 from hook_runtime import LeaseLock
 from plugin_env import resolve_snapshot_dir, snapshot_dir_candidates
 from refetch_fingerprint import ARGS_HASH_KEY, expand_command, tool_fingerprint
-from runtime_env import claude_home, detect_runtime
+from runtime_env import detect_runtime, settings_env_value
 from session_store import SessionStore, _sanitize_session_id as sanitize_sid
 
 # ---------------------------------------------------------------------------
@@ -719,18 +722,15 @@ def _resolve_mcp_cap_tokens() -> int | None:
             pass
 
     # 2. settings.json "env" block — for out-of-process callers
-    settings_path = claude_home() / "settings.json"
-    try:
-        with open(settings_path, "r", encoding="utf-8") as f:
-            settings = json.load(f)
-        raw = settings.get("env", {}).get("MAX_MCP_OUTPUT_TOKENS", "")
-        if raw:
-            v = int(str(raw).strip())
+    raw = settings_env_value("MAX_MCP_OUTPUT_TOKENS")
+    if raw:
+        try:
+            v = int(raw)
             if v > 0:
                 _MCP_CAP_TOKENS_CACHE = v
                 return v
-    except Exception:
-        pass
+        except ValueError:
+            pass
 
     _MCP_CAP_TOKENS_CACHE = None
     return None
@@ -785,16 +785,10 @@ def _resolve_exempt_tool_patterns() -> tuple[str, ...]:
     defaults_flag = os.environ.get("TOKEN_OPTIMIZER_ARCHIVE_EXEMPT_DEFAULTS", "").strip()
     if not raw or not defaults_flag:
         # settings.json "env" block — for out-of-process callers.
-        try:
-            with open(claude_home() / "settings.json", "r", encoding="utf-8") as f:
-                settings = json.load(f)
-            env_block = settings.get("env", {})
-            if not raw:
-                raw = str(env_block.get("TOKEN_OPTIMIZER_ARCHIVE_EXEMPT_TOOLS", "")).strip()
-            if not defaults_flag:
-                defaults_flag = str(env_block.get("TOKEN_OPTIMIZER_ARCHIVE_EXEMPT_DEFAULTS", "")).strip()
-        except Exception:
-            pass
+        if not raw:
+            raw = settings_env_value("TOKEN_OPTIMIZER_ARCHIVE_EXEMPT_TOOLS")
+        if not defaults_flag:
+            defaults_flag = settings_env_value("TOKEN_OPTIMIZER_ARCHIVE_EXEMPT_DEFAULTS")
 
     user_patterns = tuple(p.strip() for p in raw.split(",") if p.strip())
     base = () if defaults_flag.lower() in ("off", "false", "0", "none") else _DEFAULT_EXEMPT_PATTERNS
@@ -1351,7 +1345,23 @@ def archive_result(quiet: bool = False) -> None:
     # Redact credential patterns before writing to disk.
     # Performed on the (possibly truncated) response so no plaintext secrets
     # ever reach the archive file, even transiently.
-    safe_response = _redact_credentials(tool_response)
+    try:
+        safe_response = _redact_credentials(tool_response)
+    except Exception as exc:
+        # A configured-but-broken custom pattern file means redaction cannot
+        # be trusted to cover the user's own secret shapes — fail CLOSED: skip
+        # the archive write entirely and let the output pass through in memory.
+        if RedactionConfigError is None or not isinstance(exc, RedactionConfigError):
+            raise
+        if not quiet:
+            print(f"[Tool Archive] {exc}; result not archived.", file=sys.stderr)
+        if pop_redaction_warning is not None:
+            msg = pop_redaction_warning()
+            if msg:
+                # Sole hook output for this run: a single JSON object is a
+                # valid envelope on every host.
+                print(json.dumps({"systemMessage": msg}))
+        return
 
     session_lock = LeaseLock(
         _session_lock_path(archive_dir.parent, session_id),

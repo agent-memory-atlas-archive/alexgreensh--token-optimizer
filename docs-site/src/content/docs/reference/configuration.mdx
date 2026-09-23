@@ -177,6 +177,7 @@ The pricing tier drives every cost and savings calculation. Set it with `measure
 |---|---|---|
 | `TOKEN_OPTIMIZER_ARCHIVE_EXEMPT_TOOLS` | (unset) | Comma-separated `fnmatch` globs added to the built-in list of MCP tools whose full output stays inline |
 | `TOKEN_OPTIMIZER_ARCHIVE_EXEMPT_DEFAULTS` | enabled | Set to `off`, `false`, `0`, or `none` to remove the built-in archive exemptions |
+| `TOKEN_OPTIMIZER_REDACT_PATTERNS_FILE` | `<platform-home>/token-optimizer/redact-patterns.json` | Path to a JSON file of extra credential redaction patterns, added to the built-in set. See [Data and privacy](/reference/data-and-privacy/#custom-redaction-patterns) |
 | `TOKEN_OPTIMIZER_COST_PER_MTOK` | model-derived | Positive numeric override for the input-token price estimate used by the hook-safe compression-savings path |
 
 ## Advanced measurement and baseline tuning
