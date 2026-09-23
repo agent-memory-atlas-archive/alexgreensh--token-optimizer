@@ -396,6 +396,8 @@ def test_statusline_runs_under_node_on_windows(tmp_path):
     # writes land in tmp, never the real profile.
     env["USERPROFILE"] = str(tmp_path)
     env["HOME"] = str(tmp_path)
+    # A real CLAUDE_CONFIG_DIR would outrank the pinned HOME (#198).
+    env.pop("CLAUDE_CONFIG_DIR", None)
     proc = subprocess.run(
         ["node", str(STATUSLINE)],
         input=payload.encode("utf-8"),

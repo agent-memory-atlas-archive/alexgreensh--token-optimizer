@@ -6,7 +6,7 @@ import * as fs from 'fs';
 
 export interface ClaudePaths {
   claudeDir: string;
-  cacheDir: string; // ~/.claude/token-optimizer  (or ~/.copilot/token-optimizer)
+  cacheDir: string; // <claude dir>/token-optimizer  (or ~/.copilot/token-optimizer)
   projectsDir: string; // ~/.claude/projects  (unused/empty for Copilot mode)
   liveFill: string;
   rateLimits: string;
@@ -17,8 +17,36 @@ export interface ClaudePaths {
   sessionStateDir?: string;
 }
 
+// Claude Code's config dir, resolved exactly like the plugin's statusline.js and
+// runtime_env.claude_home(): CLAUDE_CONFIG_DIR when it is an absolute, existing,
+// non-symlink directory, else <home>/.claude. The plugin writes every file this
+// companion reads under that dir, so reading a hard-coded ~/.claude showed stale
+// or missing data for relocated configs (#198). Keep the three copies in step.
+export function resolveClaudeDir(
+  homeDir: string = os.homedir(),
+  env: NodeJS.ProcessEnv = process.env
+): string {
+  const fallback = path.join(homeDir, '.claude');
+  const raw = (env.CLAUDE_CONFIG_DIR || '').trim();
+  if (!raw) return fallback;
+  try {
+    const p = /^~(?=$|[\\/])/.test(raw) ? path.join(homeDir, raw.slice(1)) : raw;
+    const win = process.platform === 'win32';
+    const absolute = win ? /^([a-zA-Z]:[\\/]|[\\/]{2})/.test(p) : path.isAbsolute(p);
+    if (absolute) {
+      const st = fs.lstatSync(p);
+      if (st.isDirectory()) return path.resolve(p);
+      // Windows junctions show up as symlinks in Node; the plugin accepts them.
+      if (win && st.isSymbolicLink() && fs.statSync(p).isDirectory()) return path.resolve(p);
+    }
+  } catch {
+    // unusable override: fall back like the plugin does
+  }
+  return fallback;
+}
+
 export function resolvePaths(homeDir: string = os.homedir()): ClaudePaths {
-  const claudeDir = path.join(homeDir, '.claude');
+  const claudeDir = resolveClaudeDir(homeDir);
   const cacheDir = path.join(claudeDir, 'token-optimizer');
   return {
     claudeDir,
@@ -88,7 +116,7 @@ function mostRecentMtimeMs(dir: string): number {
 // user or the no-data case falls back to Claude (the historical default); a
 // mixed user follows whichever runtime they used most recently.
 export function resolveAutoPaths(homeDir: string = os.homedir()): ClaudePaths {
-  const claudeCache = path.join(homeDir, '.claude', 'token-optimizer');
+  const claudeCache = path.join(resolveClaudeDir(homeDir), 'token-optimizer');
   const copilotCache = path.join(homeDir, '.copilot', 'token-optimizer');
   const copilotMs = mostRecentMtimeMs(copilotCache);
   const claudeMs = mostRecentMtimeMs(claudeCache);
@@ -104,7 +132,7 @@ export function resolveAutoPaths(homeDir: string = os.homedir()): ClaudePaths {
 // user hasn't run today is still installed.
 export function detectPluginInstalled(homeDir: string = os.homedir()): boolean {
   const candidates = [
-    path.join(homeDir, '.claude', 'token-optimizer'),
+    path.join(resolveClaudeDir(homeDir), 'token-optimizer'),
     path.join(homeDir, '.copilot', 'token-optimizer'),
   ];
   for (const dir of candidates) {

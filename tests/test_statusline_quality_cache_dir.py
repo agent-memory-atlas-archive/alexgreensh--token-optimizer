@@ -44,6 +44,8 @@ def _run(home: Path, extra_env=None):
         env["HOMEDRIVE"] = drive
         env["HOMEPATH"] = os.sep + tail
     env.pop("CLAUDE_PLUGIN_DATA", None)
+    # A real CLAUDE_CONFIG_DIR would outrank the pinned HOME (#198).
+    env.pop("CLAUDE_CONFIG_DIR", None)
     if extra_env:
         env.update(extra_env)
     p = subprocess.run(["node", str(SL)], input=payload, env=env,

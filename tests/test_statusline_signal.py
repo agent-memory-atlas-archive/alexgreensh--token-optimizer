@@ -39,6 +39,8 @@ def _node_available() -> bool:
 def _run_statusline(script_path: Path, payload: dict, home: Path) -> subprocess.CompletedProcess:
     env = dict(subprocess.os.environ)
     env["HOME"] = str(home)
+    # A real CLAUDE_CONFIG_DIR would outrank the pinned HOME (#198).
+    env.pop("CLAUDE_CONFIG_DIR", None)
     # Windows resolves the home dir via USERPROFILE (and HOMEDRIVE+HOMEPATH),
     # not HOME, so point those at the tmp home too or node reads the real
     # profile and never finds the test flag file.

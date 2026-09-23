@@ -80,6 +80,39 @@ if (_pluginTreeGone() || _pluginUninstalledFromClone()) {
   process.exit(0);
 }
 
+// Claude Code's config dir. Mirrors runtime_env.claude_home(): honor
+// CLAUDE_CONFIG_DIR when it is an ABSOLUTE, EXISTING, NON-SYMLINK directory,
+// else ~/.claude. Hard-coding ~/.claude here split state with the Python hooks
+// for relocated configs (#198): live-fill/rate-limits landed in ~/.claude while
+// the hooks read $CLAUDE_CONFIG_DIR, and the quality cache was read from the
+// wrong side. Any divergence from the Python rules reintroduces that split.
+function _claudeHome() {
+  const fallback = path.join(os.homedir(), '.claude');
+  const raw = (process.env.CLAUDE_CONFIG_DIR || '').trim();
+  if (!raw) return fallback;
+  try {
+    // Path.expanduser() parity: only a bare ~ or ~/ (~\ on Windows) expands.
+    const p = /^~(?=$|[\\/])/.test(raw) ? path.join(os.homedir(), raw.slice(1)) : raw;
+    const win = process.platform === 'win32';
+    // pathlib on Windows needs a drive or UNC root: a bare \foo is relative
+    // there, while Node's isAbsolute() would accept it.
+    const absolute = win ? /^([a-zA-Z]:[\\/]|[\\/]{2})/.test(p) : path.isAbsolute(p);
+    if (absolute) {
+      const st = fs.lstatSync(p);  // lstat: a symlink is never isDirectory()
+      if (st.isDirectory()) return path.resolve(p);
+      // Python's is_symlink() is False for a Windows junction (the usual way to
+      // relocate a dir without admin rights), so it accepts one. Node's lstat
+      // reports junctions as symlinks and cannot tell them apart, so accept any
+      // reparse point that resolves to a directory on Windows. The one residual
+      // mismatch is a true directory symlink there, which needs admin rights or
+      // Developer Mode and is far rarer than a junction.
+      if (win && st.isSymbolicLink() && fs.statSync(p).isDirectory()) return path.resolve(p);
+    }
+  } catch (e) {}
+  return fallback;
+}
+const CLAUDE_HOME = _claudeHome();
+
 let input = '';
 process.stdin.setEncoding('utf8');
 process.stdin.on('data', chunk => input += chunk);
@@ -125,7 +158,7 @@ process.stdin.on('end', () => {
     try {
       let level = data.effort?.level;
       if (!level) {
-        const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
+        const settingsPath = path.join(CLAUDE_HOME, 'settings.json');
         if (fs.existsSync(settingsPath)) {
           const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
           level = settings.effortLevel;
@@ -139,7 +172,7 @@ process.stdin.on('end', () => {
     } catch (e) {}
 
     // Cache directory (declared early, used by live-fill write and quality score read)
-    const cacheDir = path.join(os.homedir(), '.claude', 'token-optimizer');
+    const cacheDir = path.join(CLAUDE_HOME, 'token-optimizer');
 
     // Context window bar with degradation-aware colors
     // Fill bands: <50% green, 50-70% yellow, 70-80% orange, 80%+ red (blinking)
@@ -214,29 +247,28 @@ process.stdin.on('end', () => {
 
     // ---- Read quality cache ----
     // The hooks write the quality-cache under _STATE_BASE, which is
-    // ${CLAUDE_PLUGIN_DATA}/token-optimizer (~/.claude/plugins/data/{id}/...) when
-    // that env is set (the desktop plugin hook context), else ~/.claude/token-
-    // optimizer. The statusline runs WITHOUT CLAUDE_PLUGIN_DATA, so reading only
-    // `cacheDir` (the ~/.claude fallback) missed the per-session cache the hooks
+    // ${CLAUDE_PLUGIN_DATA}/token-optimizer (<claude home>/plugins/data/{id}/...)
+    // when that env is set (the desktop plugin hook context), else <claude home>/
+    // token-optimizer. The statusline runs WITHOUT CLAUDE_PLUGIN_DATA, so reading only
+    // `cacheDir` (the claude-home fallback) missed the per-session cache the hooks
     // wrote under plugins/data -> ContextQ/Eff showed "--" for every desktop
     // plugin user. Search every candidate dir and take the freshest matching file.
     let q = null;
     try {
       if (safeSessionId) {
-        const _home = os.homedir();
         const _candidates = [];
         if (process.env.CLAUDE_PLUGIN_DATA) {
           _candidates.push(path.join(process.env.CLAUDE_PLUGIN_DATA, 'token-optimizer'));
         }
         try {
-          const _dataRoot = path.join(_home, '.claude', 'plugins', 'data');
+          const _dataRoot = path.join(CLAUDE_HOME, 'plugins', 'data');
           for (const d of fs.readdirSync(_dataRoot)) {
             if (d.includes('token-optimizer')) {
               _candidates.push(path.join(_dataRoot, d, 'token-optimizer'));
             }
           }
         } catch (e) {}
-        _candidates.push(cacheDir); // ~/.claude/token-optimizer fallback (non-hook context)
+        _candidates.push(cacheDir); // <claude home>/token-optimizer fallback (non-hook context)
         let _best = null, _bestMtime = -1;
         for (const c of _candidates) {
           try {
