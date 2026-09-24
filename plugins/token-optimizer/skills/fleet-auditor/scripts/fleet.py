@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -131,6 +132,10 @@ DEFAULT_PRICING: dict[str, dict[str, float]] = {
     # cache_write = 5-minute TTL (1.25x input); cache_write_1h = 1-hour TTL (2x input).
     "fable":          {"input": 10.0/1e6, "output": 50.0/1e6, "cache_read": 1.0/1e6,  "cache_write": 12.5/1e6, "cache_write_1h": 20.0/1e6},
     "opus":           {"input": 5.0/1e6,  "output": 25.0/1e6, "cache_read": 0.5/1e6,  "cache_write": 6.25/1e6, "cache_write_1h": 10.0/1e6},
+    # Generations priced off-family (verified 2026-09-24): Fable/Mythos 5.1 cache reads are
+    # 0.025x input; Opus 5.5 is $4/$20 with 0.05x reads. See _pricing_key().
+    "fable-5-1":      {"input": 10.0/1e6, "output": 50.0/1e6, "cache_read": 0.25/1e6, "cache_write": 12.5/1e6, "cache_write_1h": 20.0/1e6},
+    "opus-5-5":       {"input": 4.0/1e6,  "output": 20.0/1e6, "cache_read": 0.2/1e6,  "cache_write": 5.0/1e6,  "cache_write_1h": 8.0/1e6},
     "sonnet":         {"input": 3.0/1e6,  "output": 15.0/1e6, "cache_read": 0.3/1e6,  "cache_write": 3.75/1e6, "cache_write_1h": 6.0/1e6},
     "haiku":          {"input": 1.0/1e6,  "output": 5.0/1e6,  "cache_read": 0.1/1e6,  "cache_write": 1.25/1e6, "cache_write_1h": 2.0/1e6},
     "gpt-5-codex":    {"input": 1.25/1e6, "output": 10.0/1e6, "cache_read": 0.125/1e6, "cache_write": 0},
@@ -243,6 +248,7 @@ def _load_pricing() -> dict[str, dict[str, float]]:
         return _pricing_override
 
     pricing = dict(DEFAULT_PRICING)
+    pricing.update(_bundled_prices())
     override_path = FLEET_DB_DIR / "pricing.json"
     if override_path.exists():
         try:
@@ -256,7 +262,7 @@ def _load_pricing() -> dict[str, dict[str, float]]:
                 # Normalize the user's key the same way lookups are normalized, so
                 # adding "MiniMax-M3" (the name the unpriced warning shows) actually
                 # prices the run keyed as "minimax-m3".
-                model = normalize_model_name(str(model)) or str(model).lower()
+                model = _override_key(str(model))
                 merged = {**pricing.get(model, {}), **rates}
                 if "cache_write_1h" not in rates and ("input" in rates or "cache_write" in rates):
                     if merged.get("input"):
@@ -268,6 +274,121 @@ def _load_pricing() -> dict[str, dict[str, float]]:
             pass
     _pricing_override = pricing
     return pricing
+
+
+_BUNDLED_PRICES_PATH = Path(__file__).resolve().parent.parent.parent / "token-optimizer" / "pricing" / "prices.json"
+_PRICE_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+_CLAUDE_GENERATION_RE = re.compile(
+    r"(fable|mythos|opus|sonnet|haiku)[-._]?(\d+)(?:[-._](\d{1,2}))?(?![0-9])")
+# Claude 3-era ids put the version before the family ("claude-3-5-sonnet-20241022").
+_CLAUDE_LEGACY_ID_RE = re.compile(r"claude-(\d)(?:[-.](\d))?-(opus|sonnet|haiku)(?![a-z])")
+
+
+def _bundled_prices() -> dict[str, dict[str, float]]:
+    """Per-token cards from the auto-refreshed pricing/prices.json (read-only).
+
+    Same file measure.py reads, so fleet costs never drift from the dashboard.
+    Claude generation cards are hyphenated here ("opus_5_5" -> "opus-5-5").
+    Returns {} when the file is missing, oversized or malformed.
+    """
+    try:
+        if _BUNDLED_PRICES_PATH.stat().st_size > 2 * 1024 * 1024:
+            return {}
+        doc = json.loads(_BUNDLED_PRICES_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(doc, dict) or doc.get("schema") != 1:
+        return {}
+    out: dict[str, dict[str, float]] = {}
+    for section in ("anthropic", "openai", "gemini"):
+        cards = doc.get(section)
+        if not isinstance(cards, dict):
+            continue
+        for key, card in cards.items():
+            if not isinstance(key, str) or not _PRICE_KEY_RE.match(key) or not isinstance(card, dict):
+                continue
+            rates = {}
+            for field in ("input", "output", "cache_read", "cache_write", "cache_write_1h"):
+                v = card.get(field)
+                if v is None:
+                    continue
+                if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or not 0 <= v <= 1000:
+                    rates = {}
+                    break
+                rates[field] = float(v) / 1e6
+            if "input" not in rates or "output" not in rates:
+                continue
+            rates.setdefault("cache_read", rates["input"] if section != "anthropic" else rates["input"] * 0.1)
+            rates.setdefault("cache_write", rates["input"] * 1.25 if section == "anthropic" else 0.0)
+            if section == "anthropic":
+                rates.setdefault("cache_write_1h", rates["input"] * 2)
+            out[key.replace("_", "-") if section == "anthropic" else key] = rates
+    return out
+
+
+def _claude_generation_key(model_id: str) -> str | None:
+    """'claude-opus-5-5' / 'opus-5-5' -> 'opus-5-5'; None when no generation."""
+    m = str(model_id or "").lower()
+    legacy = _CLAUDE_LEGACY_ID_RE.search(m)
+    if legacy:
+        major, minor, family = legacy.groups()
+        return f"{family}-{major}-{minor}" if minor else f"{family}-{major}"
+    g = _CLAUDE_GENERATION_RE.search(m)
+    if not g:
+        return None
+    family, major, minor = g.groups()
+    return f"{family}-{major}-{minor}" if minor else f"{family}-{major}"
+
+
+def _override_key(model_id: str) -> str:
+    """Key a user override in pricing.json lands on.
+
+    Uses the same generation granularity as lookups, so {"opus-5-5": ...}
+    reprices Opus 5.5 only, instead of being folded into the "opus" family card
+    and silently repricing every other Opus generation.
+    """
+    return _claude_generation_key(model_id) or normalize_model_name(model_id) or model_id.lower()
+
+
+# Same families the TS engines prefix-match: any GPT, any o-series, any Gemini.
+_PREFIX_PRICED_RE = re.compile(r"^(gpt-|o\d|gemini-)")
+
+
+def _pricing_key(model_id: str) -> str:
+    """Rate-card key for a raw model id, finer than the family label.
+
+    Claude generations are priced differently (Opus 5.5 $4/$20, Opus 4.1
+    $15/$75, Fable 5.1 cache reads $0.25), so try "opus-5-5", then "opus-5",
+    then the family. Other providers match the longest priced id prefix, so a
+    dated snapshot prices as its base model. Mirrors measure.py.
+    """
+    pricing = _load_pricing()
+    m = str(model_id or "").lower()
+    legacy = _CLAUDE_LEGACY_ID_RE.search(m)
+    if legacy:
+        major, minor, family = legacy.groups()
+        keys = [f"{family}-{major}-{minor}", f"{family}-{major}"] if minor else [f"{family}-{major}"]
+        if family == "sonnet":
+            keys.append("sonnet-legacy")
+        for key in keys:
+            if key in pricing:
+                return key
+        return normalize_model_name(model_id) or model_id
+    g = _CLAUDE_GENERATION_RE.search(m)
+    if g:
+        family, major, minor = g.groups()
+        for fam in ((family, "fable") if family == "mythos" else (family,)):
+            for key in ((f"{fam}-{major}-{minor}", f"{fam}-{major}") if minor else (f"{fam}-{major}",)):
+                if key in pricing:
+                    return key
+        if family == "mythos":
+            return "fable"
+    else:
+        bare = m.rsplit("/", 1)[-1].rsplit(":", 1)[-1]
+        for key in sorted(pricing, key=len, reverse=True):
+            if _PREFIX_PRICED_RE.match(key) and (bare == key or bare.startswith(key + "-")):
+                return key
+    return normalize_model_name(model_id) or model_id
 
 
 def calculate_cost(tokens: "TokenBreakdown", model: str,
@@ -706,10 +827,9 @@ class ClaudeCodeAdapter(BaseAdapter):
             api_calls += 1
             model_id = str(usage.get("model") or "unknown")
             model_usage[model_id] = model_usage.get(model_id, 0) + inp_tok + cr + cc + out_tok
-            normalized = normalize_model_name(model_id) or model_id
             exact_cost += calculate_cost(
                 TokenBreakdown(input=inp_tok, output=out_tok, cache_read=cr, cache_write=cc),
-                normalized,
+                _pricing_key(model_id),
                 cache_write_1h=cc_1h,
                 cache_write_5m=cc_5m,
             )
@@ -849,7 +969,7 @@ class ClaudeCodeAdapter(BaseAdapter):
         # Determine run type
         run_type = "delegate" if is_subagent else "manual"
 
-        cost = calculate_cost(tokens, model,
+        cost = calculate_cost(tokens, _pricing_key(dominant_model_raw),
                               cache_write_1h=total_cache_create_1h,
                               cache_write_5m=total_cache_create_5m)
         if exact_cost > 0:
@@ -1022,7 +1142,7 @@ class CodexAdapter(BaseAdapter):
             timestamp=first_ts or datetime.fromtimestamp(filepath.stat().st_mtime, timezone.utc),
             duration_seconds=float(parsed.get("duration_minutes") or 0) * 60,
             tokens=tokens,
-            cost_usd=calculate_cost(tokens, model),
+            cost_usd=calculate_cost(tokens, _pricing_key(str(dominant_model_raw))),
             model=model,
             context_window_size=int(parsed.get("model_context_window") or 200_000),
             run_type="manual",
@@ -1246,7 +1366,7 @@ class HermesAdapter(BaseAdapter):
         # fake $0. A recorded value (incl. $0) is authoritative; only a
         # genuinely absent/garbage cost falls back to our table.
         db_cost = _recorded_cost(g("actual_cost_usd", None), g("estimated_cost_usd", None))
-        cost = db_cost if db_cost is not None else calculate_cost(tokens, model)
+        cost = db_cost if db_cost is not None else calculate_cost(tokens, _pricing_key(model_raw) if model_raw else model)
 
         started = self._to_dt(g("started_at", None))
         ended = self._to_dt(g("ended_at", None))
@@ -3306,15 +3426,48 @@ def _open_in_browser(path: Path):
 
 
 def _serve_dashboard(host: str, port: int):
-    """Serve the fleet dashboard over HTTP."""
-    import http.server
-    import functools
+    """Serve the fleet dashboard over HTTP: that one page and nothing else.
 
-    handler = functools.partial(
-        http.server.SimpleHTTPRequestHandler,
-        directory=str(FLEET_DASHBOARD_PATH.parent),
-    )
-    with http.server.HTTPServer((host, port), handler) as server:
+    The old handler served the whole data folder, so fleet.db and the pricing
+    overrides were downloadable, and with no Host check a DNS-rebinding page in
+    the user's browser could read them. Now only the dashboard is served, and a
+    request whose Host is not this server's own name is refused.
+    """
+    import http.server
+
+    allowed_hosts = {"127.0.0.1", "localhost", "[::1]", host.lower()}
+    page = FLEET_DASHBOARD_PATH
+
+    class _DashboardOnly(http.server.BaseHTTPRequestHandler):
+        def _host_ok(self) -> bool:
+            raw = (self.headers.get("Host") or "").strip().lower()
+            # "[::1]:8080" -> "[::1]"; "localhost:8080" -> "localhost"
+            name = raw[: raw.find("]") + 1] if raw.startswith("[") else raw.split(":", 1)[0]
+            return name in allowed_hosts
+
+        def do_GET(self):  # noqa: N802 (http.server API)
+            if not self._host_ok():
+                self.send_error(403, "Forbidden host")
+                return
+            if self.path.split("?", 1)[0] not in ("/", "/fleet-dashboard.html"):
+                self.send_error(404)
+                return
+            try:
+                body = page.read_bytes()
+            except OSError:
+                self.send_error(404)
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, fmt, *a):  # keep the terminal quiet
+            pass
+
+    with http.server.HTTPServer((host, port), _DashboardOnly) as server:
         print(f"  Serving fleet dashboard at http://{host}:{port}/fleet-dashboard.html")
         print("  Press Ctrl+C to stop.")
         try:

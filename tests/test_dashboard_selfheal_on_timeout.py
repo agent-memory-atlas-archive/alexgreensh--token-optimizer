@@ -76,6 +76,11 @@ def measure(monkeypatch, tmp_path):
     import importlib
 
     monkeypatch.setenv("TOKEN_OPTIMIZER_SNAPSHOT_DIR", str(tmp_path))
+    # An empty config dir: the rebuild must not read the machine's real history,
+    # which can take longer than the 60s deadline and os._exit the test run.
+    config = tmp_path / "claude-config"
+    (config / "projects").mkdir(parents=True)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config))
     monkeypatch.setenv("TOKEN_OPTIMIZER_HOOK", "1")
     monkeypatch.delenv("TOKEN_OPTIMIZER_INTERACTIVE", raising=False)
     if "measure" in sys.modules:

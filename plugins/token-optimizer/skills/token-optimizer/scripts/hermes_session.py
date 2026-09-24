@@ -553,6 +553,7 @@ def normalize_session(row: dict[str, Any], *, context_tokens: int | None = None)
         "topic": title,
         # Timestamps
         "first_ts": _parse_ts(started_at_raw),
+        "last_ts": _parse_ts(ended_at_raw),
         "duration_minutes": round(duration_minutes, 2),
         # Token counts — engine convention: input = total billed (fresh+cr+cw).
         # M1: total_input_tokens is the rolled-up total so _session_token_vector

@@ -1,6 +1,40 @@
 import { tool, type ToolDefinition } from "@opencode-ai/plugin";
 import { writeDashboard } from "../dashboard/generator.js";
 
+/**
+ * Launch a browser opener fully detached from the OpenCode TUI (#199): no
+ * inherited stdin/stdout/stderr, its own process group, and not awaited.
+ * Browsers (Chrome especially) log freely to whatever stderr they inherit,
+ * which painted over the TUI, and a synchronous exec also blocked on the
+ * browser's pipes. Resolves false when the opener cannot start or exits nonzero.
+ */
+export async function openDetached(command: string, args: string[]): Promise<boolean> {
+  const { spawn } = await import("node:child_process");
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = (ok: boolean) => {
+      if (!settled) {
+        settled = true;
+        resolve(ok);
+      }
+    };
+    try {
+      const child = spawn(command, args, { detached: true, stdio: "ignore", windowsHide: true });
+      child.once("error", () => done(false));
+      // Openers like xdg-open exit quickly: a nonzero exit means nothing opened,
+      // so report failure and let the caller try its fallback. Still running
+      // after a short grace period means the browser is launching: success.
+      child.once("exit", (code) => done(code === 0));
+      child.once("spawn", () => {
+        child.unref();
+        setTimeout(() => done(true), 3000).unref();
+      });
+    } catch {
+      done(false);
+    }
+  });
+}
+
 export function createDashboardTool(
   getDataDir: () => string,
   onBeforeGenerate?: () => void,
@@ -27,13 +61,13 @@ export function createDashboardTool(
 
         const outputPath = writeDashboard({ dataDir, days });
 
-        const { execFileSync } = await import("node:child_process");
         const platform = process.platform;
-        const hide = { windowsHide: true } as const;
         if (platform === "darwin") {
-          execFileSync("open", [outputPath], hide);
+          await openDetached("open", [outputPath]);
         } else if (platform === "linux") {
-          try { execFileSync("xdg-open", [outputPath], hide); } catch { execFileSync("sensible-browser", [outputPath], hide); }
+          if (!(await openDetached("xdg-open", [outputPath]))) {
+            await openDetached("sensible-browser", [outputPath]);
+          }
         } else if (platform === "win32") {
           // NOT `cmd /c start "" <path>`. That hands the path to cmd.exe's
           // parser, and libuv's quote_cmd_arg quotes an argument only on
@@ -45,7 +79,7 @@ export function createDashboardTool(
           // trampoline: execFileSync passes the path as one real argv entry, so
           // no interpreter ever parses it. Addressed absolutely under %SystemRoot%.
           const systemRoot = process.env.SystemRoot || process.env.windir || "C:\\Windows";
-          execFileSync(`${systemRoot}\\System32\\rundll32.exe`, ["url.dll,FileProtocolHandler", outputPath], hide);
+          await openDetached(`${systemRoot}\\System32\\rundll32.exe`, ["url.dll,FileProtocolHandler", outputPath]);
         }
 
         return {

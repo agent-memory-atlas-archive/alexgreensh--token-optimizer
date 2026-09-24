@@ -413,6 +413,8 @@ def test_daemon_regen_nt_uses_create_no_window(monkeypatch, tmp_path):
         "_regen_inflight": False,
         "threading": threading,
         "_reap_bg_regen": lambda proc: None,
+        # The regen caps its log before appending; not under test here.
+        "_cap_log": lambda path, max_bytes=None: None,
     }
     ns["sys"].executable = sys.executable
     ns["__name__"] = "dashboard_server_test"
@@ -491,6 +493,8 @@ def test_daemon_regen_posix_uses_start_new_session(monkeypatch, tmp_path):
         "_regen_inflight": False,
         "threading": threading,
         "_reap_bg_regen": lambda proc: None,
+        # The regen caps its log before appending; not under test here.
+        "_cap_log": lambda path, max_bytes=None: None,
     }
     ns["sys"].executable = sys.executable
     ns["__name__"] = "dashboard_server_test"

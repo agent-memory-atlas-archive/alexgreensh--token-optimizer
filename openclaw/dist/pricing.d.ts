@@ -28,6 +28,20 @@ export declare const DEFAULT_PRICING: Record<string, ModelPricing>;
 /** Swap the sonnet card to the introductory rate while it is in effect (idempotent). Returns
  * true when introductory pricing is active. `asOf` (epoch ms) overrides both env and clock. */
 export declare function applySonnetIntroPricing(asOf?: number): boolean;
+/**
+ * Rate-card key for a Claude generation ("opus-5-5", then "opus-5"). Labels and
+ * savings mixes stay on the family key ("opus"); only pricing needs the
+ * generation, because generations are priced differently (Opus 5.5 $4/$20,
+ * Opus 4.1 $15/$75, Fable 5.1 cache reads $0.25). Cards come from the
+ * auto-refreshed prices.generated.ts. Mirrors measure.py `_claude_price_key`.
+ */
+export declare function claudePricingKey(modelId: string, table?: Record<string, ModelPricing>): string | null;
+/**
+ * Longest priced OpenAI/Gemini id that the model id equals or extends, so a
+ * dated snapshot ("gpt-5.4-mini-2026-03-05") prices as its base model and a new
+ * model is priced the day the generated table has it.
+ */
+export declare function pricedPrefixKey(modelId: string, table?: Record<string, ModelPricing>): string | null;
 /** Get pricing with user overrides merged on top of defaults. */
 export declare function getPricing(openclawDir?: string): Record<string, ModelPricing>;
 /** Reset cached pricing (for testing or config reload). */

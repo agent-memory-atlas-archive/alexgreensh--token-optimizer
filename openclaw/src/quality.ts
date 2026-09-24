@@ -10,7 +10,7 @@
 
 import { AgentRun, totalTokens, EXPENSIVE_MODELS } from "./models";
 import { ContextAudit } from "./context-audit";
-import { normalizeModelName, DEFAULT_PRICING } from "./pricing";
+import { claudePricingKey, normalizeModelName, DEFAULT_PRICING, pricedPrefixKey } from "./pricing";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -770,7 +770,8 @@ export function freshSessionSavingsEstimate(
  */
 export function freshSessionSavingsUsd(savedTokens: number, model: string = ""): number {
   try {
-    const key = normalizeModelName(model);
+    // Generation first (Opus 5.5 is not priced like Opus 5), then priced prefix.
+    const key = claudePricingKey(model) ?? pricedPrefixKey(model) ?? normalizeModelName(model);
     const rates = key ? DEFAULT_PRICING[key] : undefined;
     const inputRatePerToken = rates?.input ?? 0;
     if (inputRatePerToken <= 0) return 0;

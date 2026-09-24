@@ -1,0 +1,252 @@
+"""The auto-refreshed price table: loader, matching, and the refresh pipeline.
+
+Prices change constantly, so these tests never assert a live dollar figure.
+They check mechanics with fixture tables: the loader applies what the file
+says (and ignores a bad file), model ids resolve to the right card with no code
+change, and the refresh script refuses to ship a gutted table or a price that
+moved beyond 2x.
+"""
+
+import copy
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+REPO = Path(__file__).resolve().parent.parent
+SCRIPTS = REPO / "skills" / "token-optimizer" / "scripts"
+sys.path.insert(0, str(SCRIPTS))
+sys.path.insert(0, str(REPO / "scripts"))
+
+import measure  # noqa: E402
+import refresh_prices  # noqa: E402
+
+TABLES = ("PRICING_TIERS", "OPENAI_MODEL_PRICING", "OPENAI_LONG_CONTEXT_PRICING",
+          "GEMINI_MODEL_PRICING", "GEMINI_LONG_CONTEXT_PRICING")
+
+
+@pytest.fixture()
+def restore_tables():
+    saved = {name: copy.deepcopy(getattr(measure, name)) for name in TABLES}
+    yield
+    for name, value in saved.items():
+        table = getattr(measure, name)
+        table.clear()
+        table.update(value)
+    measure._apply_bundled_prices()
+
+
+def _write(tmp_path, doc):
+    path = tmp_path / "prices.json"
+    path.write_text(json.dumps(doc), encoding="utf-8")
+    return path
+
+
+def _doc(**sections):
+    base = {"schema": 1, "anthropic": {}, "openai": {}, "openai_long_context": {},
+            "gemini": {}, "gemini_long_context": {}}
+    base.update(sections)
+    return base
+
+
+def test_loader_prices_a_new_generation_without_code_changes(tmp_path, monkeypatch, restore_tables):
+    monkeypatch.delenv("TOKEN_OPTIMIZER_BUNDLED_PRICES", raising=False)
+    path = _write(tmp_path, _doc(
+        anthropic={"opus_9": {"input": 7.0, "output": 35.0, "cache_read": 0.7}},
+        openai={"gpt-9-nova": {"input": 3.0, "output": 9.0, "cache_read": 0.3}},
+        gemini={"gemini-9-flash": {"input": 0.5, "output": 2.0}},
+    ))
+    assert measure._apply_bundled_prices(path) is True
+    m = 1_000_000
+    assert measure._get_model_cost("claude-opus-9-20270101", m, m, 0, 0) == pytest.approx(42.0)
+    assert measure._get_model_cost("gpt-9-nova-2027-01-01", m, m, m, 0) == pytest.approx(12.3)
+    assert measure._get_model_cost("gemini-9-flash", m, m, 0, 0) == pytest.approx(2.5)
+    # Partner clouds: first-party rate on Vertex global / Bedrock, +10% on Vertex regional.
+    assert measure.PRICING_TIERS["bedrock"]["claude_models"]["opus_9"]["input"] == pytest.approx(7.0)
+    assert measure.PRICING_TIERS["vertex-regional"]["claude_models"]["opus_9"]["input"] == pytest.approx(7.7)
+    # Missing cache rates are derived, never left at zero.
+    card = measure.PRICING_TIERS["anthropic"]["claude_models"]["opus_9"]
+    assert card["cache_write"] == pytest.approx(8.75) and card["cache_write_1h"] == pytest.approx(14.0)
+
+
+@pytest.mark.parametrize("payload", [
+    "{not json",
+    json.dumps({"schema": 2, "anthropic": {"opus": {"input": 1, "output": 1}}}),
+    json.dumps(["a", "list"]),
+])
+def test_loader_ignores_an_unreadable_file(tmp_path, payload, restore_tables):
+    before = copy.deepcopy(measure.PRICING_TIERS)
+    path = tmp_path / "prices.json"
+    path.write_text(payload, encoding="utf-8")
+    assert measure._apply_bundled_prices(path) is False
+    assert measure.PRICING_TIERS == before
+    assert measure.BUNDLED_PRICES_STATUS["error"]
+
+
+def test_loader_drops_bad_cards_and_keeps_good_ones(tmp_path, restore_tables):
+    path = _write(tmp_path, _doc(openai={
+        "gpt-good": {"input": 1.0, "output": 2.0},
+        "gpt-negative": {"input": -1.0, "output": 2.0},
+        "gpt-huge": {"input": 1e9, "output": 2.0},
+        "gpt-nan": {"input": float("nan"), "output": 2.0},
+        "gpt-no-output": {"input": 1.0},
+        "../evil": {"input": 1.0, "output": 1.0},
+    }))
+    assert measure._apply_bundled_prices(path) is True
+    assert "gpt-good" in measure.OPENAI_MODEL_PRICING
+    for bad in ("gpt-negative", "gpt-huge", "gpt-nan", "gpt-no-output", "../evil"):
+        assert bad not in measure.OPENAI_MODEL_PRICING
+
+
+def test_loader_never_removes_a_built_in_card(tmp_path, restore_tables):
+    path = _write(tmp_path, _doc(openai={"gpt-new": {"input": 1.0, "output": 2.0}}))
+    measure._apply_bundled_prices(path)
+    assert "gpt-4o" in measure.OPENAI_MODEL_PRICING
+    assert "opus" in measure.PRICING_TIERS["anthropic"]["claude_models"]
+
+
+def test_loader_can_be_disabled(tmp_path, monkeypatch, restore_tables):
+    monkeypatch.setenv("TOKEN_OPTIMIZER_BUNDLED_PRICES", "0")
+    path = _write(tmp_path, _doc(openai={"gpt-x": {"input": 1.0, "output": 2.0}}))
+    assert measure._apply_bundled_prices(path) is False
+    assert "gpt-x" not in measure.OPENAI_MODEL_PRICING
+
+
+def test_claude_generation_resolution():
+    cards = {"opus": {}, "opus_4": {}, "opus_5_5": {}, "fable": {}, "fable_5_1": {}, "sonnet_4_6": {}}
+    key = measure._claude_price_key
+    assert key("claude-opus-5-5", cards) == "opus_5_5"
+    assert key("claude-opus-5-5[1m]", cards) == "opus_5_5"
+    assert key("claude-opus-4-20250514", cards) == "opus_4"       # dated Opus 4.0
+    assert key("claude-opus-4-8", cards) == "opus_4"              # no 4.8 card: major version
+    assert key("claude-mythos-5-1", cards) == "fable_5_1"         # Mythos shares Fable cards
+    assert key("claude-sonnet-4-6", cards) == "sonnet_4_6"
+    assert key("opus", cards) == "opus"                           # bare alias: family
+
+
+def test_shipped_price_table_is_valid_and_matches_generated_ts():
+    doc = json.loads(refresh_prices.PRICES_JSON.read_text(encoding="utf-8"))
+    assert refresh_prices.validate(doc) == []
+    rendered = refresh_prices.render_ts(doc)
+    for ts in refresh_prices.TS_OUTPUTS:
+        assert ts.read_text(encoding="utf-8") == rendered, f"{ts} drifted from prices.json; rerun refresh_prices.py"
+
+
+FEED = {
+    "claude-opus-7": {"litellm_provider": "anthropic", "mode": "chat", "input_cost_per_token": 5e-6,
+                      "output_cost_per_token": 25e-6, "cache_read_input_token_cost": 5e-7,
+                      "cache_creation_input_token_cost": 6.25e-6, "cache_creation_input_token_cost_above_1hr": 1e-5},
+    "gpt-8": {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 2e-6,
+              "output_cost_per_token": 8e-6, "input_cost_per_token_above_272k_tokens": 4e-6,
+              "output_cost_per_token_above_272k_tokens": 12e-6},
+    "gpt-8-2026-01-01": {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 9e-6, "output_cost_per_token": 9e-6},
+    "gpt-8-audio": {"litellm_provider": "openai", "mode": "chat", "input_cost_per_token": 9e-6, "output_cost_per_token": 9e-6},
+    "gemini/gemini-8-flash": {"litellm_provider": "gemini", "mode": "chat", "input_cost_per_token": 1e-6, "output_cost_per_token": 4e-6},
+}
+OFFICIAL_MD = """
+| Model | Base input | 5m writes | 1h writes | Cache hits | Output |
+| :-- | :-- | :-- | :-- | :-- | :-- |
+| Claude Opus 7 | $4 / MTok | $5 / MTok | $8 / MTok | $0.20 / MTok<sup>2</sup> | $20 / MTok |
+| Claude Opus 5 | $5 / MTok | $6.25 / MTok | $10 / MTok | $0.50 / MTok | $25 / MTok |
+| Claude Fable 5 | $10 / MTok | $12.50 / MTok | $20 / MTok | $1 / MTok | $50 / MTok |
+| Claude Sonnet 5 | $2 / MTok<sup>3</sup> | $2.50 / MTok | $4 / MTok | $0.20 / MTok | $10 / MTok |
+| Claude Sonnet 4.6 | $3 / MTok | $3.75 / MTok | $6 / MTok | $0.30 / MTok | $15 / MTok |
+| Claude Haiku 4.5 | $1 / MTok | $1.25 / MTok | $2 / MTok | $0.10 / MTok | $5 / MTok |
+
+| Claude Opus 7 | $8 / MTok | $40 / MTok |
+"""
+
+
+def test_refresh_builds_cards_and_official_page_wins():
+    doc, notes = refresh_prices.build(FEED, OFFICIAL_MD)
+    assert doc["anthropic"]["opus_7"]["input"] == 4.0          # official page beat LiteLLM's $5
+    assert any("opus_7" in n for n in notes)
+    assert doc["anthropic"]["opus"]["input"] == 5.0            # family card from its representative
+    assert doc["anthropic"]["sonnet_legacy"]["input"] == 3.0
+    assert doc["openai"]["gpt-8"] == {"input": 2.0, "output": 8.0, "cache_read": 2.0}
+    assert doc["openai_long_context"]["gpt-8"]["input"] == 4.0
+    assert "gpt-8-2026-01-01" not in doc["openai"] and "gpt-8-audio" not in doc["openai"]
+    assert "gemini-8-flash" in doc["gemini"]
+
+
+def test_refresh_refuses_a_gutted_table():
+    doc, _ = refresh_prices.build({}, None)
+    assert refresh_prices.validate(doc)
+
+
+def test_refresh_guard_trips_beyond_2x_or_on_removal():
+    old = {"anthropic": {"opus": {"input": 5.0, "output": 25.0}},
+           "openai": {"gpt-8": {"input": 2.0, "output": 8.0}}, "gemini": {}}
+    fine = {"anthropic": {"opus": {"input": 4.0, "output": 20.0}},
+            "openai": {"gpt-8": {"input": 2.0, "output": 8.0}, "gpt-9": {"input": 1.0, "output": 1.0}}, "gemini": {}}
+    assert refresh_prices.guard(old, fine) == []
+    jumped = copy.deepcopy(fine)
+    jumped["anthropic"]["opus"]["output"] = 60.0
+    assert refresh_prices.guard(old, jumped)
+    removed = copy.deepcopy(fine)
+    del removed["openai"]["gpt-8"]
+    assert refresh_prices.guard(old, removed)
+
+
+def test_refresh_guard_trips_on_zeroed_or_dropped_rates_and_long_context():
+    old = {"anthropic": {}, "gemini": {},
+           "openai": {"gpt-8": {"input": 2.0, "output": 8.0, "cache_read": 0.2}},
+           "openai_long_context": {"gpt-8": {"input": 4.0, "output": 12.0}}}
+    zeroed = copy.deepcopy(old)
+    zeroed["openai"]["gpt-8"]["output"] = 0.0
+    assert refresh_prices.guard(old, zeroed)
+    dropped = copy.deepcopy(old)
+    del dropped["openai"]["gpt-8"]["cache_read"]
+    assert refresh_prices.guard(old, dropped)
+    long_jump = copy.deepcopy(old)
+    long_jump["openai_long_context"]["gpt-8"]["input"] = 40.0
+    assert refresh_prices.guard(old, long_jump)
+    long_gone = copy.deepcopy(old)
+    long_gone["openai_long_context"] = {}
+    assert refresh_prices.guard(old, long_gone)
+
+
+def test_loader_leaves_the_promo_card_to_its_date_switch(tmp_path, restore_tables):
+    before = dict(measure.OPENAI_MODEL_PRICING["gpt-5.6-sol"])
+    path = _write(tmp_path, _doc(openai={"gpt-5.6-sol": {"input": 99.0, "output": 99.0}}))
+    assert measure._apply_bundled_prices(path) is True
+    assert measure.OPENAI_MODEL_PRICING["gpt-5.6-sol"] == before
+
+
+def test_refresh_drops_an_absurd_card_instead_of_failing():
+    feed = dict(FEED)
+    feed["gpt-9-huge"] = {"litellm_provider": "openai", "mode": "chat",
+                          "input_cost_per_token": 0.05, "output_cost_per_token": 1e-6}
+    doc, notes = refresh_prices.build(feed, OFFICIAL_MD)
+    assert "gpt-9-huge" not in doc["openai"] and "gpt-8" in doc["openai"]
+    assert any("gpt-9-huge" in n for n in notes)
+    assert not [e for e in refresh_prices.validate(doc) if "out of range" in e]
+
+
+def test_refresh_keeps_retired_claude_cards():
+    doc, _ = refresh_prices.build(FEED, OFFICIAL_MD)
+    assert doc["anthropic"]["opus_3"]["input"] == 15.0
+    assert doc["anthropic"]["haiku_3"]["output"] == 1.25
+
+
+@pytest.mark.parametrize("model_id, key", [
+    ("claude-3-5-sonnet-20241022", "sonnet_legacy"),
+    ("claude-3-7-sonnet-20250219", "sonnet_legacy"),
+    ("claude-3-opus-20240229", "opus_3"),
+    ("claude-3-5-haiku-20241022", "haiku_3_5"),
+    ("claude-3-haiku-20240307", "haiku_3"),
+    ("claude-sonnet-4-20250514", "sonnet_4"),
+])
+def test_claude_3_era_ids_price_as_their_own_model(model_id, key):
+    cards = measure.PRICING_TIERS["anthropic"]["claude_models"]
+    assert measure._claude_price_key(model_id, cards) == key
+    assert measure._claude_price_key(123, cards) is None
+
+
+def test_fleet_prices_claude_3_era_ids_as_their_own_model():
+    sys.path.insert(0, str(REPO / "skills" / "fleet-auditor" / "scripts"))
+    import fleet
+    assert fleet._pricing_key("claude-3-5-sonnet-20241022") == "sonnet-legacy"
+    assert fleet._pricing_key("claude-3-opus-20240229") == "opus-3"
+    assert fleet._pricing_key("claude-3-5-haiku-20241022") == "haiku-3-5"

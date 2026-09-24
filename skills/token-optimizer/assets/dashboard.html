@@ -3525,6 +3525,7 @@ var DB = (function() {
     var globalMixedSessions = 0, globalFiveOnlySessions = 0;
     (t.daily || []).forEach(function(dd) {
       (dd.session_details || []).forEach(function(sd) {
+        if (sd.continuation) return;  // multi-day session: count it once
         var chr = sd.cache_hit_rate || 0;
         if (chr > 0) { globalCacheRead += chr; globalCacheTotal++; }
         var ttl1h = sd.cache_create_1h_tokens || 0;
@@ -3921,7 +3922,7 @@ var DB = (function() {
         '<th title="' + (isCodex ? 'Cached input share from Codex token_count logs.' : 'Approximate cache hit rate. Higher means ' + esc(data.runtime_label || 'Claude Code') + ' reused more previously cached context instead of reprocessing it.') + '" style="cursor:help">Cache</th>' +
         (isCodex ? '' : '<th title="How much of cache writing used 1-hour TTL versus 5-minute TTL. Longer TTL keeps cache reusable for longer." style="cursor:help">TTL</th>') +
         '<th title="Time between assistant API calls in this session. Helpful for seeing whether a session was steady or stop-start." style="cursor:help">Pacing</th>' +
-        '<th title="Estimated API-equivalent cost for the session." style="cursor:help">Cost</th>' +
+        '<th title="Estimated API-equivalent cost for the session on this day. A session that ran across midnight shows this day\'s share of its total." style="cursor:help">Cost</th>' +
         '<th title="' + (isCodex ? 'Estimated context quality score from local Codex session events.' : 'Session quality score. Higher is healthier; lower means more context rot or risk.') + '" style="cursor:help">Q' + (isCodex ? ' (est.)' : '') + '</th>' +
         '<th title="Dominant ' + esc(data.runtime_label || 'Claude Code') + ' model used in the session." style="cursor:help">Model</th>' +
         '<th title="Short topic extracted from the session so you can recognize the thread." style="cursor:help">Topic</th>' +
@@ -3944,6 +3945,11 @@ var DB = (function() {
         // Cost display
         var costVal = sd.cost_usd || 0;
         var costStr = costVal >= 1 ? '$' + costVal.toFixed(2) : costVal > 0 ? '$' + costVal.toFixed(3) : '';
+        // A session that ran across midnight is billed per day; show this day's
+        // share and the whole-session total so the numbers never look doubled.
+        if (sd.spans_days && typeof sd.session_cost_usd === 'number' && sd.session_cost_usd > costVal) {
+          costStr += ' of $' + sd.session_cost_usd.toFixed(2);
+        }
         var modelStr = sd.model || '';
         var ttl1h = sd.cache_create_1h_tokens || 0;
         var ttl5m = sd.cache_create_5m_tokens || 0;

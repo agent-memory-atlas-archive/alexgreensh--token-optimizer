@@ -705,7 +705,8 @@ function freshSessionSavingsEstimate(fillPct, model = "", sessionContextWindow) 
  */
 function freshSessionSavingsUsd(savedTokens, model = "") {
     try {
-        const key = (0, pricing_1.normalizeModelName)(model);
+        // Generation first (Opus 5.5 is not priced like Opus 5), then priced prefix.
+        const key = (0, pricing_1.claudePricingKey)(model) ?? (0, pricing_1.pricedPrefixKey)(model) ?? (0, pricing_1.normalizeModelName)(model);
         const rates = key ? pricing_1.DEFAULT_PRICING[key] : undefined;
         const inputRatePerToken = rates?.input ?? 0;
         if (inputRatePerToken <= 0)

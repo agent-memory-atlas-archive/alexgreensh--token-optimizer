@@ -46,11 +46,15 @@ def _load_reject_logger(tmp_log: Path):
     ns = {"time": time, "os": __import__("os"), "_STATE_LOCK": threading.Lock()}
     # _REJECT_LOG_LAST_TS is now a per-path dict with a type annotation
     # (`_REJECT_LOG_LAST_TS: dict = {}`), so allow an optional `: <type>`.
-    for const in ("_REJECT_LOG_LAST_TS", "_REJECT_LOG_MIN_GAP", "_REJECT_LOG_MAX_KEYS"):
+    for const in ("_REJECT_LOG_LAST_TS", "_REJECT_LOG_MIN_GAP", "_REJECT_LOG_MAX_KEYS", "LOG_CAP_BYTES"):
         m = re.search(r"^%s(?::[^=]+)? = .*$" % re.escape(const), src, re.M)
         assert m, f"{const} missing from generated daemon"
         exec(m.group(0), ns)
     ns["REGEN_LOG"] = str(tmp_log)
+    # _log_reject_regen caps the log before appending.
+    mc = re.search(r"^def _cap_log\(.*?\n(?=^\S)", src, re.M | re.S)
+    assert mc, "_cap_log missing from generated daemon"
+    exec(mc.group(0), ns)
     # _log_reject_regen now calls _sanitize_log_path — extract it into the ns too.
     ms = re.search(r"^def _sanitize_log_path\(.*?\n(?=^\S)", src, re.M | re.S)
     assert ms, "_sanitize_log_path missing from generated daemon"

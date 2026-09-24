@@ -15,6 +15,8 @@
  * per-token cost across the mix; unpriced models fall back to a proxy rate.
  */
 
+import { GENERATED_PRICING } from "./prices.generated.js";
+
 export interface ModelPricing {
   input: number;
   output: number;
@@ -30,6 +32,10 @@ export const DEFAULT_PRICING: Record<string, ModelPricing> = {
   // Anthropic Claude (1M context for Fable/Opus/Sonnet as of March 13, 2026)
   fable:           { input: 10.0 / 1e6,  output: 50.0 / 1e6,  cacheRead: 1.0 / 1e6,   cacheWrite: 12.5 / 1e6, cacheWrite1h: 20.0 / 1e6 },
   opus:            { input: 5.0 / 1e6,   output: 25.0 / 1e6,  cacheRead: 0.5 / 1e6,   cacheWrite: 6.25 / 1e6, cacheWrite1h: 10.0 / 1e6 },
+  // Generation cards priced off-family (platform.claude.com pricing, verified 2026-09-24):
+  // Fable/Mythos 5.1 cache reads are 0.025x input; Opus 5.5 is $4/$20 with 0.05x reads.
+  "fable-5-1":     { input: 10.0 / 1e6,  output: 50.0 / 1e6,  cacheRead: 0.25 / 1e6,  cacheWrite: 12.5 / 1e6, cacheWrite1h: 20.0 / 1e6 },
+  "opus-5-5":      { input: 4.0 / 1e6,   output: 20.0 / 1e6,  cacheRead: 0.2 / 1e6,   cacheWrite: 5.0 / 1e6,  cacheWrite1h: 8.0 / 1e6 },
   sonnet:          { input: 3.0 / 1e6,   output: 15.0 / 1e6,  cacheRead: 0.3 / 1e6,   cacheWrite: 3.75 / 1e6, cacheWrite1h: 6.0 / 1e6 },
   haiku:           { input: 1.0 / 1e6,   output: 5.0 / 1e6,   cacheRead: 0.1 / 1e6,   cacheWrite: 1.25 / 1e6, cacheWrite1h: 2.0 / 1e6 },
   // OpenAI GPT-5 family
@@ -119,6 +125,60 @@ export function applySonnetIntroPricing(asOf?: number): boolean {
   return true;
 }
 applySonnetIntroPricing();
+
+// The auto-refreshed table (scripts/refresh_prices.py, rewritten daily in CI and
+// shipped with each release) wins over the literals above, which stay as the
+// fallback. Read at module load; no network, no file I/O.
+Object.assign(DEFAULT_PRICING, GENERATED_PRICING);
+
+const CLAUDE_GENERATION_RE = /(fable|mythos|opus|sonnet|haiku)[-._]?(\d+)(?:[-._](\d{1,2}))?(?![0-9])/;
+// Claude 3-era ids put the version before the family ("claude-3-5-sonnet-20241022").
+const CLAUDE_LEGACY_ID_RE = /claude-(\d)(?:[-.](\d))?-(opus|sonnet|haiku)(?![a-z])/;
+
+/**
+ * Rate-card key for a Claude generation ("opus-5-5", then "opus-5"). Labels and
+ * savings mixes stay on the family key ("opus"); only pricing needs the
+ * generation, because generations are priced differently (Opus 5.5 $4/$20,
+ * Opus 4.1 $15/$75, Fable 5.1 cache reads $0.25). Cards come from the
+ * auto-refreshed prices.generated.ts. Mirrors measure.py `_claude_price_key`.
+ */
+export function claudePricingKey(modelId: string, table: Record<string, ModelPricing> = DEFAULT_PRICING): string | null {
+  if (typeof modelId !== "string" || !modelId) return null;
+  const id = modelId.toLowerCase();
+  const legacy = CLAUDE_LEGACY_ID_RE.exec(id);
+  if (legacy) {
+    const [, lMajor, lMinor, lFamily] = legacy;
+    const keys = lMinor ? [`${lFamily}-${lMajor}-${lMinor}`, `${lFamily}-${lMajor}`] : [`${lFamily}-${lMajor}`];
+    if (lFamily === "sonnet") keys.push("sonnet-legacy");
+    for (const key of keys) if (Object.prototype.hasOwnProperty.call(table, key)) return key;
+    return null;
+  }
+  const g = CLAUDE_GENERATION_RE.exec(id);
+  if (!g) return null;
+  const [, family, major, minor] = g;
+  const families = family === "mythos" ? [family, "fable"] : [family];
+  for (const fam of families) {
+    const keys = minor ? [`${fam}-${major}-${minor}`, `${fam}-${major}`] : [`${fam}-${major}`];
+    for (const key of keys) if (Object.prototype.hasOwnProperty.call(table, key)) return key;
+  }
+  return family === "mythos" && Object.prototype.hasOwnProperty.call(table, "fable") ? "fable" : null;
+}
+
+/**
+ * Longest priced OpenAI/Gemini id that the model id equals or extends, so a
+ * dated snapshot ("gpt-5.4-mini-2026-03-05") prices as its base model and a new
+ * model is priced the day the generated table has it.
+ */
+export function pricedPrefixKey(modelId: string, table: Record<string, ModelPricing> = DEFAULT_PRICING): string | null {
+  if (!modelId) return null;
+  const bare = modelId.toLowerCase().split("/").pop()!.split(":").pop()!;
+  let best: string | null = null;
+  for (const key of Object.keys(table)) {
+    if (!/^(gpt-|o\d|gemini-)/.test(key)) continue;
+    if ((bare === key || bare.startsWith(key + "-")) && (!best || key.length > best.length)) best = key;
+  }
+  return best;
+}
 
 /** Price the proxy rate card uses when a model is unpriced. */
 export const PROXY_MODEL = "sonnet";
@@ -231,10 +291,12 @@ export function normalizeModelName(modelId: string): string {
   return m;
 }
 
+
 /** Resolve the rate card for a model key, proxying unpriced models. */
 function ratesFor(modelKey: string): ModelPricing {
-  const key = normalizeModelName(modelKey);
-  return DEFAULT_PRICING[key] ?? DEFAULT_PRICING[PROXY_MODEL];
+  const key = claudePricingKey(modelKey) ?? pricedPrefixKey(modelKey) ?? normalizeModelName(modelKey);
+  return (Object.prototype.hasOwnProperty.call(DEFAULT_PRICING, key) ? DEFAULT_PRICING[key] : undefined)
+    ?? DEFAULT_PRICING[PROXY_MODEL];
 }
 
 /** A model mix: modelKey (or display name) -> token share. Shares sum to ~1. */

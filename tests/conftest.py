@@ -179,6 +179,36 @@ def _tree_guard_per_test(request):
         PER_TEST_MUTATIONS.append((request.node.nodeid, changed))
 
 
+# Env vars that decide which runtime Token Optimizer thinks it is in. Hook
+# bridges set these on purpose (os.environ.setdefault in cursor_hook_bridge.main,
+# for example, because in production that process IS Cursor), so a test that
+# drives a bridge's main() leaks them into every later test: the whole savings
+# suite then ran as "cursor" and reported unsupported_billing. Restore them after
+# every test so no test can change the runtime or data dir of the ones after it.
+_RUNTIME_ENV_KEYS = (
+    "TOKEN_OPTIMIZER_RUNTIME",
+    "TOKEN_OPTIMIZER_COPILOT_HOME",
+    "TOKEN_OPTIMIZER_CURSOR_HOME",
+    "COPILOT_HOME",
+    "CODEX_HOME",
+    "HERMES_HOME",
+    # Data-dir override: a leaked temp dir silently redirects later tests'
+    # settings and snapshot reads (test_parity_5138_behavioral leaked it).
+    "TOKEN_OPTIMIZER_SNAPSHOT_DIR",
+)
+
+
+@pytest.fixture(autouse=True)
+def _restore_runtime_env():
+    saved = {k: os.environ.get(k) for k in _RUNTIME_ENV_KEYS}
+    yield
+    for key, value in saved.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+
+
 def _report_lines() -> list[str]:
     lines = mutations_since_session_start()
     if not lines:

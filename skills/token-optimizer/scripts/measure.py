@@ -696,8 +696,12 @@ PRICING_TIERS = {
         "label": "Anthropic API",
         "claude_models": {
             # cache_write = 5-minute TTL (1.25x input); cache_write_1h = 1-hour TTL (2x input).
-            # Verified 2026-05-30 from platform.claude.com/docs pricing.
+            # Verified 2026-09-24 from platform.claude.com/docs/en/about-claude/pricing.
             "fable":  {"input": 10.0, "output": 50.0, "cache_read": 1.0,  "cache_write": 12.5,  "cache_write_1h": 20.0},
+            # Fable 5.1 / Mythos 5.1: cache reads are 0.025x input ($0.25), not 0.1x.
+            "fable_5_1": {"input": 10.0, "output": 50.0, "cache_read": 0.25, "cache_write": 12.5, "cache_write_1h": 20.0},
+            # Opus 5.5 is $4/$20 with 0.05x cache reads; every other Opus is $5/$25.
+            "opus_5_5": {"input": 4.0, "output": 20.0, "cache_read": 0.2, "cache_write": 5.0, "cache_write_1h": 8.0},
             "opus":   {"input": 5.0,  "output": 25.0, "cache_read": 0.5,  "cache_write": 6.25,  "cache_write_1h": 10.0},
             "sonnet": {"input": 3.0,  "output": 15.0, "cache_read": 0.3,  "cache_write": 3.75,  "cache_write_1h": 6.0},
             # Sonnet 4.6 / 4.5 / 4.0 keep the $3/$15 card. Sonnet 5 (2026-06-30) is $2/$10,
@@ -710,6 +714,10 @@ PRICING_TIERS = {
         "label": "Vertex AI Global",
         "claude_models": {
             "fable":  {"input": 10.0, "output": 50.0, "cache_read": 1.0,  "cache_write": 12.5,  "cache_write_1h": 20.0},
+            # Fable 5.1 / Mythos 5.1: cache reads are 0.025x input ($0.25), not 0.1x.
+            "fable_5_1": {"input": 10.0, "output": 50.0, "cache_read": 0.25, "cache_write": 12.5, "cache_write_1h": 20.0},
+            # Opus 5.5 is $4/$20 with 0.05x cache reads; every other Opus is $5/$25.
+            "opus_5_5": {"input": 4.0, "output": 20.0, "cache_read": 0.2, "cache_write": 5.0, "cache_write_1h": 8.0},
             "opus":   {"input": 5.0,  "output": 25.0, "cache_read": 0.5,  "cache_write": 6.25,  "cache_write_1h": 10.0},
             "sonnet": {"input": 3.0,  "output": 15.0, "cache_read": 0.3,  "cache_write": 3.75,  "cache_write_1h": 6.0},
             # Sonnet 4.6 / 4.5 / 4.0 keep the $3/$15 card. Sonnet 5 (2026-06-30) is $2/$10,
@@ -723,6 +731,10 @@ PRICING_TIERS = {
         "claude_models": {
             # Vertex regional applies a +10% surcharge on all Claude rates.
             "fable":  {"input": 11.0, "output": 55.0, "cache_read": 1.1,  "cache_write": 13.75, "cache_write_1h": 22.0},
+            # Fable 5.1 / Mythos 5.1: cache reads are 0.025x input ($0.25), not 0.1x.
+            "fable_5_1": {"input": 11.0, "output": 55.0, "cache_read": 0.275, "cache_write": 13.75, "cache_write_1h": 22.0},
+            # Opus 5.5 is $4/$20 with 0.05x cache reads; every other Opus is $5/$25.
+            "opus_5_5": {"input": 4.4, "output": 22.0, "cache_read": 0.22, "cache_write": 5.5, "cache_write_1h": 8.8},
             "opus":   {"input": 5.5,  "output": 27.5, "cache_read": 0.55, "cache_write": 6.875, "cache_write_1h": 11.0},
             "sonnet": {"input": 3.3,  "output": 16.5, "cache_read": 0.33, "cache_write": 4.125, "cache_write_1h": 6.6},
             "sonnet_legacy": {"input": 3.3,  "output": 16.5, "cache_read": 0.33, "cache_write": 4.125, "cache_write_1h": 6.6},
@@ -733,6 +745,10 @@ PRICING_TIERS = {
         "label": "AWS Bedrock",
         "claude_models": {
             "fable":  {"input": 10.0, "output": 50.0, "cache_read": 1.0,  "cache_write": 12.5,  "cache_write_1h": 20.0},
+            # Fable 5.1 / Mythos 5.1: cache reads are 0.025x input ($0.25), not 0.1x.
+            "fable_5_1": {"input": 10.0, "output": 50.0, "cache_read": 0.25, "cache_write": 12.5, "cache_write_1h": 20.0},
+            # Opus 5.5 is $4/$20 with 0.05x cache reads; every other Opus is $5/$25.
+            "opus_5_5": {"input": 4.0, "output": 20.0, "cache_read": 0.2, "cache_write": 5.0, "cache_write_1h": 8.0},
             "opus":   {"input": 5.0,  "output": 25.0, "cache_read": 0.5,  "cache_write": 6.25,  "cache_write_1h": 10.0},
             "sonnet": {"input": 3.0,  "output": 15.0, "cache_read": 0.3,  "cache_write": 3.75,  "cache_write_1h": 6.0},
             # Sonnet 4.6 / 4.5 / 4.0 keep the $3/$15 card. Sonnet 5 (2026-06-30) is $2/$10,
@@ -901,6 +917,104 @@ GEMINI_LONG_CONTEXT_PRICING = {
     "gemini-3.1-pro-preview": {"input": 4.0, "cache_read": 0.40, "output": 18.0},
 }
 GEMINI_LONG_CONTEXT_INPUT_THRESHOLD = 200_000
+
+
+# --- Bundled price table (auto-refreshed) --------------------------------------
+# pricing/prices.json is regenerated daily in CI by scripts/refresh_prices.py from
+# Anthropic's pricing page and the LiteLLM price feed, and ships with each release,
+# so new models and price changes arrive without anyone hand-editing the tables
+# above. It is read ONCE at import, read-only: no network, no locks, no writes.
+# The literals above stay as the fallback; the file only adds or updates cards,
+# never removes one. A missing, oversized or malformed file is ignored.
+_PRICES_FILE_MAX_BYTES = 2 * 1024 * 1024
+_PRICE_KEY_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+_PRICE_FIELDS = ("input", "output", "cache_read", "cache_write", "cache_write_1h")
+BUNDLED_PRICES_STATUS = {"loaded": False, "path": None, "generated_at": None, "error": None}
+
+
+def _bundled_prices_path():
+    override = os.environ.get("TOKEN_OPTIMIZER_PRICES_FILE", "").strip()
+    if override:
+        return Path(override).expanduser()
+    return Path(__file__).resolve().parent.parent / "pricing" / "prices.json"
+
+
+def _clean_price_cards(section):
+    """Keep only well-formed cards: safe key, finite non-negative rates, input+output present."""
+    out = {}
+    if not isinstance(section, dict):
+        return out
+    for key, card in section.items():
+        if not isinstance(key, str) or not _PRICE_KEY_RE.match(key) or not isinstance(card, dict):
+            continue
+        clean = {}
+        for field in _PRICE_FIELDS:
+            value = card.get(field)
+            if value is None:
+                continue
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                clean = None
+                break
+            value = float(value)
+            if not math.isfinite(value) or value < 0 or value > 1000:
+                clean = None
+                break
+            clean[field] = value
+        if clean and "input" in clean and "output" in clean:
+            out[key] = clean
+    return out
+
+
+_PROMO_MANAGED_OPENAI_KEYS = frozenset({"gpt-5.6-sol"})
+
+
+def _apply_bundled_prices(path=None):
+    """Merge pricing/prices.json over the built-in rate tables. Returns True when applied."""
+    path = Path(path) if path else _bundled_prices_path()
+    BUNDLED_PRICES_STATUS.update(loaded=False, path=str(path), generated_at=None, error=None)
+    if os.environ.get("TOKEN_OPTIMIZER_BUNDLED_PRICES", "1").strip() == "0":
+        BUNDLED_PRICES_STATUS["error"] = "disabled by TOKEN_OPTIMIZER_BUNDLED_PRICES=0"
+        return False
+    try:
+        if path.stat().st_size > _PRICES_FILE_MAX_BYTES:
+            raise ValueError("prices file too large")
+        doc = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(doc, dict) or doc.get("schema") != 1:
+            raise ValueError("unsupported prices schema")
+    except (OSError, ValueError) as exc:
+        BUNDLED_PRICES_STATUS["error"] = str(exc)
+        return False
+
+    claude = _clean_price_cards(doc.get("anthropic"))
+    for card in claude.values():
+        card.setdefault("cache_read", round(card["input"] * 0.1, 6))
+        card.setdefault("cache_write", round(card["input"] * 1.25, 6))
+        card.setdefault("cache_write_1h", round(card["input"] * 2, 6))
+    # First-party rates apply on Vertex global and Bedrock; Vertex regional is +10%.
+    for tier_name, tier in PRICING_TIERS.items():
+        mult = 1.1 if tier_name == "vertex-regional" else 1.0
+        for key, card in claude.items():
+            tier["claude_models"][key] = {f: round(v * mult, 6) for f, v in card.items()}
+    for table, section in ((OPENAI_MODEL_PRICING, "openai"),
+                           (OPENAI_LONG_CONTEXT_PRICING, "openai_long_context"),
+                           (GEMINI_MODEL_PRICING, "gemini"),
+                           (GEMINI_LONG_CONTEXT_PRICING, "gemini_long_context")):
+        for key, card in _clean_price_cards(doc.get(section)).items():
+            # The dated promo switch owns this card, so the swap back to the
+            # standard rate still happens on its date whatever the feed says.
+            if key in _PROMO_MANAGED_OPENAI_KEYS:
+                continue
+            card.setdefault("cache_read", card["input"])
+            card.pop("cache_write_1h", None)
+            table[key] = card
+    BUNDLED_PRICES_STATUS.update(loaded=True, generated_at=doc.get("generated_at"))
+    return True
+
+
+# Tests pin a pricing regime with TOKEN_OPTIMIZER_PRICING_AS_OF; the bundled file
+# reflects today's prices, so it is skipped there to keep those regimes exact.
+if not os.environ.get("TOKEN_OPTIMIZER_PRICING_AS_OF"):
+    _apply_bundled_prices()
 
 # ---------------------------------------------------------------------------
 # PROVIDER CACHE-PROFILE REGISTRY  (one source of truth for cache economics)
@@ -1134,7 +1248,7 @@ def _get_model_cost(model, input_tokens, output_tokens, cache_read=0, cache_crea
                 + cache_create * rates.get("cache_write", 0) / 1e6
             )
 
-    normalized = _normalize_model_name(model) if model else None
+    normalized = _claude_price_key(model, tier_data["claude_models"]) if model else None
     if normalized and normalized in tier_data["claude_models"]:
         rates = tier_data["claude_models"][normalized]
     else:
@@ -1175,8 +1289,42 @@ def _is_priced_model(model, tier=None):
     if tier is None:
         tier = _load_pricing_tier()
     tier_data = PRICING_TIERS.get(tier, PRICING_TIERS["anthropic"])
-    normalized = _normalize_model_name(model) if model else None
-    return bool(normalized and normalized in tier_data.get("claude_models", {}))
+    claude_models = tier_data.get("claude_models", {})
+    normalized = _claude_price_key(model, claude_models) if model else None
+    return bool(normalized and normalized in claude_models)
+
+
+_PRICE_ALIAS_CACHE = {}
+_PRICE_MATCH_MEMO = {}
+_MISSING = object()
+
+
+def _price_aliases(table):
+    """Priced ids of a rate table, longest first; cached until the table changes."""
+    sig = (id(table), len(table))
+    cached = _PRICE_ALIAS_CACHE.get(sig)
+    # keys() == frozenset compares in C without building sets: this runs once
+    # per priced request, so a per-call copy of the table showed up in profiles.
+    if cached is None or table.keys() != cached[1]:
+        cached = (tuple(sorted(table, key=len, reverse=True)), frozenset(table))
+        _PRICE_ALIAS_CACHE[sig] = cached
+    return cached[0]
+
+
+def _match_price_alias(value, table):
+    """Longest priced id that `value` equals or extends with "-...", memoized
+    per alias set so repeated model ids resolve with one dict lookup."""
+    aliases = _price_aliases(table)
+    memo = _PRICE_MATCH_MEMO.get(id(table))
+    if memo is None or memo[0] is not aliases:
+        memo = (aliases, {})
+        _PRICE_MATCH_MEMO[id(table)] = memo
+    hit = memo[1].get(value, _MISSING)
+    if hit is _MISSING:
+        hit = next((a for a in aliases if value == a or value.startswith(a + "-")), None)
+        if len(memo[1]) < 4096:
+            memo[1][value] = hit
+    return hit
 
 
 def _normalize_openai_model_name(model):
@@ -1186,39 +1334,13 @@ def _normalize_openai_model_name(model):
     value = re.sub(r"[\s_]+", "-", _strip_provider_prefixes(model))
     if not value or value in {"codex", "openai", "unknown"}:
         return None
-    aliases = (
-        "gpt-6-astra",
-        "gpt-5.6-sol",
-        "gpt-5.6-terra",
-        "gpt-5.6-luna",
-        "gpt-5.5-pro",
-        "gpt-5.4-mini",
-        "gpt-5.4-nano",
-        "gpt-5.1-codex-mini",
-        "gpt-5.1-codex",
-        "gpt-5.3-codex",
-        "gpt-5.2-codex",
-        "gpt-5-codex",
-        "gpt-5-mini",
-        "gpt-5-nano",
-        "gpt-5",
-        "gpt-5.5",
-        "gpt-5.4",
-        "gpt-5.2",
-        "gpt-5.1",
-        "gpt-4.1-mini",
-        "gpt-4.1-nano",
-        "gpt-4.1",
-        "gpt-4o-mini",
-        "gpt-4o",
-        "o3-pro",
-        "o3-mini",
-        "o4-mini",
-        "o3",
-    )
-    for alias in aliases:
-        if value == alias or value.startswith(alias + "-"):
-            return alias
+    if value == "gpt-5.6":
+        return "gpt-5.6-sol"  # bare alias: OpenAI's docs name Sol the default 5.6
+    # Every priced id is an alias, longest first so "gpt-5.4-mini" wins over
+    # "gpt-5.4" and dated snapshots ("gpt-5.4-2026-03-05") map to their base.
+    alias = _match_price_alias(value, OPENAI_MODEL_PRICING)
+    if alias:
+        return alias
     if value == "gpt-5.6" or value.startswith("gpt-5.6-"):
         return "gpt-5.6-sol"
     return None
@@ -1238,21 +1360,7 @@ def _normalize_gemini_model_name(model):
             _GEMINI_DEPRECATION_WARNED.add(value)
             print(f"[Token Optimizer] WARNING: {value} was deprecated June 1, 2026. Migrate to gemini-2.5-flash or gemini-3.5-flash.", file=sys.stderr)
         return None
-    aliases = (
-        "gemini-3.1-pro-preview",
-        "gemini-3.1-flash-lite",
-        "gemini-3.5-flash",
-        "gemini-3.1-pro",
-        "gemini-3-flash",
-        "gemini-3-pro",
-        "gemini-2.5-flash-lite",
-        "gemini-2.5-flash",
-        "gemini-2.5-pro",
-    )
-    for alias in aliases:
-        if value == alias or value.startswith(alias + "-"):
-            return alias
-    return None
+    return _match_price_alias(value, GEMINI_MODEL_PRICING)
 
 
 # Process-local cache for _resolve_session_model to avoid re-reading JSONL
@@ -4908,6 +5016,36 @@ def _daemon_is_running():
     return False
 
 
+def _launch_opener(argv):
+    """Run a browser opener detached from our terminal (#199).
+
+    The opener and the browser it starts must not inherit our stdin/stdout/
+    stderr: Chrome logs freely to whatever stderr it gets, which painted over
+    TUI hosts like OpenCode. A new session keeps a TUI's Ctrl-C from reaching
+    the browser. We still wait briefly so a failing opener (bad exit code)
+    falls back to printing the URL; a slow opener is assumed to have launched.
+    """
+    proc = subprocess.Popen(
+        argv,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=(os.name == "posix"),
+        creationflags=_NO_WINDOW,
+    )
+    try:
+        rc = proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        # A slow or hung opener: reap it in the background (no zombie, no
+        # ResourceWarning) and say where the page is, so a hang is never silent.
+        import threading
+        threading.Thread(target=proc.wait, daemon=True).start()
+        print(f"  Browser is slow to open. If nothing appears, open: {argv[-1]}")
+        return
+    if rc != 0:
+        raise subprocess.CalledProcessError(rc, argv)
+
+
 def _open_in_browser(filepath):
     """Open a file in the default browser. Cross-platform.
 
@@ -4919,9 +5057,9 @@ def _open_in_browser(filepath):
     system = platform.system()
     try:
         if system == "Darwin":
-            subprocess.run(["open", filepath], check=True, timeout=10, creationflags=_NO_WINDOW)
+            _launch_opener(["open", filepath])
         elif system == "Linux":
-            subprocess.run(["xdg-open", filepath], check=True, timeout=10, creationflags=_NO_WINDOW)
+            _launch_opener(["xdg-open", filepath])
         elif system == "Windows":
             os.startfile(filepath)
         else:
@@ -4950,9 +5088,9 @@ def _open_dashboard(fallback_filepath):
         system = platform.system()
         try:
             if system == "Darwin":
-                subprocess.run(["open", url], check=True, timeout=10, creationflags=_NO_WINDOW)
+                _launch_opener(["open", url])
             elif system == "Linux":
-                subprocess.run(["xdg-open", url], check=True, timeout=10, creationflags=_NO_WINDOW)
+                _launch_opener(["xdg-open", url])
             elif system == "Windows":
                 os.startfile(url)
             else:
@@ -9276,7 +9414,7 @@ def generate_coach_data(focus=None, components=None, trends=None):
         recent_sessions = []
         older_sessions = []
         for i, d in enumerate(daily):
-            details = d.get("session_details", [])
+            details = [sd for sd in d.get("session_details", []) if not sd.get("continuation")]
             if i < 7:
                 recent_sessions.extend(details)
             else:
@@ -9820,7 +9958,8 @@ def generate_coach_block(components=None, trends=None):
         if daily:
             recent_sessions = []
             for d in daily[:7]:
-                recent_sessions.extend(d.get("session_details", []))
+                recent_sessions.extend(
+                    sd for sd in d.get("session_details", []) if not sd.get("continuation"))
             if recent_sessions:
                 avg_chr = sum(s.get("cache_hit_rate", 0) for s in recent_sessions) / len(recent_sessions)
                 avg_chr_pct = round(avg_chr * 100)
@@ -10101,7 +10240,7 @@ def _extract_costly_prompts(jsonl_path, tier=None, top_n=5):
                         out = _safe_int(usage.get("output_tokens", 0))
                         cr = _safe_int(usage.get("cache_read_input_tokens", 0))
                         cc = _safe_int(usage.get("cache_creation_input_tokens", 0))
-                        model = msg.get("model", "unknown")
+                        model = _record_model(msg)
                         cost = _get_model_cost(model, inp, out, cr, cc, tier=tier)
                         pending_prompt["tokens_in"] = inp + cr + cc
                         pending_prompt["tokens_out"] = out
@@ -10319,6 +10458,8 @@ def _parse_session_jsonl(filepath, window_start=None, window_end=None):
     total_cache_create_5m = 0
     model_usage = {}              # v5.4.8: billable tokens (fresh_input + cache_create + output)
     model_usage_breakdown = {}    # v5.4.8: per-model {fresh_input, cache_read, cache_create, output}
+    daily_usage = {}              # local date -> per-model breakdown, for per-day cost attribution
+    request_days = {}             # request key -> local date (None when untimestamped)
     reported_input = 0             # official /stats-compatible, no streaming dedup
     reported_output = 0
     reported_model_usage = {}
@@ -10572,7 +10713,7 @@ def _parse_session_jsonl(filepath, window_start=None, window_end=None):
                             or usage.get("ephemeral_5m_input_tokens", 0)
                         )
                         cc = _safe_int(usage.get("cache_creation_input_tokens", 0)) or (cc_1h + cc_5m)
-                        model = msg.get("model", "unknown")
+                        model = _record_model(msg)
                         # Claude Code's /stats basis sums every assistant usage
                         # record, including streamed chunks, and excludes cache
                         # read/write classes. Keep it beside the deduped billed
@@ -10654,6 +10795,29 @@ def _parse_session_jsonl(filepath, window_start=None, window_end=None):
         bd["cache_create_1h"] += u["cc_1h"]
         bd["cache_create_5m"] += u["cc_5m"]
         bd["output"] += u["out"]
+        # Bucket each request by the LOCAL date it ran, so a session that spans
+        # midnight bills each day for its own requests instead of dumping the
+        # whole session onto its last-active day (#200). Records without a
+        # parseable timestamp are left out here; callers fall back to the
+        # session date for the unbucketed remainder.
+        _day = None
+        if ts_s and isinstance(ts_s, str):
+            try:
+                _day = datetime.fromisoformat(ts_s.replace("Z", "+00:00")).astimezone().strftime("%Y-%m-%d")
+            except (ValueError, TypeError, OverflowError, OSError):
+                _day = None
+        request_days[key] = _day
+        if _day:
+            dbd = daily_usage.setdefault(_day, {}).setdefault(
+                model,
+                {"fresh_input": 0, "cache_read": 0, "cache_create": 0, "cache_create_1h": 0, "cache_create_5m": 0, "output": 0},
+            )
+            dbd["fresh_input"] += u["inp"]
+            dbd["cache_read"] += u["cr"]
+            dbd["cache_create"] += u["cc"]
+            dbd["cache_create_1h"] += u["cc_1h"]
+            dbd["cache_create_5m"] += u["cc_5m"]
+            dbd["output"] += u["out"]
 
     # Calculate duration
     duration_minutes = 0
@@ -10687,6 +10851,12 @@ def _parse_session_jsonl(filepath, window_start=None, window_end=None):
         "p95_call_gap_seconds": gap_stats["p95"],
         "model_usage": model_usage,
         "model_usage_breakdown": model_usage_breakdown,
+        "daily_usage": daily_usage,
+        # Per-request usage (streaming-deduped) so a caller can dedupe requests
+        # that Claude Code writes into more than one transcript of a session.
+        "request_usage": {
+            k: dict(u, day=request_days.get(k)) for k, u in request_usage_map.items()
+        },
         "reported_input_tokens": reported_input,
         "reported_output_tokens": reported_output,
         "reported_model_usage": reported_model_usage,
@@ -10783,7 +10953,7 @@ def parse_session_turns(filepath):
                     or usage.get("ephemeral_5m_input_tokens", 0)
                 )
                 cc = _safe_int(usage.get("cache_creation_input_tokens", 0)) or (cc_1h + cc_5m)
-                model = msg.get("model", "unknown")
+                model = _record_model(msg)
 
                 # Extract tools used in this turn
                 tools = []
@@ -10938,12 +11108,20 @@ def score_session_quality(session_data):
 _SONNET_LEGACY_RE = re.compile(r"(?:^|[^0-9])(?:4[-._]?6|4[-._]?5|4[-._]?0|4|3[-._]?7|3[-._]?5|3)(?:[^0-9]|$)")
 
 
+def _record_model(msg):
+    """A transcript record's model id as text. A hand-edited or foreign
+    record can carry a number or an object there, and one such record must not
+    crash the whole collect; it is simply an unknown model."""
+    model = msg.get("model") if isinstance(msg, dict) else None
+    return model if isinstance(model, str) and model else "unknown"
+
+
 def _normalize_model_name(model_id):
     """Collapse model IDs like 'claude-sonnet-4-6' into 'sonnet'.
 
     Returns None for synthetic/internal model IDs that should be skipped.
     """
-    if not model_id or model_id.startswith("<"):
+    if not isinstance(model_id, str) or not model_id or model_id.startswith("<"):
         return None
     m = model_id.lower()
     if "fable" in m:
@@ -10963,6 +11141,46 @@ def _normalize_model_name(model_id):
     if "haiku" in m:
         return "haiku"
     return model_id
+
+
+_CLAUDE_GENERATION_RE = re.compile(
+    r"(fable|mythos|opus|sonnet|haiku)[-._]?(\d+)(?:[-._](\d{1,2}))?(?![0-9])")
+# Claude 3-era ids put the version before the family ("claude-3-5-sonnet-20241022").
+_CLAUDE_LEGACY_ID_RE = re.compile(r"claude-(\d)(?:[-.](\d))?-(opus|sonnet|haiku)(?![a-z])")
+
+
+def _claude_price_key(model_id, claude_models):
+    """Rate-card key for a Claude model id, finer than _normalize_model_name.
+
+    Display labels and savings mixes stay on the family buckets ("opus",
+    "fable"), but generations are priced differently (Opus 5.5 is $4/$20,
+    Opus 4.1 is $15/$75, Fable 5.1 reads cache at $0.25), so pricing looks for
+    a generation card first ("opus_5_5", then "opus_5"), then the family.
+    Generation cards come from pricing/prices.json, so a new model is priced
+    the day the table has it. Mythos shares the Fable cards when it has none.
+    """
+    if not model_id or not isinstance(model_id, str):
+        return None
+    legacy = _CLAUDE_LEGACY_ID_RE.search(model_id.lower())
+    if legacy:
+        major, minor, family = legacy.groups()
+        for key in ((f"{family}_{major}_{minor}", f"{family}_{major}") if minor else (f"{family}_{major}",)):
+            if key in claude_models:
+                return key
+        return _normalize_model_name(model_id)  # Sonnet 3.x lands on sonnet_legacy
+    m = _CLAUDE_GENERATION_RE.search(model_id.lower())
+    if m:
+        family, major, minor = m.groups()
+        families = (family, "fable") if family == "mythos" else (family,)
+        for fam in families:
+            for key in ((f"{fam}_{major}_{minor}", f"{fam}_{major}") if minor else (f"{fam}_{major}",)):
+                if key in claude_models:
+                    return key
+        if family == "mythos" and "fable" in claude_models:
+            return "fable"
+    elif "mythos" in str(model_id).lower() and "fable" in claude_models:
+        return "fable"
+    return _normalize_model_name(model_id)
 
 
 def _load_overhead_snapshots():
@@ -11053,7 +11271,17 @@ CREATE TABLE IF NOT EXISTS session_log (
     sidechain_reason TEXT,
     reported_input_tokens INTEGER,
     reported_output_tokens INTEGER,
-    reported_model_usage_json TEXT
+    reported_model_usage_json TEXT,
+    daily_usage_json TEXT
+);
+
+-- Transcript copies of a session that lost dedupe to a more complete copy
+-- (#200). Tracked so an unchanged losing copy is not re-parsed every flush,
+-- while a copy that grows is re-checked and can take over.
+CREATE TABLE IF NOT EXISTS session_log_aliases (
+    jsonl_path TEXT PRIMARY KEY,
+    session_uuid TEXT,
+    collected_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS daily_stats (
@@ -11538,6 +11766,10 @@ def _log_migration_error(step, exc):
             pass
 
 
+class _SkipMigration(Exception):
+    """Nothing to migrate; leave the step without touching the write lock."""
+
+
 def _init_trends_db():
     """Initialize the trends SQLite DB. Returns a connection.
     
@@ -11626,6 +11858,11 @@ def _init_trends_db():
             conn.execute("ALTER TABLE session_log ADD COLUMN reported_output_tokens INTEGER")
         if "reported_model_usage_json" not in cols:
             conn.execute("ALTER TABLE session_log ADD COLUMN reported_model_usage_json TEXT")
+        # Per-local-day, per-model token buckets for the whole session INCLUDING
+        # its subagents. The daily cost rollup prices from this so each day bills
+        # its own requests and delegated work is not dropped (#200).
+        if "daily_usage_json" not in cols:
+            conn.execute("ALTER TABLE session_log ADD COLUMN daily_usage_json TEXT")
         conn.commit()
     except sqlite3.Error as _e:
         _log_migration_error("session_log columns", _e)
@@ -11679,8 +11916,23 @@ def _init_trends_db():
     # live under ~/.claude/projects/, Codex under ~/.codex/sessions/, Hermes
     # uses "hermes:" dedup keys, and Copilot uses "copilot:" dedup keys. Only
     # infer when the path unambiguously identifies one platform; anything else
-    # stays NULL. Idempotent (gated by platform IS NULL).
+    # stays NULL. Idempotent (gated by platform IS NULL). An UPDATE takes the
+    # write lock even when it matches nothing, so check with a read first: on
+    # every dashboard open this would otherwise wait out busy_timeout behind a
+    # running collector.
+    _platform_patterns = ("%/.claude/projects/%", "%/.codex/sessions/%", "%/.codex/archived_sessions/%",
+                          "hermes:%", "copilot:%", "cursor:%", "antigravity:%")
     try:
+        _needs_platform = conn.execute(
+            "SELECT 1 FROM session_log WHERE platform IS NULL AND ("
+            + " OR ".join(["jsonl_path LIKE ?"] * len(_platform_patterns)) + ") LIMIT 1",
+            _platform_patterns,
+        ).fetchone()
+    except sqlite3.Error:
+        _needs_platform = True
+    try:
+        if not _needs_platform:
+            raise _SkipMigration
         conn.execute(
             "UPDATE session_log SET platform = 'claude' "
             "WHERE platform IS NULL "
@@ -11717,6 +11969,8 @@ def _init_trends_db():
             "AND jsonl_path LIKE 'antigravity:%'"
         )
         conn.commit()
+    except _SkipMigration:
+        pass
     except sqlite3.Error as _e:
         _log_migration_error("platform backfill", _e)
     # Migrate: add quality columns to daily_stats for existing DBs
@@ -12017,6 +12271,69 @@ def _backfill_session_metrics(conn, days=30, limit=50):
     return result if result is not None else 0
 
 
+def _backfill_daily_usage(conn, days=30, budget_seconds=20.0):
+    """Fill daily_usage_json for rows collected before per-day attribution.
+
+    Time-boxed rather than count-capped: parses are memoized and most rows are
+    small, so the window usually converges in one pass, and a huge history
+    simply finishes on later flushes. Rows that are not JSONL transcripts
+    (hook-rollup adapters) get '{}' so they are never retried; the rollup
+    prices those, and rows whose transcript is missing, from session totals.
+    """
+    cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    # Only the window: a row's stored date is its transcript's mtime day at
+    # collect time, so a session with any activity in the window has a date in
+    # it, and a resumed one is re-collected with a newer date. Selecting the
+    # whole table would re-scan every old or missing-transcript row forever.
+    rows = _retry_db_operation(conn, lambda: conn.execute(
+        """SELECT jsonl_path, date FROM session_log
+           WHERE daily_usage_json IS NULL AND date >= ?
+           ORDER BY date DESC""", (cutoff,)
+    ).fetchall())
+    if not rows:
+        return 0
+    deadline = time.monotonic() + budget_seconds
+    updates = []
+    for jsonl_path, stored_date in rows:
+        if time.monotonic() > deadline:
+            break
+        if not (jsonl_path and str(jsonl_path).endswith(".jsonl")):
+            # A hook-rollup adapter row has no transcript to split by day:
+            # settle it now so it is never rescanned.
+            updates.append(("{}", None, None, None, jsonl_path))
+            continue
+        if not os.path.exists(jsonl_path):
+            # Transcript missing, maybe only for now (a synced folder not yet
+            # downloaded, an unmounted drive): stay NULL so it fills in when the
+            # file returns, even with an old mtime that collect would skip.
+            continue
+        try:
+            usage = _session_daily_usage(jsonl_path)
+        except Exception:
+            usage = {}
+        dated = [d for d in usage if d != UNDATED_USAGE_KEY]
+        last_day = max(dated) if dated else None
+        updates.append((json.dumps(usage), _canonical_session_uuid(jsonl_path) if jsonl_path else None,
+                        last_day, last_day, jsonl_path))
+    if not updates:
+        return 0
+
+    def batch_update():
+        conn.executemany(
+            """UPDATE session_log
+               SET daily_usage_json = ?,
+                   session_uuid = COALESCE(session_uuid, ?),
+                   date = CASE WHEN ? > date THEN ? ELSE date END
+               WHERE jsonl_path = ?""",
+            updates,
+        )
+        conn.commit()
+        return len(updates)
+
+    result = _retry_db_operation(conn, batch_update)
+    return result if result is not None else 0
+
+
 def _extract_session_uuid(session_id):
     """Return (session_uuid, unjoinable) for a session_id string.
 
@@ -12058,6 +12375,7 @@ def _log_spawn_failure(msg):
     """
     try:
         DAEMON_LOG_DIR.mkdir(parents=True, exist_ok=True)
+        _cap_append_log(DAEMON_LOG_DIR / "spawn-failures.log")
         with open(DAEMON_LOG_DIR / "spawn-failures.log", "a", encoding="utf-8") as f:
             f.write("%s %s\n" % (time.strftime("%Y-%m-%dT%H:%M:%S"), msg))
     except OSError:
@@ -12098,7 +12416,7 @@ def _log_savings_event(event_type, tokens_saved, session_id=None, detail=None, m
             if cost_per_mtok is None:
                 cost_per_mtok = rates[0] if rates else None
         elif model:
-            normalized = _normalize_model_name(model) or "sonnet"
+            normalized = _claude_price_key(model, tier_data["claude_models"]) or "sonnet"
         else:
             normalized = _resolve_session_model(session_id)
         if detect_runtime() != 'codex':
@@ -12247,7 +12565,7 @@ def _get_compression_summary(days=30, since=None):
                 model_rates = _input_and_cached_read_rates(model)
                 rate = model_rates[0] if model_rates else 0.0
             elif model:
-                norm_m = _normalize_model_name(model) or "sonnet"
+                norm_m = _claude_price_key(model, tier_data["claude_models"]) or "sonnet"
                 rate = (
                     tier_data["claude_models"]
                     .get(norm_m, tier_data["claude_models"].get("sonnet", {}))
@@ -13039,8 +13357,8 @@ def _claude_rates_for_model(model, tier_data):
     """
     if _normalize_openai_model_name(model) or _normalize_gemini_model_name(model):
         return None
-    normalized = _normalize_model_name(model) if model else None
     claude_models = tier_data.get("claude_models", {})
+    normalized = _claude_price_key(model, claude_models) if model else None
     if normalized and normalized in claude_models:
         return claude_models[normalized]
     return None
@@ -14486,6 +14804,29 @@ def _keepwarm_scheduler_install_lock(soft_fail=False):
                     pass
 
     return _locked()
+
+
+_APPEND_LOG_MAX_BYTES = 1024 * 1024
+
+
+def _cap_append_log(path, max_bytes=_APPEND_LOG_MAX_BYTES):
+    """Keep an append-only diagnostic log under max_bytes by dropping its older
+    half (newest lines kept, truncated in place). Never raises."""
+    try:
+        path = Path(path)
+        if not path.exists() or path.stat().st_size <= max_bytes:
+            return
+        with open(path, "rb") as fh:
+            fh.seek(-(max_bytes // 2), os.SEEK_END)
+            tail = fh.read()
+        nl = tail.find(b"\n")
+        if 0 <= nl < len(tail) - 1:
+            tail = tail[nl + 1:]
+        with open(path, "r+b") as fh:
+            fh.write(tail)
+            fh.truncate()
+    except OSError:
+        pass
 
 
 def _keepwarm_rotate_log(max_bytes=_KEEPWARM_SCHEDULER_LOG_MAX_BYTES):
@@ -19253,6 +19594,16 @@ def _is_file_collected(conn, jsonl_path, check_mtime=False):
         "SELECT collected_at FROM session_log WHERE jsonl_path = ?",
         (str(jsonl_path),),
     ).fetchone()
+    if row is None and check_mtime:
+        # A copy that already lost dedupe to a more complete copy counts as
+        # collected until it changes; if it grows, it is parsed and compared again.
+        try:
+            row = conn.execute(
+                "SELECT collected_at FROM session_log_aliases WHERE jsonl_path = ?",
+                (str(jsonl_path),),
+            ).fetchone()
+        except sqlite3.Error:
+            row = None
     if row is None:
         return False
     if not check_mtime:
@@ -19264,6 +19615,26 @@ def _is_file_collected(conn, jsonl_path, check_mtime=False):
         return all(path.stat().st_mtime <= collected for path in paths)
     except (OSError, TypeError, ValueError):
         return False
+
+
+def _adapter_activity_ts(parsed):
+    """Latest activity of an adapter session (its end/updated time, else its
+    start) as an aware datetime, or None. A resumed chat must land on the day
+    it was last used, like a Claude transcript, not the day it started."""
+    best = None
+    for field in ("last_ts", "first_ts"):
+        raw = parsed.get(field)
+        if not raw:
+            continue
+        try:
+            dt = datetime.fromisoformat(raw)
+        except (TypeError, ValueError):
+            continue
+        if dt.tzinfo is None:
+            dt = dt.astimezone()
+        if best is None or dt > best:
+            best = dt
+    return best
 
 
 def _insert_normalized_session(conn, dedup_key, parsed, platform, project_fallback, quiet=False):
@@ -19283,14 +19654,8 @@ def _insert_normalized_session(conn, dedup_key, parsed, platform, project_fallba
     if not slug:
         return 0
 
-    first_ts = parsed.get("first_ts")
-    date = datetime.now().strftime("%Y-%m-%d")
-    if first_ts:
-        try:
-            dt = datetime.fromisoformat(first_ts)
-            date = dt.astimezone().strftime("%Y-%m-%d")
-        except (TypeError, ValueError):
-            date = datetime.now().strftime("%Y-%m-%d")
+    active = _adapter_activity_ts(parsed)
+    date = active.astimezone().strftime("%Y-%m-%d") if active else datetime.now().strftime("%Y-%m-%d")
 
     project_name = str(parsed.get("cwd") or project_fallback)
     is_incomplete = 1 if parsed.get("incomplete") else 0
@@ -19539,6 +19904,7 @@ def _migrate_streaming_dedup(conn, quiet=False):
         conn.execute("PRAGMA user_version = 3")
         conn.commit()
         conn.execute("DELETE FROM session_log")
+        conn.execute("DELETE FROM session_log_aliases")
         conn.execute("DELETE FROM daily_stats")
         conn.execute("DELETE FROM model_daily")
         conn.execute("DELETE FROM skill_daily")
@@ -19572,6 +19938,7 @@ def _collect_hermes_sessions(days=90, quiet=False, rebuild=False):
                 print("[Token Optimizer] Rebuilding Hermes trends DB...")
             conn.execute("PRAGMA user_version = 3")
             conn.execute("DELETE FROM session_log")
+            conn.execute("DELETE FROM session_log_aliases")
             conn.execute("DELETE FROM daily_stats")
             conn.execute("DELETE FROM model_daily")
             conn.execute("DELETE FROM skill_daily")
@@ -19953,18 +20320,10 @@ def _collect_grok_sessions(days=90, quiet=False, rebuild=False):
                                 print(f"[Token Optimizer] could not upgrade a Grok session: {exc}")
                 continue
 
-            first_ts = parsed.get("first_ts")
-            date = None
-            if first_ts:
-                try:
-                    dt = datetime.fromisoformat(first_ts)
-                    if dt.timestamp() < cutoff:
-                        continue
-                    date = dt.astimezone().strftime("%Y-%m-%d")
-                except (TypeError, ValueError):
-                    date = None
-            if date is None:
-                date = datetime.now().strftime("%Y-%m-%d")
+            active = _adapter_activity_ts(parsed)
+            if active and active.timestamp() < cutoff:
+                continue
+            date = active.astimezone().strftime("%Y-%m-%d") if active else datetime.now().strftime("%Y-%m-%d")
             project_name = str(parsed.get("cwd") or "grok")
 
             try:
@@ -20202,22 +20561,12 @@ def _collect_copilot_sessions(days=90, quiet=False, rebuild=False):
                                 print(f"[Token Optimizer] could not upgrade a Copilot session: {exc}")
                 continue
 
-            first_ts = parsed.get("first_ts")
-            date = None
-            if first_ts:
-                try:
-                    dt = datetime.fromisoformat(first_ts)
-                    if dt.timestamp() < cutoff:
-                        continue
-                    # first_ts is UTC (+00:00); convert to local before taking
-                    # the calendar day so it buckets like the JSONL collectors
-                    # (which use local mtime) — otherwise a late-evening session
-                    # lands on the wrong day in non-UTC zones.
-                    date = dt.astimezone().strftime("%Y-%m-%d")
-                except (TypeError, ValueError):
-                    date = None
-            if date is None:
-                date = datetime.now().strftime("%Y-%m-%d")
+            active = _adapter_activity_ts(parsed)
+            if active and active.timestamp() < cutoff:
+                continue
+            # Timestamps are UTC; the local calendar day buckets like the JSONL
+            # collectors (local mtime), so a late-evening session is not a day off.
+            date = active.astimezone().strftime("%Y-%m-%d") if active else datetime.now().strftime("%Y-%m-%d")
             project_name = str(parsed.get("cwd") or "copilot")
 
             try:
@@ -20481,14 +20830,9 @@ def _collect_cursor_sessions(days=90, quiet=False, rebuild=False):
                 continue
             normalized.append(parsed)
 
-            first_ts = parsed.get("first_ts")
-            if first_ts:
-                try:
-                    dt = datetime.fromisoformat(first_ts)
-                    if dt.timestamp() < cutoff:
-                        continue
-                except (TypeError, ValueError):
-                    pass
+            active = _adapter_activity_ts(parsed)
+            if active and active.timestamp() < cutoff:
+                continue
 
             dedup_key = f"cursor:{cid}"
             if _insert_normalized_session(conn, dedup_key, parsed, "cursor", "cursor", quiet=quiet):
@@ -20751,18 +21095,10 @@ def _collect_antigravity_sessions(days=90, quiet=False, rebuild=False):
                                 print(f"[Token Optimizer] could not upgrade an Antigravity session: {exc}")
                 continue
 
-            first_ts = parsed.get("first_ts")
-            date = None
-            if first_ts:
-                try:
-                    dt = datetime.fromisoformat(first_ts)
-                    if dt.timestamp() < cutoff:
-                        continue
-                    date = dt.astimezone().strftime("%Y-%m-%d")
-                except (TypeError, ValueError):
-                    date = None
-            if date is None:
-                date = datetime.now().strftime("%Y-%m-%d")
+            active = _adapter_activity_ts(parsed)
+            if active and active.timestamp() < cutoff:
+                continue
+            date = active.astimezone().strftime("%Y-%m-%d") if active else datetime.now().strftime("%Y-%m-%d")
             project_name = str(parsed.get("cwd") or "antigravity")
 
             try:
@@ -20834,6 +21170,252 @@ def _collect_antigravity_sessions(days=90, quiet=False, rebuild=False):
     return new_count
 
 
+UNDATED_USAGE_KEY = "undated"
+
+
+def _undated_bill_day(daily_usage, fallback_date):
+    """Day that requests without a timestamp are billed to: the session's last
+    real day. The stored date comes from file mtime, which can be a day the
+    session never ran, so it is only the fallback when nothing is dated."""
+    dated = [d for d in daily_usage if d != UNDATED_USAGE_KEY]
+    return max(dated) if dated else fallback_date
+
+
+def _merge_daily_usage(into, other):
+    """Add one daily_usage map ({date: {model: buckets}}) into another in place."""
+    for day, models in (other or {}).items():
+        if not isinstance(models, dict):
+            continue
+        dst_day = into.setdefault(day, {})
+        for model, parts in models.items():
+            if not isinstance(parts, dict):
+                continue
+            dst = dst_day.setdefault(model, {})
+            for key, val in parts.items():
+                dst[key] = int(dst.get(key) or 0) + int(val or 0)
+    return into
+
+
+def _session_merged_requests(filepath, parsed, subagent_files):
+    """Every API request of a session across its parent and subagent files and
+    every other copy of it, merged by requestId (largest usage wins,
+    streaming-safe). A request Claude Code wrote into two files counts once,
+    identical copies add nothing, and copies that diverged (each holding
+    requests the other lacks) lose nothing. None for adapter output that has
+    no per-request detail."""
+    per_file = [(str(filepath), parsed)]
+    per_file += [(str(copy), _parse_session_jsonl(copy)) for copy in _session_copy_files(filepath)]
+    per_file += [(str(sub_jf), _parse_session_jsonl(sub_jf)) for sub_jf in subagent_files]
+    if not all(p is None or "request_usage" in p for _, p in per_file):
+        return None
+    merged = {}
+    for path, p in per_file:
+        for key, u in ((p or {}).get("request_usage") or {}).items():
+            if str(key).startswith("__noreq__"):
+                # No requestId: keyed by file name and position, so the same
+                # record in two copies of one file still counts once.
+                key = f"{Path(path).name}:{key}"
+            prev = merged.get(key)
+            if prev is None:
+                merged[key] = dict(u)
+                continue
+            for field in ("inp", "out", "cr", "cc", "cc_1h", "cc_5m"):
+                prev[field] = max(int(prev.get(field) or 0), int(u.get(field) or 0))
+            # Same request seen twice: attributes must not depend on file order.
+            # A real model beats "unknown"; the earliest dated day wins.
+            days = [d for d in (prev.get("day"), u.get("day")) if d]
+            prev["day"] = min(days) if days else None
+            models = sorted(m for m in (prev.get("model"), u.get("model")) if m and m != "unknown")
+            prev["model"] = models[0] if models else (prev.get("model") or u.get("model"))
+    return merged
+
+
+def _session_daily_usage(filepath, parsed=None, subagent_files=None):
+    """Daily usage for a session transcript plus all of its subagent transcripts.
+
+    Claude Code sometimes writes the same API request into more than one of a
+    session's files (the parent and a subagent, or two subagents). Requests are
+    therefore merged by requestId across every file first, keeping the largest
+    usage seen (streaming-safe), so a shared request is billed once.
+    """
+    parsed = parsed if parsed is not None else _parse_session_jsonl(filepath)
+    if subagent_files is None:
+        subagent_files = _session_subagent_files(filepath)
+    merged = _session_merged_requests(filepath, parsed, subagent_files)
+    if merged is None:
+        # Adapter output without per-request detail: sum the per-file buckets.
+        combined = {}
+        for p in [parsed] + [_parse_session_jsonl(sub_jf) for sub_jf in subagent_files]:
+            _merge_daily_usage(combined, (p or {}).get("daily_usage") or {})
+        return combined
+
+    combined = {}
+    for u in merged.values():
+        # Requests without a usable timestamp land in UNDATED_USAGE_KEY; the
+        # rollup bills them to the session's own date instead of dropping them.
+        day = u.get("day") or UNDATED_USAGE_KEY
+        bucket = combined.setdefault(day, {}).setdefault(
+            u.get("model") or "unknown",
+            {"fresh_input": 0, "cache_read": 0, "cache_create": 0, "cache_create_1h": 0, "cache_create_5m": 0, "output": 0},
+        )
+        bucket["fresh_input"] += int(u.get("inp") or 0)
+        bucket["cache_read"] += int(u.get("cr") or 0)
+        bucket["cache_create"] += int(u.get("cc") or 0)
+        bucket["cache_create_1h"] += int(u.get("cc_1h") or 0)
+        bucket["cache_create_5m"] += int(u.get("cc_5m") or 0)
+        bucket["output"] += int(u.get("out") or 0)
+    return combined
+
+
+def _session_rank(message_count, input_tokens, output_tokens):
+    """How complete a copy of a session is. Copies are prefixes of the live file,
+    so the larger one is the superset. Shared by both dedupe paths so they always
+    pick the same winner."""
+    return (int(message_count or 0), int(input_tokens or 0), int(output_tokens or 0))
+
+
+_SESSION_DIR_INDEX = {}
+_SESSION_DIR_INDEX_TTL = 60.0
+
+
+def _session_dir_index(projects_dir):
+    """Map session stem -> project dirs holding a copy of that session (its
+    transcript, its folder of subagents, or both).
+
+    One directory listing per project, cached for a minute, so looking up a
+    session's copies elsewhere costs a dict hit instead of a stat of every
+    project dir for every session (1.6M stats on a large history).
+    """
+    key = str(projects_dir)
+    now = time.monotonic()
+    cached = _SESSION_DIR_INDEX.get(key)
+    if cached and now - cached[0] < _SESSION_DIR_INDEX_TTL:
+        return cached[1]
+    index = {}
+    try:
+        projects = [e for e in os.scandir(projects_dir) if e.is_dir()]
+    except OSError:
+        projects = []
+    for proj in projects:
+        try:
+            with os.scandir(proj.path) as entries:
+                found = set()
+                for e in entries:
+                    name = e.name[:-6] if e.name.endswith(".jsonl") else e.name
+                    if name not in found and _canonical_session_uuid(name):
+                        found.add(name)
+                        index.setdefault(name, []).append(Path(proj.path))
+        except OSError:
+            continue
+    _SESSION_DIR_INDEX.clear()
+    _SESSION_DIR_INDEX[key] = (now, index)
+    return index
+
+
+def _session_copy_files(filepath):
+    """Other transcripts of the same session under sibling project dirs
+    (worktree dir, sandboxed-config mirror, synced folder)."""
+    filepath = Path(filepath)
+    projects_dir = filepath.parent.parent
+    if not (_canonical_session_uuid(filepath) and projects_dir.name == "projects"):
+        return []
+    copies = []
+    for sib in _session_dir_index(projects_dir).get(filepath.stem, ()):
+        copy_path = sib / filepath.name
+        if sib != filepath.parent and copy_path.is_file():
+            copies.append(copy_path)
+    return copies
+
+
+def _session_subagent_files(filepath):
+    """Subagent transcripts for a session across every copy of it.
+
+    A session resumed in a git worktree keeps writing subagents under that
+    worktree's project dir, so after deduping to one row the winner must still
+    see the other copies' subagents. Requests are merged by requestId
+    downstream, so a subagent file present in two copies is never billed twice.
+    """
+    filepath = Path(filepath)
+    files = list(_find_subagent_jsonl_files(filepath))
+    seen = {f.name for f in files}
+    projects_dir = filepath.parent.parent
+    if _canonical_session_uuid(filepath) and projects_dir.name == "projects":
+        siblings = [d for d in _session_dir_index(projects_dir).get(filepath.stem, ()) if d != filepath.parent]
+        for sib in siblings:
+            sub_dir = sib / filepath.stem / "subagents"
+            if not sub_dir.is_dir():
+                continue
+            for jf in sub_dir.glob("*.jsonl"):
+                try:
+                    if jf.name not in seen and jf.stat().st_size > 0:
+                        files.append(jf)
+                        seen.add(jf.name)
+                except OSError:
+                    continue
+    return files
+
+
+def _canonical_session_uuid(filepath):
+    """Session UUID for a transcript path, or None when the stem is not one."""
+    try:
+        return _extract_session_uuid(Path(filepath).stem)[0]
+    except Exception:
+        return None
+
+
+def _dedupe_session_rows(conn):
+    """Collapse session_log rows that are copies of the same session (#200).
+
+    session_log is keyed by jsonl_path, but one session can sit under several
+    paths: a git-worktree project dir, a mirror under a sandboxed
+    CLAUDE_CONFIG_DIR, a resumed copy. Each copy used to count as its own
+    session, inflating every total 2-3x. Keep the most complete row per
+    session_uuid (a copy is a prefix of the live file, so the larger one is the
+    superset). Rows are derived from transcripts on disk, so nothing is lost.
+    """
+    try:
+        rows = conn.execute(
+            """SELECT id, session_uuid, message_count, input_tokens, output_tokens, jsonl_path, collected_at
+               FROM session_log
+               WHERE session_uuid IN (
+                   SELECT session_uuid FROM session_log
+                   WHERE session_uuid IS NOT NULL AND session_uuid != ''
+                   GROUP BY session_uuid HAVING COUNT(*) > 1)"""
+        ).fetchall()
+    except sqlite3.Error:
+        return 0
+    best = {}
+    for rid, uuid, msgs, inp, out, path, _collected in rows:
+        if _extract_session_uuid(uuid or "")[0] is None:
+            continue
+        on_disk = bool(path) and os.path.exists(path)
+        # Most complete copy wins; on a tie, the one whose transcript still
+        # exists (its per-day data can be rebuilt), then the newest row.
+        rank = (*_session_rank(msgs, inp, out), on_disk, int(rid))
+        if uuid not in best or rank > best[uuid][0]:
+            best[uuid] = (rank, rid, on_disk)
+    losers = [
+        (rid,) for rid, uuid, *_ in rows
+        if uuid in best and rid != best[uuid][1]
+    ]
+    if not losers:
+        return 0
+    # Recompute the winner's per-day data so it includes the losers' subagents
+    # (_session_subagent_files) -- only when its transcript can be re-read.
+    winners = [(b[1],) for b in best.values() if b[2]]
+    loser_ids = {rid for (rid,) in losers}
+    aliases = [(path, uuid, collected) for rid, uuid, _m, _i, _o, path, collected in rows if rid in loser_ids]
+    try:
+        conn.executemany(
+            "INSERT OR REPLACE INTO session_log_aliases (jsonl_path, session_uuid, collected_at) VALUES (?, ?, ?)",
+            aliases)
+        conn.executemany("DELETE FROM session_log WHERE id = ?", losers)
+        conn.executemany("UPDATE session_log SET daily_usage_json = NULL WHERE id = ?", winners)
+    except sqlite3.Error:
+        return 0
+    return len(losers)
+
+
 def collect_sessions(days=90, quiet=False, rebuild=False):
     """Parse new JSONL files and insert into SQLite. Zero token cost.
 
@@ -20882,6 +21464,7 @@ def collect_sessions(days=90, quiet=False, rebuild=False):
         # Mark version FIRST so a killed process doesn't re-trigger
         conn.execute("PRAGMA user_version = 3")
         conn.execute("DELETE FROM session_log")
+        conn.execute("DELETE FROM session_log_aliases")
         conn.execute("DELETE FROM daily_stats")
         conn.execute("DELETE FROM model_daily")
         conn.execute("DELETE FROM skill_daily")
@@ -20898,6 +21481,11 @@ def collect_sessions(days=90, quiet=False, rebuild=False):
             print(f"No session logs found in the last {days} days.")
         conn.close()
         return 0
+
+    try:
+        _dedupe_session_rows(conn)
+    except sqlite3.Error:
+        pass
 
     new_count = 0
     for filepath, mtime, project_name in files:
@@ -20918,8 +21506,9 @@ def collect_sessions(days=90, quiet=False, rebuild=False):
             continue
 
         # Scan subagent JSONL files for skills, agents, and model usage.
-        # Single pass over subagent files to avoid duplicate glob.
-        subagent_files = _find_subagent_jsonl_files(filepath)
+        # Single pass over subagent files to avoid duplicate glob. Includes
+        # subagents stored under other copies of this session (worktrees).
+        subagent_files = _session_subagent_files(filepath)
         for sub_jf in subagent_files:
             sub_skills, sub_agents = _extract_skills_and_agents_from_subagent(sub_jf)
             for sk, cnt in sub_skills.items():
@@ -20961,9 +21550,56 @@ def collect_sessions(days=90, quiet=False, rebuild=False):
             # but the stored cache_hit_rate is parent-only. Leave as-is (parent-derived)
             # since mixing subagent hit rates isn't meaningful for per-session display.
 
+        daily_usage = _session_daily_usage(filepath, parsed=parsed, subagent_files=subagent_files)
+        if subagent_files or _session_copy_files(filepath):
+            # The per-file sums above count a request written into both the
+            # parent and a subagent file twice; restate the stored token totals
+            # from the same requestId-merged set the cost uses.
+            merged = _session_merged_requests(filepath, parsed, subagent_files)
+            if merged is not None:
+                parsed["total_input_tokens"] = sum(int(u.get("inp") or 0) + int(u.get("cr") or 0) + int(u.get("cc") or 0)
+                                                   for u in merged.values())
+                parsed["total_output_tokens"] = sum(int(u.get("out") or 0) for u in merged.values())
+                parsed["total_cache_create_1h"] = sum(int(u.get("cc_1h") or 0) for u in merged.values())
+                parsed["total_cache_create_5m"] = sum(int(u.get("cc_5m") or 0) for u in merged.values())
+                all_model_usage = {}
+                for u in merged.values():
+                    model_id = u.get("model") or "unknown"
+                    if model_id.startswith("<"):
+                        continue
+                    all_model_usage[model_id] = all_model_usage.get(model_id, 0) + (
+                        int(u.get("inp") or 0) + int(u.get("cc") or 0) + int(u.get("out") or 0))
+
         date = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d")
         skills_used = parsed["skills_used"]
         subagents_used = parsed["subagents_used"]
+
+        # One row per session (#200): if this session is already stored under
+        # another path (worktree dir, sandboxed-config mirror), keep whichever
+        # copy is more complete instead of counting the session twice.
+        session_uuid = _canonical_session_uuid(filepath)
+        if session_uuid:
+            other = conn.execute(
+                "SELECT id, message_count, input_tokens, output_tokens FROM session_log "
+                "WHERE session_uuid = ? AND jsonl_path != ?",
+                (session_uuid, str(filepath)),
+            ).fetchall()
+            mine = _session_rank(parsed.get("message_count"), parsed.get("total_input_tokens"),
+                                 parsed.get("total_output_tokens"))
+            # A tie keeps the stored copy, matching _dedupe_session_rows.
+            if any(_session_rank(r[1], r[2], r[3]) >= mine for r in other):
+                conn.execute(
+                    "INSERT OR REPLACE INTO session_log_aliases (jsonl_path, session_uuid, collected_at) "
+                    "VALUES (?, ?, ?)", (str(filepath), session_uuid, collection_started))
+                # This copy changed since last seen and may hold requests the
+                # stored copy lacks; its per-day usage (merged across copies) is
+                # recomputed by the next backfill.
+                conn.execute(
+                    "UPDATE session_log SET daily_usage_json = NULL WHERE session_uuid = ? AND jsonl_path != ?",
+                    (session_uuid, str(filepath)))
+                continue
+        else:
+            other = []
 
         # Compute quality score at collection time for persistence
         sq = score_session_quality(parsed)
@@ -20987,9 +21623,10 @@ def collect_sessions(days=90, quiet=False, rebuild=False):
                     all_model_usage_json, model_usage_breakdown_json, version, slug, topic, collected_at,
                     quality_score, quality_grade, stale_waste_tokens, is_sidechain,
                     sidechain_reason, reported_input_tokens, reported_output_tokens,
-                    reported_model_usage_json, platform)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    reported_model_usage_json, platform, session_uuid, daily_usage_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(jsonl_path) DO UPDATE SET
+               date=MAX(session_log.date, excluded.date),
                project=excluded.project,
                duration_minutes=excluded.duration_minutes,
                input_tokens=excluded.input_tokens,
@@ -21021,7 +21658,9 @@ def collect_sessions(days=90, quiet=False, rebuild=False):
                reported_input_tokens=excluded.reported_input_tokens,
                reported_output_tokens=excluded.reported_output_tokens,
                reported_model_usage_json=excluded.reported_model_usage_json,
-               platform=excluded.platform
+               platform=excluded.platform,
+               session_uuid=COALESCE(excluded.session_uuid, session_log.session_uuid),
+               daily_usage_json=excluded.daily_usage_json
                WHERE session_log.collected_at IS NULL
                   OR excluded.collected_at >= session_log.collected_at""",
             (
@@ -21057,10 +21696,26 @@ def collect_sessions(days=90, quiet=False, rebuild=False):
                 int(parsed.get("reported_output_tokens", 0) or 0),
                 json.dumps(parsed.get("reported_model_usage", {})),
                 session_platform,
+                session_uuid,
+                json.dumps(daily_usage),
             ),
         )
         if cur.rowcount != 1:
             continue
+        if session_uuid:
+            # Retire the older copies only now that this row has landed; an
+            # upsert the WHERE guard rejected must not leave the session with
+            # no current row.
+            if other:
+                losers = conn.execute(
+                    "SELECT jsonl_path, collected_at FROM session_log WHERE session_uuid = ? AND jsonl_path != ?",
+                    (session_uuid, str(filepath)),
+                ).fetchall()
+                conn.executemany(
+                    "INSERT OR REPLACE INTO session_log_aliases (jsonl_path, session_uuid, collected_at) "
+                    "VALUES (?, ?, ?)", [(r[0], session_uuid, r[1]) for r in losers])
+                conn.executemany("DELETE FROM session_log WHERE id = ?", [(r[0],) for r in other])
+            conn.execute("DELETE FROM session_log_aliases WHERE jsonl_path = ?", (str(filepath),))
 
         new_count += 1
         # Bank progress every batch so an interrupted deep backfill (a hook timeout
@@ -21080,6 +21735,10 @@ def collect_sessions(days=90, quiet=False, rebuild=False):
     # over a few flushes instead of blocking turn-end for minutes.
     try:
         _backfill_session_metrics(conn, days=days, limit=50)
+    except Exception:
+        pass
+    try:
+        _backfill_daily_usage(conn, days=min(days, 90), budget_seconds=10.0)
     except Exception:
         pass
 
@@ -21130,6 +21789,36 @@ def conn_total_sessions():
         return 0
 
 
+def _read_path_upkeep(conn, days):
+    """Best-effort catch-up writes before a dashboard read.
+
+    Each step waits at most ~200ms for the write lock and the rest are skipped
+    once one is contended, so a render never stalls behind a running collector;
+    the collector does the same work on its next flush.
+    """
+    conn.execute("PRAGMA busy_timeout=200")
+    try:
+        # Collapse duplicate sessions left by older versions and rebuild the
+        # per-day summary tables if any went, so this render never mixes
+        # deduped rows with still-doubled aggregates. Dedupe first, so the
+        # backfill never spends its budget on rows about to be deleted.
+        if _dedupe_session_rows(conn):
+            _rebuild_aggregate_tables(conn)
+        conn.commit()
+        _backfill_session_metrics(conn, days=days)
+        _backfill_daily_usage(conn, days=days, budget_seconds=3.0)
+    except sqlite3.Error:
+        try:
+            conn.rollback()
+        except sqlite3.Error:
+            pass
+    finally:
+        try:
+            conn.execute("PRAGMA busy_timeout=5000")
+        except sqlite3.Error:
+            pass
+
+
 def _collect_trends_from_db(days=30):
     """Query SQLite trends DB for aggregated usage data.
 
@@ -21152,7 +21841,7 @@ def _collect_trends_from_db(days=30):
         return None
 
     try:
-        _backfill_session_metrics(conn, days=days)
+        _read_path_upkeep(conn, days)
         return _query_trends_db(conn, days)
     except (sqlite3.Error, sqlite3.DatabaseError):
         return None
@@ -21321,13 +22010,31 @@ def _query_trends_db(conn, days):
                   cache_create_1h_tokens, cache_create_5m_tokens,
                   avg_call_gap_seconds, max_call_gap_seconds, p95_call_gap_seconds, skills_json,
                   subagents_json, model_usage_json, slug, topic, project,
-                  model_usage_breakdown_json,
+                  model_usage_breakdown_json, daily_usage_json,
                   quality_score, quality_grade
            FROM session_log WHERE date >= ? ORDER BY date DESC""",
         (cutoff,),
     ).fetchall()
-    for sr in session_rows:
-        date = sr["date"]
+
+    def _price_buckets(mb):
+        """(priced_tokens, unpriced_tokens) for a per-model breakdown."""
+        priced = unpriced = 0
+        for model_name, parts in (mb or {}).items():
+            if not isinstance(parts, dict):
+                continue
+            model_tokens = (
+                int(parts.get("fresh_input") or 0)
+                + int(parts.get("cache_read") or 0)
+                + int(parts.get("cache_create") or 0)
+                + int(parts.get("output") or 0)
+            )
+            if _is_priced_model(model_name, tier=pricing_tier):
+                priced += model_tokens
+            else:
+                unpriced += model_tokens
+        return priced, unpriced
+
+    def _day_entry(date):
         if date not in daily:
             daily[date] = {
                 "date": date,
@@ -21337,18 +22044,13 @@ def _query_trends_db(conn, days):
                 "skills_used": {},
                 "session_details": [],
             }
-        d = daily[date]
-        d["sessions"] += 1
-        d["total_input"] += sr["input_tokens"] or 0
-        d["total_output"] += sr["output_tokens"] or 0
+        return daily[date]
 
+    for sr in session_rows:
         try:
             skills = json.loads(sr["skills_json"]) if sr["skills_json"] else {}
         except (json.JSONDecodeError, TypeError):
             skills = {}
-        for skill, cnt in skills.items():
-            d["skills_used"][skill] = d["skills_used"].get(skill, 0) + cnt
-
         try:
             subagents = json.loads(sr["subagents_json"]) if sr["subagents_json"] else {}
         except (json.JSONDecodeError, TypeError):
@@ -21376,28 +22078,24 @@ def _query_trends_db(conn, days):
             mb = json.loads(mb_raw) if mb_raw else {}
         except (json.JSONDecodeError, TypeError, KeyError):
             mb = {}
-        session_priced_tokens = 0
-        session_unpriced_tokens = 0
+        try:
+            du_raw = sr["daily_usage_json"]
+            du = json.loads(du_raw) if du_raw else {}
+        except (json.JSONDecodeError, TypeError, KeyError):
+            du = {}
+        if not isinstance(du, dict):
+            du = {}
+
         if isinstance(mb, dict) and mb:
-            for model_name, parts in mb.items():
-                if not isinstance(parts, dict):
-                    continue
-                model_tokens = (
-                    int(parts.get("fresh_input") or 0)
-                    + int(parts.get("cache_read") or 0)
-                    + int(parts.get("cache_create") or 0)
-                    + int(parts.get("output") or 0)
-                )
-                if _is_priced_model(model_name, tier=pricing_tier):
-                    session_priced_tokens += model_tokens
-                else:
-                    session_unpriced_tokens += model_tokens
+            session_priced_tokens, session_unpriced_tokens = _price_buckets(mb)
         else:
             model_tokens = inp_total + out_total
             if _is_priced_model(dom_model, tier=pricing_tier):
-                session_priced_tokens = model_tokens
+                session_priced_tokens, session_unpriced_tokens = model_tokens, 0
             else:
-                session_unpriced_tokens = model_tokens
+                session_priced_tokens, session_unpriced_tokens = 0, model_tokens
+        # Main-thread cost from the stored session breakdown. Used as-is for rows
+        # without per-day data (non-JSONL adapters, transcript gone).
         session_cost = _cost_from_model_breakdown(mb, tier=pricing_tier,
                                                    cache_create_1h=cache_create_1h if cache_create_1h or cache_create_5m else None,
                                                    cache_create_5m=cache_create_5m if cache_create_1h or cache_create_5m else None)
@@ -21410,49 +22108,100 @@ def _query_trends_db(conn, days):
                 session_cost = _get_model_cost(dom_model, uncached_est, out_total, cache_read_est, cache_create_total, tier=pricing_tier)
         if session_cost == 0.0 and session_priced_tokens == 0 and session_unpriced_tokens == 0 and (inp_total or out_total):
             session_unpriced_tokens = inp_total + out_total
-        total_cost_usd += session_cost
-        total_cost_priced_tokens += session_priced_tokens
-        total_cost_unpriced_tokens += session_unpriced_tokens
-        if session_unpriced_tokens > 0:
-            total_unpriced_sessions += 1
-        jsonl_path = sr["jsonl_path"]
 
-        sd = {
-            "duration_minutes": round(sr["duration_minutes"] or 0, 1),
-            "input_tokens": inp_total,
-            "output_tokens": out_total,
-            "message_count": sr["message_count"] or 0,
-            "api_calls": sr["api_calls"] or 0,
-            "skills": list(skills.keys()),
-            "subagents": list(subagents.keys()),
-            "cache_hit_rate": round(chr_val, 3),
-            "cache_create_1h_tokens": cache_create_1h,
-            "cache_create_5m_tokens": cache_create_5m,
-            "avg_call_gap_seconds": sr["avg_call_gap_seconds"],
-            "max_call_gap_seconds": sr["max_call_gap_seconds"],
-            "p95_call_gap_seconds": sr["p95_call_gap_seconds"],
-            "slug": sr["slug"],
-            "session_key": _make_session_key(jsonl_path),
-            "jsonl_path": jsonl_path,
-            "topic": sr["topic"],
-            "project": _clean_project_name(sr["project"]),
-            "cost_usd": round(session_cost, 4),
-            "cost_priced_tokens": session_priced_tokens,
-            "cost_unpriced_tokens": session_unpriced_tokens,
-            "model": _normalize_model_name(dom_model) or dom_model,
-            "model_count": len(mu) if mu else 1,
-        }
-        # Prefer stored quality score (persisted during collect), fall back to recomputation
-        if sr["quality_score"] is not None:
-            sd["quality_score"] = sr["quality_score"]
-            sd["quality_grade"] = sr["quality_grade"] or score_to_grade(round(sr["quality_score"]))
-            sd["quality_band"] = score_to_band(sr["quality_score"])
+        # Per-day slices (#200). With per-day data, each calendar day is billed for
+        # the requests that ran on it, subagents included; a day before the window
+        # is dropped. Without it, the whole session lands on its stored date.
+        slices = []  # (date, cost, priced, unpriced, input_tokens, output_tokens)
+        if du:
+            by_day = {}
+            undated_day = _undated_bill_day(du, sr["date"])
+            for day, day_mb in du.items():
+                if not isinstance(day_mb, dict):
+                    continue
+                day = undated_day if day == UNDATED_USAGE_KEY else day
+                _merge_daily_usage(by_day.setdefault(day, {}), {"_": day_mb})
+            for day in sorted(by_day):
+                day_mb = by_day[day].get("_", {})
+                day_cost = _cost_from_model_breakdown(day_mb, tier=pricing_tier)
+                day_priced, day_unpriced = _price_buckets(day_mb)
+                day_in = sum(
+                    int(p.get("fresh_input") or 0) + int(p.get("cache_read") or 0) + int(p.get("cache_create") or 0)
+                    for p in day_mb.values() if isinstance(p, dict))
+                day_out = sum(int(p.get("output") or 0) for p in day_mb.values() if isinstance(p, dict))
+                slices.append([day, day_cost, day_priced, day_unpriced, day_in, day_out])
+            session_total_cost = sum(sl[1] for sl in slices)
+            slices = [sl for sl in slices if sl[0] >= cutoff]
         else:
-            sq = score_session_quality(sd)
-            sd["quality_score"] = sq["score"]
-            sd["quality_grade"] = sq["grade"]
-            sd["quality_band"] = sq["band"]
-        d["session_details"].append(sd)
+            session_total_cost = session_cost
+            slices = [[sr["date"], session_cost, session_priced_tokens, session_unpriced_tokens, inp_total, out_total]]
+
+        window_unpriced = 0
+        jsonl_path = sr["jsonl_path"]
+        # A session active on several days is listed on each; its latest day is
+        # the primary entry. Per-session stats (skills, cache/TTL mix, coaching)
+        # must read only primary entries or a multi-day session counts twice.
+        primary_date = max((sl[0] for sl in slices), default=None)
+        for date, day_cost, day_priced, day_unpriced, day_in, day_out in slices:
+            d = _day_entry(date)
+            d["sessions"] += 1
+            d["total_input"] += day_in
+            d["total_output"] += day_out
+            if date == primary_date:
+                for skill, cnt in skills.items():
+                    d["skills_used"][skill] = d["skills_used"].get(skill, 0) + cnt
+            total_cost_usd += day_cost
+            total_cost_priced_tokens += day_priced
+            total_cost_unpriced_tokens += day_unpriced
+            window_unpriced += day_unpriced
+
+            sd = {
+                "duration_minutes": round(sr["duration_minutes"] or 0, 1),
+                "input_tokens": inp_total,
+                "output_tokens": out_total,
+                "message_count": sr["message_count"] or 0,
+                "api_calls": sr["api_calls"] or 0,
+                "skills": list(skills.keys()),
+                "subagents": list(subagents.keys()),
+                "cache_hit_rate": round(chr_val, 3),
+                "cache_create_1h_tokens": cache_create_1h,
+                "cache_create_5m_tokens": cache_create_5m,
+                "avg_call_gap_seconds": sr["avg_call_gap_seconds"],
+                "max_call_gap_seconds": sr["max_call_gap_seconds"],
+                "p95_call_gap_seconds": sr["p95_call_gap_seconds"],
+                "slug": sr["slug"],
+                "session_key": _make_session_key(jsonl_path),
+                "jsonl_path": jsonl_path,
+                "topic": sr["topic"],
+                "project": _clean_project_name(sr["project"]),
+                # cost_usd is THIS day's share; session_cost_usd is the whole session.
+                "cost_usd": round(day_cost, 4),
+                "session_cost_usd": round(session_total_cost, 4),
+                # input/output_tokens above are whole-session totals (the row
+                # describes the session); these are this day's share, the same
+                # numbers the day's total_input/total_output add up.
+                "day_input_tokens": day_in,
+                "day_output_tokens": day_out,
+                "spans_days": len(du) > 1,
+                "continuation": date != primary_date,
+                "cost_priced_tokens": day_priced,
+                "cost_unpriced_tokens": day_unpriced,
+                "model": _normalize_model_name(dom_model) or dom_model,
+                "model_count": len(mu) if mu else 1,
+            }
+            # Prefer stored quality score (persisted during collect), fall back to recomputation
+            if sr["quality_score"] is not None:
+                sd["quality_score"] = sr["quality_score"]
+                sd["quality_grade"] = sr["quality_grade"] or score_to_grade(round(sr["quality_score"]))
+                sd["quality_band"] = score_to_band(sr["quality_score"])
+            else:
+                sq = score_session_quality(sd)
+                sd["quality_score"] = sq["score"]
+                sd["quality_grade"] = sq["grade"]
+                sd["quality_band"] = sq["band"]
+            d["session_details"].append(sd)
+        if window_unpriced > 0:
+            total_unpriced_sessions += 1
 
     daily_sorted = sorted(daily.values(), key=lambda x: x["date"], reverse=True)
     grade_rank = {grade: idx for idx, grade in enumerate(["F", "D", "C", "B", "A", "S"])}
@@ -21577,11 +22326,22 @@ def _collect_trends_from_jsonl(days=30):
         return None
 
     sessions = []
+    by_uuid = {}  # one entry per session, same rule as the DB path (#200)
     for filepath, mtime, project_name in files:
-        parsed = _parse_session_jsonl(filepath)
+        # Copy: the parser memoizes its result, and this rollup merges subagent
+        # data into it. Mutating the cached dict made a later collect in the same
+        # process merge the same subagent skills twice.
+        parsed = copy.deepcopy(_parse_session_jsonl(filepath))
         if parsed:
+            session_uuid = _canonical_session_uuid(filepath)
+            if session_uuid:
+                rank = _session_rank(parsed.get("message_count"), parsed.get("total_input_tokens"),
+                                     parsed.get("total_output_tokens"))
+                prior = by_uuid.get(session_uuid)
+                if prior is not None and prior[0] >= rank:
+                    continue
             # Scan subagent JSONL files for skills, agents, and model usage.
-            subagent_files = _find_subagent_jsonl_files(filepath)
+            subagent_files = _session_subagent_files(filepath)
             for sub_jf in subagent_files:
                 sub_skills, sub_agents = _extract_skills_and_agents_from_subagent(sub_jf)
                 for sk, cnt in sub_skills.items():
@@ -21609,6 +22369,13 @@ def _collect_trends_from_jsonl(days=30):
             parsed["project"] = project_name
             parsed["date"] = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d")
             parsed["jsonl_path"] = str(filepath)
+            parsed["daily_usage_combined"] = _session_daily_usage(
+                filepath, parsed=parsed, subagent_files=subagent_files)
+            if session_uuid:
+                prior = by_uuid.get(session_uuid)
+                if prior is not None:
+                    sessions.remove(prior[1])
+                by_uuid[session_uuid] = (rank, parsed)
             sessions.append(parsed)
 
     if not sessions:
@@ -21707,23 +22474,8 @@ def _collect_trends_from_jsonl(days=30):
     total_cost_priced_tokens = 0
     total_cost_unpriced_tokens = 0
     total_unpriced_sessions = 0
+    fallback_cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
     for s in sessions:
-        date = s["date"]
-        if date not in daily:
-            daily[date] = {
-                "date": date,
-                "sessions": 0,
-                "total_input": 0,
-                "total_output": 0,
-                "skills_used": {},
-                "session_details": [],
-            }
-        d = daily[date]
-        d["sessions"] += 1
-        d["total_input"] += s["total_input_tokens"]
-        d["total_output"] += s["total_output_tokens"]
-        for skill in s["skills_used"]:
-            d["skills_used"][skill] = d["skills_used"].get(skill, 0) + s["skills_used"][skill]
         # Determine dominant model and compute cost
         dom_model = max(s["model_usage"], key=s["model_usage"].get) if s["model_usage"] else "unknown"
         cr = s.get("total_cache_read", 0)
@@ -21746,44 +22498,104 @@ def _collect_trends_from_jsonl(days=30):
         else:
             session_priced_tokens = 0
             session_unpriced_tokens = session_tokens_for_cost
-        total_cost_usd += session_cost
-        total_cost_priced_tokens += session_priced_tokens
-        total_cost_unpriced_tokens += session_unpriced_tokens
-        if session_unpriced_tokens > 0:
+
+        # Per-day slices, same rule as the DB rollup (#200): each day is billed
+        # for its own requests, subagents included, priced per model.
+        du = s.get("daily_usage_combined") or {}
+        if du:
+            slices = []
+            by_day = {}
+            undated_day = _undated_bill_day(du, s["date"])
+            for day, day_mb in du.items():
+                day = undated_day if day == UNDATED_USAGE_KEY else day
+                _merge_daily_usage(by_day.setdefault(day, {}), {"_": day_mb})
+            # Whole-session cost over every day, before the window cut, so both
+            # rollups report the same session_cost_usd.
+            session_total_cost = sum(_cost_from_model_breakdown(v.get("_", {}), tier=pricing_tier)
+                                     for v in by_day.values())
+            for day in sorted(by_day):
+                day_mb = by_day[day].get("_", {})
+                if day < fallback_cutoff:
+                    continue
+                priced = unpriced = 0
+                for mname, parts in day_mb.items():
+                    toks = sum(int(parts.get(k) or 0) for k in ("fresh_input", "cache_read", "cache_create", "output"))
+                    if _is_priced_model(mname, tier=pricing_tier):
+                        priced += toks
+                    else:
+                        unpriced += toks
+                slices.append((
+                    day, _cost_from_model_breakdown(day_mb, tier=pricing_tier), priced, unpriced,
+                    sum(int(p.get("fresh_input") or 0) + int(p.get("cache_read") or 0) + int(p.get("cache_create") or 0)
+                        for p in day_mb.values()),
+                    sum(int(p.get("output") or 0) for p in day_mb.values()),
+                ))
+        else:
+            session_total_cost = session_cost
+            slices = [(s["date"], session_cost, session_priced_tokens, session_unpriced_tokens,
+                       s["total_input_tokens"], s["total_output_tokens"])]
+        if any(sl[3] > 0 for sl in slices):
             total_unpriced_sessions += 1
 
         jsonl_path = s.get("jsonl_path")
-        sd = {
-            "duration_minutes": round(s["duration_minutes"], 1),
-            "input_tokens": s["total_input_tokens"],
-            "output_tokens": s["total_output_tokens"],
-            "message_count": s["message_count"],
-            "api_calls": s.get("api_calls", 0),
-            "skills": list(s["skills_used"].keys()),
-            "subagents": list(s["subagents_used"].keys()),
-            "cache_hit_rate": round(s["cache_hit_rate"], 3),
-            "cache_create_1h_tokens": s.get("total_cache_create_1h", 0),
-            "cache_create_5m_tokens": s.get("total_cache_create_5m", 0),
-            "avg_call_gap_seconds": s.get("avg_call_gap_seconds"),
-            "max_call_gap_seconds": s.get("max_call_gap_seconds"),
-            "p95_call_gap_seconds": s.get("p95_call_gap_seconds"),
-            "slug": s.get("slug"),
-            "session_key": _make_session_key(jsonl_path),
-            "jsonl_path": jsonl_path,
-            "topic": s.get("topic"),
-            "project": _clean_project_name(s.get("project")),
-            "cache_read_tokens": cr,
-            "cache_create_tokens": cc,
-            "cost_usd": round(session_cost, 4),
-            "cost_priced_tokens": session_priced_tokens,
-            "cost_unpriced_tokens": session_unpriced_tokens,
-            "model": _normalize_model_name(dom_model) or dom_model,
-        }
-        sq = score_session_quality(sd)
-        sd["quality_score"] = sq["score"]
-        sd["quality_grade"] = sq["grade"]
-        sd["quality_band"] = sq["band"]
-        d["session_details"].append(sd)
+        primary_date = max((sl[0] for sl in slices), default=None)
+        for date, day_cost, day_priced, day_unpriced, day_in, day_out in slices:
+            if date not in daily:
+                daily[date] = {
+                    "date": date,
+                    "sessions": 0,
+                    "total_input": 0,
+                    "total_output": 0,
+                    "skills_used": {},
+                    "session_details": [],
+                }
+            d = daily[date]
+            d["sessions"] += 1
+            d["total_input"] += day_in
+            d["total_output"] += day_out
+            if date == primary_date:
+                for skill in s["skills_used"]:
+                    d["skills_used"][skill] = d["skills_used"].get(skill, 0) + s["skills_used"][skill]
+            total_cost_usd += day_cost
+            total_cost_priced_tokens += day_priced
+            total_cost_unpriced_tokens += day_unpriced
+
+            sd = {
+                "duration_minutes": round(s["duration_minutes"], 1),
+                "input_tokens": s["total_input_tokens"],
+                "output_tokens": s["total_output_tokens"],
+                "message_count": s["message_count"],
+                "api_calls": s.get("api_calls", 0),
+                "skills": list(s["skills_used"].keys()),
+                "subagents": list(s["subagents_used"].keys()),
+                "cache_hit_rate": round(s["cache_hit_rate"], 3),
+                "cache_create_1h_tokens": s.get("total_cache_create_1h", 0),
+                "cache_create_5m_tokens": s.get("total_cache_create_5m", 0),
+                "avg_call_gap_seconds": s.get("avg_call_gap_seconds"),
+                "max_call_gap_seconds": s.get("max_call_gap_seconds"),
+                "p95_call_gap_seconds": s.get("p95_call_gap_seconds"),
+                "slug": s.get("slug"),
+                "session_key": _make_session_key(jsonl_path),
+                "jsonl_path": jsonl_path,
+                "topic": s.get("topic"),
+                "project": _clean_project_name(s.get("project")),
+                "cache_read_tokens": cr,
+                "cache_create_tokens": cc,
+                "cost_usd": round(day_cost, 4),
+                "session_cost_usd": round(session_total_cost, 4),
+                "day_input_tokens": day_in,
+                "day_output_tokens": day_out,
+                "spans_days": len(du) > 1,
+                "continuation": date != primary_date,
+                "cost_priced_tokens": day_priced,
+                "cost_unpriced_tokens": day_unpriced,
+                "model": _normalize_model_name(dom_model) or dom_model,
+            }
+            sq = score_session_quality(sd)
+            sd["quality_score"] = sq["score"]
+            sd["quality_grade"] = sq["grade"]
+            sd["quality_band"] = sq["band"]
+            d["session_details"].append(sd)
 
     # Sort daily by date descending
     daily_sorted = sorted(daily.values(), key=lambda x: x["date"], reverse=True)
@@ -21803,7 +22615,8 @@ def _collect_trends_from_jsonl(days=30):
     # Build quality trend from computed session scores
     quality_trend = []
     for d_entry in sorted(daily.values(), key=lambda x: x["date"]):
-        scores = [sd["quality_score"] for sd in d_entry["session_details"] if sd.get("quality_score") is not None]
+        scores = [sd["quality_score"] for sd in d_entry["session_details"]
+                  if sd.get("quality_score") is not None and not sd.get("continuation")]
         if scores:
             quality_trend.append({
                 "date": d_entry["date"],
@@ -21969,6 +22782,8 @@ def _build_ttl_period_summary(period_days):
     one_hour_only_sessions = 0
     for day in trends.get("daily", []):
         for session in day.get("session_details", []):
+            if session.get("continuation"):
+                continue
             ttl_1h = session.get("cache_create_1h_tokens", 0) or 0
             ttl_5m = session.get("cache_create_5m_tokens", 0) or 0
             if ttl_1h and ttl_5m:
@@ -23331,6 +24146,7 @@ def _log_settings_lease_denied():
     )
     try:
         DAEMON_LOG_DIR.mkdir(parents=True, exist_ok=True)
+        _cap_append_log(DAEMON_LOG_DIR / "settings-lease-denials.log")
         with open(DAEMON_LOG_DIR / "settings-lease-denials.log", "a",
                   encoding="utf-8") as f:
             f.write("%s lease denied\n" % time.strftime("%Y-%m-%dT%H:%M:%S"))
@@ -24659,6 +25475,33 @@ LOG_DIR = {log_dir_literal}
 # stdout.log / stderr.log trail the .cmd used to provide would vanish -- and a
 # silent daemon death is exactly the failure mode that once looked healthy for
 # two days. Reopen the handles onto the same log files before anything runs.
+LOG_CAP_BYTES = 1048576
+
+
+def _cap_log(path, max_bytes=LOG_CAP_BYTES):
+    """Keep a log under max_bytes by dropping its older half. Truncates in place
+    so a handle another process holds (launchd, the shell redirect) stays valid.
+    Never raises."""
+    try:
+        if os.path.getsize(path) <= max_bytes:
+            return
+        with open(path, "rb") as fh:
+            fh.seek(-(max_bytes // 2), os.SEEK_END)
+            tail = fh.read()
+        nl = tail.find(b"\\n")
+        if 0 <= nl < len(tail) - 1:
+            tail = tail[nl + 1:]
+        with open(path, "r+b") as fh:
+            fh.write(tail)
+            fh.truncate()
+    except OSError:
+        pass
+
+
+# Daemon logs used to grow forever (every traceback, with local paths).
+for _log_name in ("stdout.log", "stderr.log"):
+    _cap_log(os.path.join(LOG_DIR, _log_name))
+
 if sys.stdout is None or sys.stderr is None:
     try:
         os.makedirs(LOG_DIR, exist_ok=True)
@@ -24712,6 +25555,7 @@ REGEN_LOG = os.path.join(os.path.dirname(DASHBOARD), "daemon-regen.log")
 
 def _log_regen(msg):
     """Append a regeneration event. Never raises; the daemon must survive a dead log."""
+    _cap_log(REGEN_LOG)
     try:
         with open(REGEN_LOG, "a", encoding="utf-8") as f:
             f.write("%s %s\\n" % (time.strftime("%Y-%m-%dT%H:%M:%S"), msg))
@@ -24783,6 +25627,7 @@ def _log_reject_regen(path):
             _stale = sorted(_REJECT_LOG_LAST_TS, key=_REJECT_LOG_LAST_TS.get)[:len(_REJECT_LOG_LAST_TS) // 2]
             for _k in _stale:
                 _REJECT_LOG_LAST_TS.pop(_k, None)
+    _cap_log(REGEN_LOG)
     try:
         with open(REGEN_LOG, "a", encoding="utf-8") as f:
             f.write("%s REJECT api/* POST token-mismatch path=%s\\n"
@@ -25112,6 +25957,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return
             # stderr is captured to a log rather than discarded. Swallowing it is what
             # let a dead regeneration look identical to a healthy one for two days.
+            _cap_log(REGEN_LOG)
             errf = open(REGEN_LOG, "a", encoding="utf-8")
             # The regen child is a transient worker (writes the new HTML and
             # exits); it does NOT need to survive the daemon, so DETACHED_PROCESS
@@ -40377,7 +41223,8 @@ def _estimate_compression_cost_per_mtok(model=None):
     try:
         tier = _load_pricing_tier()
         tier_data = PRICING_TIERS.get(tier, PRICING_TIERS.get("anthropic", {}))
-        normalized = (_normalize_model_name(model) if model else None) or _resolve_session_model()
+        normalized = (_claude_price_key(model, tier_data.get("claude_models", {})) if model else None) \
+            or _resolve_session_model()
         rates = tier_data.get("claude_models", {}).get(normalized) \
                 or tier_data.get("claude_models", {}).get("sonnet", {})
         return float(rates.get("input", 3.0))

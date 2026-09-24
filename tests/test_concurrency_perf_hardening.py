@@ -36,7 +36,7 @@ def _generated_src() -> str:
 def _extract(src, names, extra_ns=None):
     ns = {"time": time, "os": os, "_STATE_LOCK": threading.Lock()}
     ns.update(extra_ns or {})
-    for const in ("_REJECT_LOG_LAST_TS", "_REJECT_LOG_MIN_GAP", "_REJECT_LOG_MAX_KEYS"):
+    for const in ("_REJECT_LOG_LAST_TS", "_REJECT_LOG_MIN_GAP", "_REJECT_LOG_MAX_KEYS", "LOG_CAP_BYTES"):
         m = re.search(r"^%s(?::[^=]+)? = .*$" % re.escape(const), src, re.M)
         if m:
             exec(m.group(0), ns)
@@ -81,7 +81,7 @@ def test_transcript_preload_has_size_guard():
 
 def test_reject_throttle_dict_is_bounded():
     src = _generated_src()
-    ns = _extract(src, ["_sanitize_log_path", "_log_reject_regen"])
+    ns = _extract(src, ["_cap_log", "_sanitize_log_path", "_log_reject_regen"])
     import tempfile
 
     ns["REGEN_LOG"] = tempfile.mktemp()

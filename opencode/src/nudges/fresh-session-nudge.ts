@@ -14,7 +14,7 @@
  */
 
 import { contextWindowForModel } from "../util/context-window.js";
-import { DEFAULT_PRICING, normalizeModelName } from "../pricing.js";
+import { claudePricingKey, DEFAULT_PRICING, normalizeModelName, pricedPrefixKey } from "../pricing.js";
 
 // ---------------------------------------------------------------------------
 // Per-model input rates ($/M tokens). Mirrors Python PRICING_TIERS["anthropic"]
@@ -81,6 +81,12 @@ export function modelInputRatePer1M(model?: string): number {
   if (!model) return sonnetRate;
   const lower = model.toLowerCase();
   const canonical = normalizeModelName(model);
+
+  // The shared, auto-refreshed rate table wins, so the nudge's dollars match the
+  // dashboard as prices change. The local map below only covers models that
+  // table does not price.
+  const shared = DEFAULT_PRICING[claudePricingKey(model) ?? pricedPrefixKey(model) ?? canonical];
+  if (shared) return shared.input * 1e6;
 
   const direct = MODEL_INPUT_RATES[canonical] ?? MODEL_INPUT_RATES[lower];
   if (direct !== undefined) return direct;

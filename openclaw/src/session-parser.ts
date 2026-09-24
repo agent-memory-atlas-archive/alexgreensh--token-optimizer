@@ -438,7 +438,9 @@ export function parseSession(
         cacheRead: usage.cacheRead,
         cacheWrite: usage.cacheWrite,
       },
-      normalizedModel,
+      // Raw id, not the family name: calculateCost resolves the generation card
+      // (Opus 5.5 is not priced like Opus 5) and falls back to the family.
+      usage.model || normalizedModel,
       openclawDir,
       {
         cacheWrite1hTokens: usage.cacheWrite1h,
@@ -486,7 +488,7 @@ export function parseSession(
 
   const costUsd = pricedUsageSeen
     ? exactCostUsd
-    : calculateCost(tokens, model, openclawDir, {
+    : calculateCost(tokens, dominantModelRaw || model, openclawDir, {
         cacheWrite1hTokens: totalCacheWrite1h,
         cacheWrite5mTokens: totalCacheWrite5m,
       });
@@ -802,7 +804,7 @@ function parseSessionTurnsFromLines(
       cacheRead,
       cacheWrite: cacheCreation,
     };
-    const costUsd = calculateCost(tokens, model, openclawDir, {
+    const costUsd = calculateCost(tokens, modelRaw || model, openclawDir, {
       cacheWrite1hTokens: cacheWrite1h,
       cacheWrite5mTokens: cacheWrite5m,
     });

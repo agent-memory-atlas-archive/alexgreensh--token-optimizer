@@ -65,10 +65,11 @@ def test_claude_collect_records_platform(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(fake_claude))
 
     # Clear cached modules so env vars take effect on import
-    for mod_name in list(sys.modules):
-        if mod_name in ("measure", "runtime_env", "plugin_env"):
-            sys.modules.pop(mod_name, None)
-    sys.path.insert(0, str(SCRIPTS))
+    # Re-import under the sandbox env; monkeypatch puts the original module
+    # objects back afterwards so later tests never patch a stale runtime_env.
+    for mod_name in ("measure", "runtime_env", "plugin_env"):
+        monkeypatch.delitem(sys.modules, mod_name, raising=False)
+    monkeypatch.syspath_prepend(str(SCRIPTS))
     measure = importlib.import_module("measure")
 
     # Run collection
@@ -201,10 +202,11 @@ def test_backfill_infers_platform_from_jsonl_path(tmp_path, monkeypatch):
     fake_claude.mkdir()
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(fake_claude))
 
-    for mod_name in list(sys.modules):
-        if mod_name in ("measure", "runtime_env", "plugin_env"):
-            sys.modules.pop(mod_name, None)
-    sys.path.insert(0, str(SCRIPTS))
+    # Re-import under the sandbox env; monkeypatch puts the original module
+    # objects back afterwards so later tests never patch a stale runtime_env.
+    for mod_name in ("measure", "runtime_env", "plugin_env"):
+        monkeypatch.delitem(sys.modules, mod_name, raising=False)
+    monkeypatch.syspath_prepend(str(SCRIPTS))
     measure = importlib.import_module("measure")
 
     # Manually create a DB with pre-fix rows (platform IS NULL)

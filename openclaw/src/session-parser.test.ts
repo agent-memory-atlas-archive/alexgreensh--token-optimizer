@@ -23,6 +23,7 @@ import {
   parseSessionTurns,
   extractCostlyPrompts,
 } from "./session-parser";
+import { GENERATED_PRICING } from "./prices.generated";
 
 let dir: string;
 
@@ -131,4 +132,17 @@ test("legacy Claude-Code top-level-type sessions still parse (backward compat)",
   expect(run).not.toBeNull();
   expect(run!.messageCount).toBe(2);
   expect(run!.tokens.output).toBe(120);
+});
+
+test("a generation priced unlike its family (Opus 5.5) is billed at its own card", () => {
+  // Pre-fix the parser priced every turn by family name ("opus"), so the
+  // generation card never applied and Opus 5.5 was billed as Opus 5.
+  const lines = OPENCLAW_LINES.map((l) => JSON.parse(JSON.stringify(l)));
+  (lines[2] as { message: { model: string } }).message.model = "claude-opus-5-5";
+  const p = writeSession("sess-opus55.jsonl", lines);
+  const run = parseSession(p, "agent-a", dir);
+  const card = GENERATED_PRICING["opus-5-5"];
+  const expected = 4200 * card.input + 900 * card.output + 1500 * card.cacheRead;
+  expect(card.input).not.toBe(GENERATED_PRICING["opus"].input);
+  expect(run!.costUsd).toBeCloseTo(expected, 9);
 });

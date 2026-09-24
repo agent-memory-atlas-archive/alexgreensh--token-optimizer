@@ -53,6 +53,7 @@ const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 const os = __importStar(require("os"));
 const session_parser_1 = require("./session-parser");
+const prices_generated_1 = require("./prices.generated");
 let dir;
 (0, bun_test_1.beforeEach)(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), "oc-parser-"));
@@ -150,5 +151,17 @@ const OPENCLAW_LINES = [
     (0, bun_test_1.expect)(run).not.toBeNull();
     (0, bun_test_1.expect)(run.messageCount).toBe(2);
     (0, bun_test_1.expect)(run.tokens.output).toBe(120);
+});
+(0, bun_test_1.test)("a generation priced unlike its family (Opus 5.5) is billed at its own card", () => {
+    // Pre-fix the parser priced every turn by family name ("opus"), so the
+    // generation card never applied and Opus 5.5 was billed as Opus 5.
+    const lines = OPENCLAW_LINES.map((l) => JSON.parse(JSON.stringify(l)));
+    lines[2].message.model = "claude-opus-5-5";
+    const p = writeSession("sess-opus55.jsonl", lines);
+    const run = (0, session_parser_1.parseSession)(p, "agent-a", dir);
+    const card = prices_generated_1.GENERATED_PRICING["opus-5-5"];
+    const expected = 4200 * card.input + 900 * card.output + 1500 * card.cacheRead;
+    (0, bun_test_1.expect)(card.input).not.toBe(prices_generated_1.GENERATED_PRICING["opus"].input);
+    (0, bun_test_1.expect)(run.costUsd).toBeCloseTo(expected, 9);
 });
 //# sourceMappingURL=session-parser.test.js.map

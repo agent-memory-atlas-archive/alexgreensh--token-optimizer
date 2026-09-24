@@ -266,6 +266,12 @@ def test_measure_resolve_copilot_home_wsl_aware_delegates():
     """_resolve_copilot_home_wsl_aware must delegate to runtime_env.copilot_home."""
     import measure  # noqa: E402
 
+    # Patch the runtime_env that measure will import NOW, not the one bound at
+    # collection: other tests re-import it for sandboxing, which swaps the
+    # sys.modules entry and would leave this patch on a stale module.
+    import importlib
+    runtime_env = importlib.import_module("runtime_env")
+
     tmp = Path(tempfile.mkdtemp(prefix="t_measure_deleg_"))
     mnt = _make_mnt_tree(tmp, "mnt")
     copilot_dir = _make_mnt_tree(mnt, "c/Users/asaf/.copilot")

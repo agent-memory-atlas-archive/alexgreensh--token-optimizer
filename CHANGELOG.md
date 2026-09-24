@@ -1,5 +1,64 @@
 # Changelog
 
+## [5.13.22] - 2026-09-25
+
+- Fix: the dashboard's daily cost did not match what the requests actually cost, from four separate
+  causes (issue #200). Measured against an independent per-request reference built from the same
+  transcripts, single days were off by 0.6x to 1.4x before and now match to within a dollar on every
+  settled day.
+  - Duplicate sessions: one session stored under several transcript paths (a git-worktree project
+    dir, a mirror under a sandboxed `CLAUDE_CONFIG_DIR`) was counted once per path, inflating every
+    total 2-3x. Collection now keeps one row per session id (the most complete copy) and existing
+    duplicate rows are collapsed on the next run. Thanks to @asaarela-bw for the report and patch.
+  - Sessions that cross midnight billed every request to their last-active day. Each request is now
+    billed to the local calendar day it ran on, and a multi-day session appears on each day it was
+    active with that day's share.
+  - Subagent spend was left out of cost (it was in the token totals, not the dollars). Daily cost now
+    includes every subagent transcript, priced per model.
+  - A resumed session kept the date it was first seen, so later spend landed on an old day, often
+    outside the window entirely. The session date now follows its latest activity.
+  - One API request written into several of a session's files (the parent and a subagent) was
+    billed once per file. Requests are now merged by request id across every file of a session,
+    and across every copy of it, so copies that diverged lose no spend either. Stored token totals
+    use the same merge, so tokens and dollars agree.
+  - Requests with no usable timestamp are billed to the session's last active day instead of being
+    dropped.
+  Rows collected by older versions are backfilled automatically (time-boxed, no rebuild, savings
+  history untouched). The dashboard's catch-up writes now wait at most ~200 ms for the database
+  and skip when a collector holds it, so a render never stalls behind a flush.
+
+- Fix: Claude Opus 5.5 was priced as Opus 5 ($5/$25) instead of $4/$20 with $0.20 cache reads, and
+  Claude Fable 5.1 cache reads were priced at $1 instead of $0.25. Both now use their own rate cards
+  in every engine (Claude Code, Codex, OpenClaw, OpenCode, fleet auditor). Labels and savings mixes
+  still group them with their family.
+
+- Add: model prices now update themselves. A daily job rebuilds the price table from Anthropic's
+  pricing page and the LiteLLM price feed and ships it in a patch release, so new models (including
+  new Codex/OpenAI and Gemini models) are priced without a manual code change. The plugin itself
+  still makes no network calls: it reads the bundled `pricing/prices.json`. A price moving more than
+  2x, dropping to zero, or disappearing opens a pull request for a human instead of shipping. Set
+  `TOKEN_OPTIMIZER_BUNDLED_PRICES=0` to use only the built-in table.
+
+- Fix: pricing gaps across engines. OpenClaw now applies the Vertex regional +10% to every Claude
+  generation card and bills Gemini requests past 200k prompt tokens at the long-context rate; the
+  fleet auditor prices Codex and Hermes sessions by their exact model id; a transcript record whose
+  model field is not text no longer aborts collection. Claude 3-era ids (`claude-3-5-sonnet-...`,
+  `claude-3-opus-...`, `claude-3-5-haiku-...`) now price at their own rates in every engine instead
+  of the current family card (Sonnet 3.x had dropped to the Sonnet 5 rate in OpenClaw, OpenCode and
+  the fleet auditor).
+
+- Fix: Hermes, Copilot, Cursor, Grok and Antigravity sessions are dated by their last activity, so a
+  resumed chat's spend lands on the day it happened and stays inside the dashboard window.
+
+- Fix: the fleet dashboard server (`fleet.py --serve`) only serves the dashboard page and only to
+  localhost host names, so other files in its folder are not readable from a web page.
+
+- Fix: daemon and hook append logs are capped at 1 MB so they cannot grow without bound.
+
+- Fix: opening the dashboard from a terminal UI (OpenCode's `token_dashboard`) let the browser write
+  its log output into the TUI. The browser opener now runs fully detached with no inherited
+  stdin/stdout/stderr, on every platform path. (issue #199)
+
 ## [5.13.16] - 2026-09-17
 
 - Fix: the Hermes context-fill nudge measured the session-CUMULATIVE input tally instead of the live
