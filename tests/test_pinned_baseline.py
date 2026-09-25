@@ -85,4 +85,21 @@ def test_savings_report_counts_avoided_re_reads(tmp_path, monkeypatch, capsys):
                         lambda days: {"available": True, "reread_tokens": 1_000_000, "reread_usd": 12.5})
     measure.savings_report(days=30)
     out = capsys.readouterr().out
-    assert "Re-reads avoided" in out and "$12.50" in out
+    assert "repeat reads avoided: ~$12.50" in out and "[modeled]" in out
+
+
+def test_tripwire_flags_a_collapse_that_activity_does_not_explain(tmp_path, monkeypatch):
+    measure = _load(tmp_path, monkeypatch)
+    measure.SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+    (measure.SNAPSHOT_DIR / measure._HEADLINE_HISTORY_FILE).write_text(json.dumps(
+        {"d30": [{"date": "2026-01-01", "usd": 515.0, "events": 3600}]}))
+    msg = measure._headline_tripwire(84.0, 3637, 30)
+    assert msg and "$515" in msg and "$84" in msg
+
+
+def test_tripwire_stays_quiet_when_activity_also_fell(tmp_path, monkeypatch):
+    measure = _load(tmp_path, monkeypatch)
+    measure.SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+    (measure.SNAPSHOT_DIR / measure._HEADLINE_HISTORY_FILE).write_text(json.dumps(
+        {"d30": [{"date": "2026-01-01", "usd": 515.0, "events": 3600}]}))
+    assert measure._headline_tripwire(84.0, 900, 30) is None

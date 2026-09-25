@@ -1,5 +1,11 @@
 # Changelog
 
+## [5.13.24] - 2026-09-25
+
+- **Savings report matches the dashboard.** Measured savings, repeat reads avoided, estimates, and one all-in total.
+- **Exact rates for repeat reads** on every model, including Opus 5.5 and Fable 5.1.
+- **Every number checked against known answers** on each release.
+
 ## [5.13.23] - 2026-09-25
 
 - **Full savings in the report.** Measured savings now include the context you no longer re-read on every later turn, often the biggest share.

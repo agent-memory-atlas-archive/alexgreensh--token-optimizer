@@ -1339,6 +1339,8 @@ def _normalize_openai_model_name(model):
     # Every priced id is an alias, longest first so "gpt-5.4-mini" wins over
     # "gpt-5.4" and dated snapshots ("gpt-5.4-2026-03-05") map to their base.
     alias = _match_price_alias(value, OPENAI_MODEL_PRICING)
+    if alias == "gpt-5.6":
+        return "gpt-5.6-sol"  # dated bare-5.6 ids follow the same Sol default
     if alias:
         return alias
     if value == "gpt-5.6" or value.startswith("gpt-5.6-"):
@@ -18840,7 +18842,7 @@ def _counted_walk_transcript(path, collect_markers=False):
     """One pass over a transcript for the counted-cumulative engine.
 
     Returns (turns, compacts, markers):
-      turns   = [(utc-naive datetime, model_norm)] -- parent API calls, deduped
+      turns   = [(utc-naive datetime, raw model id)] -- parent API calls, deduped
                 on requestId/message.id (Claude Code writes one assistant line
                 per content block, all sharing the same usage);
       compacts= [utc-naive datetime] of real compact_boundary system lines;
@@ -18893,7 +18895,11 @@ def _counted_walk_transcript(path, collect_markers=False):
                 seen.add(rid)
                 if dt is None:
                     continue
-                turns.append((dt, _normalize_model_name(msg.get("model"))))
+                # Raw model id: re-reads are priced by generation card
+                # (Opus 5.5 and Fable 5.1 read cache far cheaper than their family).
+                raw_model = msg.get("model")
+                turns.append((dt, raw_model if isinstance(raw_model, str)
+                              and not raw_model.startswith("<") else None))
     except (OSError, PermissionError):
         return [], [], []
     turns.sort(key=lambda x: x[0])
@@ -18912,7 +18918,8 @@ def _counted_score_event(turns, compacts, ev_dt, tokens, tier_data):
     models = tier_data.get("claude_models", {})
 
     def _rate(model, kind, default):
-        r = models.get(model or "") or models.get("sonnet") or {}
+        key = _claude_price_key(model, models) if model else None
+        r = models.get(key or "") or models.get("sonnet") or {}
         return float(r.get(kind, default))
 
     times = [t[0] for t in turns]
@@ -19036,6 +19043,32 @@ def _counted_session_path(conn, session_uuid):
     return None
 
 
+# Bump when the re-read pricing rule changes. Stored rows keep showing their old
+# value until the normal pass re-walks them, so the dashboard never dips to $0.
+# 2: re-reads priced at each turn's exact model card (Opus 5.5, Fable 5.1).
+_COUNTED_PRICING_VERSION = "2"
+_COUNTED_META_PRICING = "counted_pricing_version"
+
+
+def _reprice_counted_rows_once(conn):
+    try:
+        conn.execute("CREATE TABLE IF NOT EXISTS token_optimizer_meta "
+                     "(key TEXT PRIMARY KEY, value TEXT)")
+        row = conn.execute("SELECT value FROM token_optimizer_meta WHERE key = ?",
+                           (_COUNTED_META_PRICING,)).fetchone()
+        if row and row[0] == _COUNTED_PRICING_VERSION:
+            return False
+        conn.execute("UPDATE counted_reread SET transcript_mtime = NULL")
+        conn.execute("DELETE FROM token_optimizer_meta WHERE key IN (?, ?)",
+                     (_COUNTED_META_MARKER_DONE, _COUNTED_META_MARKER_CURSOR))
+        conn.execute("INSERT OR REPLACE INTO token_optimizer_meta (key, value) VALUES (?, ?)",
+                     (_COUNTED_META_PRICING, _COUNTED_PRICING_VERSION))
+        conn.commit()
+        return True
+    except sqlite3.Error:
+        return False
+
+
 def _update_counted_cumulative(conn, max_sessions=_COUNTED_MAX_SESSIONS_PER_PASS,
                                deadline_seconds=_COUNTED_PASS_DEADLINE_SECONDS,
                                quiet=True):
@@ -19058,6 +19091,7 @@ def _update_counted_cumulative(conn, max_sessions=_COUNTED_MAX_SESSIONS_PER_PASS
         stats["duplicate_rows_removed"] = max(0, duplicates.rowcount)
         if duplicates.rowcount:
             conn.commit()
+        _reprice_counted_rows_once(conn)
         events = _counted_candidate_events(conn)
         if not events:
             return stats
@@ -44365,7 +44399,8 @@ def _session_weight_pool_savings(cutoff, days=30, tier=None, activity_window=Non
                     "ORDER BY ym"
                 ).fetchall() if r and r[0]
             ]
-            if len(months) < 2:
+            pinned = _pinned_workload_anchor()
+            if len(months) < 2 and not pinned:
                 return None
             first_day = conn.execute(
                 "SELECT MIN(date) FROM session_log WHERE input_tokens IS NOT NULL "
@@ -44374,7 +44409,6 @@ def _session_weight_pool_savings(cutoff, days=30, tier=None, activity_window=Non
             first_day = str(first_day[0])[:10] if first_day and first_day[0] else None
             this_month = datetime.now().strftime("%Y-%m")
             anchor_month = None
-            pinned = _pinned_workload_anchor()
             for ym in ([] if pinned else months):
                 if ym == this_month:
                     continue  # current month is still accruing
@@ -45868,6 +45902,41 @@ def _live_savings_payload(days=30):
     }
 
 
+_HEADLINE_HISTORY_FILE = "headline_history.json"
+
+
+def _headline_tripwire(measured_usd, events, days):
+    """Flag a measured-savings collapse that activity does not explain.
+
+    Keeps one reading per day. If the measured total fell below half of the
+    most recent earlier reading while the number of savings events stayed at
+    70%+ of it, the likely cause is a calculation change, not less saving, and
+    a message is returned so the report says so instead of quietly shrinking.
+    Returns None otherwise. Never raises."""
+    try:
+        path = SNAPSHOT_DIR / _HEADLINE_HISTORY_FILE
+        hist = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        if not isinstance(hist, dict):
+            hist = {}
+        key = f"d{int(days)}"
+        rows = [r for r in hist.get(key, []) if isinstance(r, dict)]
+        today = datetime.now().strftime("%Y-%m-%d")
+        prior = next((r for r in reversed(rows) if r.get("date") != today), None)
+        rows = [r for r in rows if r.get("date") != today]
+        rows.append({"date": today, "usd": round(float(measured_usd), 2), "events": int(events)})
+        hist[key] = rows[-14:]
+        _write_baseline_state(path, hist)
+        if (prior and float(prior.get("usd") or 0) >= 20
+                and measured_usd < 0.5 * float(prior["usd"])
+                and events >= 0.7 * int(prior.get("events") or 0)):
+            return (f"Measured savings fell from ${float(prior['usd']):,.0f} ({prior['date']}) to "
+                    f"${measured_usd:,.0f} while activity held steady. That usually means a "
+                    f"calculation change, not less saving. Please report it.")
+    except Exception:
+        pass
+    return None
+
+
 def _reread_savings_for_window(days):
     """Re-read savings (removed context not re-read on later turns) for the last
     `days`; {} when the counted ledger is unavailable. Never raises."""
@@ -46064,20 +46133,20 @@ def savings_report(days=30, as_json=False):
     total_events = summary.get("total_events", 0)
     total_tokens = summary.get("total_tokens", 0)
     total_cost = summary.get("total_cost_usd", 0.0)
-    # Removed context stays out on every later turn until compaction; those
-    # avoided re-reads are metered per turn from the transcripts.
+    # Removed context stays out on every later turn until compaction. Those
+    # avoided re-reads are the "modeled" tier, the same one the dashboard's
+    # Savings tab shows as repeat reads avoided.
     rr = summary.get("reread_avoided") or {}
     rr_usd = float(rr.get("reread_usd", 0.0) or 0.0)
-    if rr_usd > 0:
-        rr_tok = int(rr.get("reread_tokens", 0) or 0)
-        print(f"  {'Re-reads avoided':<28s} {'':>8s} {rr_tok:>14,} {'$' + f'{rr_usd:.2f}':>11s}")
-        print(f"  {'-' * 25}  {'-' * 8}  {'-' * 14}  {'-' * 11}")
-        total_tokens += rr_tok
-        total_cost += rr_usd
-    daily_avg = summary.get("daily_avg_usd", 0.0) + rr_usd / max(days, 1)
+    daily_avg = summary.get("daily_avg_usd", 0.0)
     est_monthly = daily_avg * 30
 
     print(f"  {'TOTAL (measured)':<28s} {total_events:>8,} {total_tokens:>14,} {'$' + f'{total_cost:.2f}':>11s}")
+    trip = _headline_tripwire(total_cost + rr_usd, total_events, days)
+    if trip:
+        print()
+        for line in textwrap.wrap("CHECK: " + trip, width=72):
+            print(f"  {line}")
     print()
     print(f"  Daily average: ${daily_avg:.2f} saved (measured)")
     if run_rate:
@@ -46094,12 +46163,19 @@ def savings_report(days=30, as_json=False):
         c_share = routing.get("current_opus_share", 0.0) * 100
         print(f"  + model routing (realized): ~${r_monthly:.2f}{per} "
               f"(Opus {b_share:.0f}% -> {c_share:.0f}% vs baseline) [measured]")
+    all_in = _mo(total_cost + routing_realized)
+    if rr_usd > 0:
+        all_in += _mo(rr_usd)
+        print(f"  + repeat reads avoided: ~${_mo(rr_usd):.2f}{per} "
+              f"({int(rr.get('reread_tokens', 0) or 0):,} tokens of removed context not re-read "
+              f"before the next compaction) [modeled]")
 
     # Estimated tier — uncaptured runtime (sub-agent compression not attributed).
     uncaptured = summary.get("uncaptured_runtime") or {}
     unc_cost = float(uncaptured.get("cost_saved_usd", 0.0) or 0.0)
     if unc_cost > 0:
         unc_monthly = _mo(unc_cost)
+        all_in += unc_monthly
         print(f"  + est. uncaptured runtime: ~${unc_monthly:.2f}{per} "
               f"(sub-agent compression, {uncaptured.get('subagent_dispatches', 0):,} dispatches) [estimated]")
 
@@ -46108,6 +46184,7 @@ def savings_report(days=30, as_json=False):
     beh_cost = float(behavioral.get("cost_saved_usd", 0.0) or 0.0)
     if beh_cost > 0:
         beh_monthly = _mo(beh_cost)
+        all_in += beh_monthly
         print(f"  + est. behavioral (loops prevented): ~${beh_monthly:.2f}{per} "
               f"({behavioral.get('loop_events', 0)} loops caught, repeated ~{behavioral.get('prevented_iterations', 0)}x "
               f"before catch; avoided continuation estimated at one more span) [estimated]")
@@ -46121,6 +46198,7 @@ def savings_report(days=30, as_json=False):
     mce_cost = float(mcp_cap_est.get("cost_saved_usd", 0.0) or 0.0)
     if mce_cost > 0:
         mce_monthly = _mo(mce_cost)
+        all_in += mce_monthly
         print(f"  + est. MCP output cap: ~${mce_monthly:.2f}{per} "
               f"({mcp_cap_est.get('events', 0)} capped MCP results) [estimated]")
 
@@ -46130,6 +46208,7 @@ def savings_report(days=30, as_json=False):
     rle_cost = float(rl_est.get("cost_saved_usd", 0.0) or 0.0)
     if rle_cost > 0:
         rle_monthly = _mo(rle_cost)
+        all_in += rle_monthly
         print(f"  + est. lean resumes: ~${rle_monthly:.2f}{per} "
               f"({rl_est.get('events', 0)} cold-resume reloads avoided) [estimated]")
 
@@ -46137,6 +46216,7 @@ def savings_report(days=30, as_json=False):
     ce = summary.get("contamination_exit") or {}
     if float(ce.get("cost_saved_usd", 0.0) or 0.0) > 0:
         ce_monthly = _mo(ce["cost_saved_usd"])
+        all_in += ce_monthly
         print(f"  + est. avoided rework (heeded nudges): ~${ce_monthly:.2f}{per} "
               f"({ce.get('heeded_sessions', 0)} heeded vs {ce.get('ignored_sessions', 0)} ignored, "
               f"~{ce.get('delta_tokens_per_session', 0):,} tok/session less rework, "
@@ -46146,9 +46226,12 @@ def savings_report(days=30, as_json=False):
     hr = summary.get("handover_rerun") or {}
     if float(hr.get("cost_saved_usd", 0.0) or 0.0) > 0:
         hr_monthly = _mo(hr["cost_saved_usd"])
+        all_in += hr_monthly
         print(f"  + est. avoided rework (continuity handover): ~${hr_monthly:.2f}{per} "
               f"({hr.get('restored_sessions', 0)} restored vs {hr.get('baseline_sessions', 0)} baseline, "
               f"confidence: {hr.get('confidence', '?')}) [estimated]")
+
+    print(f"  = ALL IN: ~${all_in:.2f}{per} (measured + modeled + estimated)")
 
     # Informational (not summed): one-time first-trim + progressive disclosure.
     one_time = summary.get("one_time_setup") or {}

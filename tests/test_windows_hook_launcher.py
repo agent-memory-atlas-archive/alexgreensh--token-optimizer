@@ -453,11 +453,17 @@ def test_foreign_hook_referencing_runtime_root_is_never_touched(monkeypatch):
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="cmd.exe semantics are Windows-only")
-def test_windows_versioned_hook_executes_through_comspec(monkeypatch, tmp_path):
+@pytest.mark.parametrize("install_dir", [
+    "plugin space & (test) ! apostrophe'",
+    # No whitespace: list2cmdline leaves such a token unquoted, and cmd then
+    # split the path at the & (shipped once, v5.13.15).
+    "nospace&amp^caret(x)!",
+])
+def test_windows_versioned_hook_executes_through_comspec(monkeypatch, tmp_path, install_dir):
     """Windows execution proof: run the emitted raw /C command under the
     actual cmd.exe, with path/argv/env metacharacters and an upgrade."""
     module = _load_codex_install(monkeypatch, "win32")
-    base = tmp_path / "plugin space & (test) ! apostrophe'" / "token-optimizer"
+    base = tmp_path / install_dir / "token-optimizer"
     for version in ("5.11.75", "5.11.76"):
         _make_fake_runner(base / version)
     _install_test_launcher(base)
