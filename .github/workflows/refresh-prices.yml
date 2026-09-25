@@ -105,16 +105,21 @@ jobs:
           import cowork_install
           cowork_install.build_committed_plugin(Path(".").resolve())
           PY
-          python3 - "$VERSION" "$RUNNER_TEMP/prices-summary.md" <<'PY'
+          python3 - "$VERSION" "$RUNNER_TEMP/prices-summary.md" "$RUNNER_TEMP/release-notes.md" <<'PY'
           import sys, datetime
           from pathlib import Path
-          version, summary = sys.argv[1], Path(sys.argv[2]).read_text()
-          changes = [l for l in summary.splitlines() if l.startswith("- ") and ":" in l and "->" in l]
-          entry = [f"## [{version}] - {datetime.date.today().isoformat()}", "",
-                   "- Prices: automatic refresh of the model price table from the providers' published rates."]
-          entry += [f"  {c}" for c in changes[:40]]
-          if len(changes) > 40:
-              entry.append(f"  - ...and {len(changes) - 40} more")
+          version, summary, notes_path = sys.argv[1], Path(sys.argv[2]).read_text(), Path(sys.argv[3])
+          # Release notes stay one line: which models got current prices, by name.
+          models = []
+          for l in summary.splitlines():
+              if l.startswith("- ") and "->" in l and "." in l.split(":")[0]:
+                  name = l[2:].split(":")[0].split(".", 1)[1]
+                  if name not in models:
+                      models.append(name)
+          shown = ", ".join(models[:8]) + (f" and {len(models) - 8} more" if len(models) > 8 else "")
+          line = f"- Up-to-date model prices: {shown}."
+          notes_path.write_text(line + "\n")
+          entry = [f"## [{version}] - {datetime.date.today().isoformat()}", "", line]
           path = Path("CHANGELOG.md")
           text = path.read_text()
           head = "# Changelog\n\n"
@@ -134,7 +139,7 @@ jobs:
             git push --atomic origin HEAD:main "refs/tags/$TAG"
           fi
           gh release view "$TAG" >/dev/null 2>&1 \
-            || gh release create "$TAG" --title "$TAG" --notes-file "$RUNNER_TEMP/prices-summary.md"
+            || gh release create "$TAG" --title "$TAG" --notes-file "$RUNNER_TEMP/release-notes.md"
           gh workflow run sign-release.yml -f tag="$TAG"
           echo "Released $TAG and dispatched signing."
 
