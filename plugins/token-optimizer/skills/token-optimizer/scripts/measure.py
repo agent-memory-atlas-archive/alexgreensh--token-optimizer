@@ -21741,6 +21741,10 @@ def collect_sessions(days=90, quiet=False, rebuild=False):
         _backfill_daily_usage(conn, days=min(days, 90), budget_seconds=10.0)
     except Exception:
         pass
+    try:
+        _pretool_anchor_step(budget_seconds=5.0)
+    except Exception:
+        pass
 
     # Keep the counted-cumulative ledger fresh in the SAME bounded
     # collect pass (never at dashboard-regen time). Both helpers carry their
@@ -41512,8 +41516,11 @@ def runway_snapshot(days=30, now=None):
                 # trigger is counterfactual even though the magnitude is metered.
                 ctx += est_add
                 est_added = est_add > 0.0
-                if wdays == 7 and weekly_full:
-                    ctx, rt = weekly_full["saved_usd"], 0.0
+                # The full-workload figure replaces the metered sum only when it
+                # is larger: a flat or negative workload month must never hide
+                # savings that were actually measured this week.
+                if wdays == 7 and weekly_full and float(weekly_full.get("saved_usd") or 0.0) > ctx + rt:
+                    ctx, rt = float(weekly_full["saved_usd"]), 0.0
                     est_added = True
                 _overage_cache[cache_key] = (ctx, rt, repriced, counted_window, est_added)
             ctx, rt, repriced, counted_window, est_added = _overage_cache[cache_key]
@@ -44163,6 +44170,128 @@ def _price_parent_rows(rows, tier):
             "flat_usd": flat_usd, "api_calls": api_calls, "messages": messages}
 
 
+_PRETOOL_ANCHOR_FILE = "workload_anchor_pretool.json"
+
+
+def _pinned_workload_anchor():
+    """This user's pinned pre-install workload anchor, or None until built.
+
+    Built once from the user's OWN baseline window (baseline_state.json, the
+    sessions before Token Optimizer was installed), so every user is compared
+    against their own starting point, never a fixed calendar month."""
+    try:
+        path = SNAPSHOT_DIR / _PRETOOL_ANCHOR_FILE
+        if not path.exists():
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+        m = data.get("metrics") if isinstance(data, dict) else None
+        if (data.get("status") == "pinned" and isinstance(m, dict)
+                and data.get("rates") == _WEIGHT_POOL_FLAT_RATES
+                and all(isinstance(m.get(k), (int, float)) and math.isfinite(m[k]) and m[k] >= 0
+                        for k in ("sessions", "usd", "tokens", "flat_usd", "api_calls", "messages"))
+                and m["sessions"] >= _SESSION_WEIGHT_MIN_ANCHOR_SESSIONS
+                and m["api_calls"] > 0 and m["flat_usd"] > 0):
+            return {"metrics": m, "label": str(data.get("label") or "your pre-install baseline")}
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
+    return None
+
+
+def _pretool_window():
+    """(start, end) dates of this user's frozen pre-install baseline window."""
+    try:
+        data = json.loads((SNAPSHOT_DIR / "baseline_state.json").read_text(encoding="utf-8"))
+        w = data.get("window") or {}
+        start, end = str(w.get("start") or "")[:10], str(w.get("end") or "")[:10]
+        datetime.strptime(start, "%Y-%m-%d")
+        datetime.strptime(end, "%Y-%m-%d")
+        return (start, end) if start <= end else None
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
+
+
+def _pretool_anchor_step(budget_seconds=5.0, tier=None):
+    """Build the pinned pre-install anchor a few transcripts at a time.
+
+    The ledger keeps a rolling window, so the months before install age out of
+    it; their transcripts usually remain on disk. Each call prices up to
+    `budget_seconds` of them with the same ruler as the live pool and banks
+    running sums, then pins the result once the window is done. A window with
+    too few surviving transcripts is marked unavailable, so the check stops.
+    Returns the state string. Never raises.
+    """
+    path = SNAPSHOT_DIR / _PRETOOL_ANCHOR_FILE
+    try:
+        state = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        if not isinstance(state, dict):
+            state = {}
+        if state.get("status") in ("pinned", "unavailable"):
+            return state["status"]
+        window = _pretool_window()
+        if not window:
+            return "no_baseline"
+        if tier is None:
+            tier = _load_pricing_tier()
+        start, end = window
+        if state.get("window") != [start, end] or state.get("rates") != _WEIGHT_POOL_FLAT_RATES:
+            state = {"status": "building", "window": [start, end], "rates": _WEIGHT_POOL_FLAT_RATES,
+                     "cursor": 0, "seen": [],
+                     "metrics": {"sessions": 0, "usd": 0.0, "tokens": 0.0, "flat_usd": 0.0,
+                                 "api_calls": 0, "messages": 0}}
+        age_days = (datetime.now() - datetime.strptime(start, "%Y-%m-%d")).days + 1
+        files = sorted(
+            str(f) for f, mtime, _proj in _find_all_jsonl_files(days=age_days)
+            if start <= datetime.fromtimestamp(mtime).strftime("%Y-%m-%d") <= end)
+        seen = set(state["seen"])
+        deadline = time.monotonic() + budget_seconds
+        cursor = int(state.get("cursor") or 0)
+        while cursor < len(files) and time.monotonic() < deadline:
+            fp = files[cursor]
+            cursor += 1
+            uuid = _canonical_session_uuid(fp) or fp
+            if uuid in seen:
+                continue  # another copy of a session already priced
+            seen.add(uuid)
+            row = _pretool_session_row(fp)
+            priced = _price_parent_rows([row], tier) if row else None
+            if priced:
+                for k in state["metrics"]:
+                    state["metrics"][k] += priced[k]
+        state["cursor"], state["seen"] = cursor, sorted(seen)
+        if cursor >= len(files):
+            m = state["metrics"]
+            ok = m["sessions"] >= _SESSION_WEIGHT_MIN_ANCHOR_SESSIONS and m["api_calls"] > 0 and m["flat_usd"] > 0
+            state = {"status": "pinned" if ok else "unavailable", "window": [start, end],
+                     "rates": _WEIGHT_POOL_FLAT_RATES, "metrics": m,
+                     "label": f"your pre-install baseline ({start} to {end})",
+                     "pinned_at": datetime.now().isoformat()}
+        _write_baseline_state(path, state)
+        return state["status"]
+    except Exception:
+        return "error"
+
+
+def _pretool_session_row(filepath):
+    """One transcript as a session_log-shaped row for _price_parent_rows: the
+    same totals collect would store (subagents merged by requestId)."""
+    parsed = _parse_session_jsonl(filepath)
+    if not parsed or not parsed.get("api_calls"):
+        return None
+    subs = _session_subagent_files(filepath)
+    merged = _session_merged_requests(filepath, parsed, subs) if subs else None
+    if merged:
+        inp = sum(int(u.get("inp") or 0) + int(u.get("cr") or 0) + int(u.get("cc") or 0) for u in merged.values())
+        out = sum(int(u.get("out") or 0) for u in merged.values())
+        cc5 = sum(int(u.get("cc_5m") or 0) for u in merged.values())
+        cc1 = sum(int(u.get("cc_1h") or 0) for u in merged.values())
+    else:
+        inp, out = parsed.get("total_input_tokens") or 0, parsed.get("total_output_tokens") or 0
+        cc5, cc1 = parsed.get("total_cache_create_5m") or 0, parsed.get("total_cache_create_1h") or 0
+    return (inp, out, cc5, cc1, parsed.get("cache_hit_rate") or 0.0,
+            json.dumps(parsed.get("model_usage") or {}), None,
+            parsed.get("api_calls") or 0, parsed.get("message_count") or 0)
+
+
 def _stable_workload_anchor(before, month):
     """Keep the existing workload comparison stable during session refreshes."""
     path = SNAPSHOT_DIR / "workload_anchor.json"
@@ -44170,24 +44299,26 @@ def _stable_workload_anchor(before, month):
         if path.exists():
             frozen = json.loads(path.read_text(encoding="utf-8"))
             metrics = frozen.get("metrics") if isinstance(frozen, dict) else None
-            if (isinstance(metrics, dict) and frozen.get("month") == month
+            # Keep the frozen month even after retention prunes it from the ledger:
+            # the earliest month left later is closer to (or after) install, so
+            # sliding forward would compare the tool against itself. Only a month
+            # EARLIER than the frozen one (a history backfill) re-anchors.
+            if (isinstance(metrics, dict) and str(frozen.get("month") or "") <= month
                     and frozen.get("rates") == _WEIGHT_POOL_FLAT_RATES
                     and all(isinstance(metrics.get(k), (int, float))
                             and math.isfinite(metrics[k]) and metrics[k] >= 0
                             for k in ("sessions", "usd", "tokens", "flat_usd", "api_calls", "messages"))
                     and metrics["sessions"] >= _SESSION_WEIGHT_MIN_ANCHOR_SESSIONS
                     and metrics["api_calls"] > 0 and metrics["flat_usd"] > 0):
-                return metrics
-            # Backfill/rebuild can change the earliest covered month. Re-anchor
-            # from the same shared population instead of permanently hiding it.
+                return metrics, str(frozen["month"])
         if (before and before["sessions"] >= _SESSION_WEIGHT_MIN_ANCHOR_SESSIONS
                 and before["api_calls"] > 0 and before["flat_usd"] > 0):
             _write_baseline_state(path, {"month": month, "metrics": before,
                                         "rates": _WEIGHT_POOL_FLAT_RATES,
                                         "captured_at": datetime.now().isoformat()})
-        return before
+        return before, month
     except (OSError, ValueError, TypeError):
-        return None
+        return None, month
 
 
 def _session_weight_pool_savings(cutoff, days=30, tier=None, activity_window=None):
@@ -44243,7 +44374,8 @@ def _session_weight_pool_savings(cutoff, days=30, tier=None, activity_window=Non
             first_day = str(first_day[0])[:10] if first_day and first_day[0] else None
             this_month = datetime.now().strftime("%Y-%m")
             anchor_month = None
-            for ym in months:
+            pinned = _pinned_workload_anchor()
+            for ym in ([] if pinned else months):
                 if ym == this_month:
                     continue  # current month is still accruing
                 # Skip a first month the ledger only partially covers, or its
@@ -44252,11 +44384,14 @@ def _session_weight_pool_savings(cutoff, days=30, tier=None, activity_window=Non
                     continue
                 anchor_month = ym
                 break
-            if not anchor_month:
-                return None
-            before = _price_parent_window(
-                conn, "AND date LIKE ?", (anchor_month + "%",), tier)
-            before = _stable_workload_anchor(before, anchor_month)
+            if pinned:
+                before, anchor_month = pinned["metrics"], pinned["label"]
+            else:
+                if not anchor_month:
+                    return None
+                before = _price_parent_window(
+                    conn, "AND date LIKE ?", (anchor_month + "%",), tier)
+                before, anchor_month = _stable_workload_anchor(before, anchor_month)
             now = (_price_parent_activity_window(conn, *activity_window, tier)
                    if activity_window else
                    _price_parent_window(conn, "AND date >= ?", (cutoff,), tier))
@@ -44332,8 +44467,9 @@ def _session_weight_pool_savings(cutoff, days=30, tier=None, activity_window=Non
             "that extra capacity is real, but it is capacity gained, not dollars saved, "
             "so it is not in the headline. Model price/mix drift worth about "
             "${drift:,.0f}/mo is also excluded: it would have happened without Token "
-            "Optimizer. The anchor month already had partial Token Optimizer coverage, "
-            "so if anything this understates the full pre-tool gap."
+            "Optimizer."
+            + ("" if pinned else " The anchor month already had partial Token Optimizer "
+               "coverage, so if anything this understates the full pre-tool gap.")
         ).format(units=n_units,
                  unit_label="API calls" if unit == "api_call" else "messages",
                  unit_singular="API call" if unit == "api_call" else "message",
@@ -44446,7 +44582,7 @@ def _weekly_full_savings(resets_at=None, now=None):
                 if (0 <= age < 60 and cached["start"] == start.isoformat()
                         and cached["anchor_stamp"] == anchor_stamp
                         and cached["version"] == TOKEN_OPTIMIZER_VERSION):
-                    return cached["value"]
+                    return _positive_full_value(cached["value"])
             except (OSError, ValueError, TypeError, KeyError):
                 pass
         pool = _session_weight_pool_savings(
@@ -44469,8 +44605,18 @@ def _weekly_full_savings(resets_at=None, now=None):
                     "version": TOKEN_OPTIMIZER_VERSION, "value": value})
             except OSError:
                 pass
-        return value
+        return _positive_full_value(value)
     except (OSError, sqlite3.Error, ValueError, TypeError, KeyError):
+        return None
+
+
+def _positive_full_value(value):
+    """The whole-workload weekly figure only stands in for the metered savings
+    when it found something; a flat or negative week (heavier models, bigger
+    contexts) falls back to what was actually measured instead of showing $0."""
+    try:
+        return value if float((value or {}).get("saved_usd") or 0.0) > 0 else None
+    except (TypeError, ValueError):
         return None
 
 
@@ -45722,6 +45868,23 @@ def _live_savings_payload(days=30):
     }
 
 
+def _reread_savings_for_window(days):
+    """Re-read savings (removed context not re-read on later turns) for the last
+    `days`; {} when the counted ledger is unavailable. Never raises."""
+    try:
+        if not TRENDS_DB.exists():
+            return {}
+        conn = _init_trends_db()
+        try:
+            end = datetime.now(timezone.utc).replace(tzinfo=None)
+            out = _counted_window_summary(conn, end - timedelta(days=days), end)
+        finally:
+            conn.close()
+        return out if out.get("available") else {}
+    except Exception:
+        return {}
+
+
 def savings_report(days=30, as_json=False):
     """Display cumulative savings from Token Optimizer actions.
 
@@ -45732,6 +45895,7 @@ def savings_report(days=30, as_json=False):
     savings_events; v5 categories authoritative in compression_events.
     """
     summary = _get_merged_savings(days=days)
+    summary["reread_avoided"] = _reread_savings_for_window(days)
 
     if as_json:
         print(json.dumps(summary, indent=2))
@@ -45830,10 +45994,11 @@ def savings_report(days=30, as_json=False):
         # Silence here is what made "no savings" indistinguishable from "broke".
         print()
         print("  YOUR TRANSFORMATION: none to headline this period")
-        print(f"    Recent work costs about what the baseline would have "
+        print(f"    Each request now carries more context than at your baseline "
               f"(est. ${ba.get('actual_monthly_usd', 0):,.0f}/mo now vs "
-              f"${ba.get('counterfactual_monthly_usd', 0):,.0f}/mo the old way). "
-              f"The directly-metered savings below still counted.")
+              f"${ba.get('counterfactual_monthly_usd', 0):,.0f}/mo at the baseline's cost "
+              f"per request), so there is no whole-workload saving to headline. "
+              f"The measured savings below are real and counted.")
 
     pricing = summary.get("pricing_detail") or {}
     p_model = pricing.get("model", "sonnet")
@@ -45899,7 +46064,17 @@ def savings_report(days=30, as_json=False):
     total_events = summary.get("total_events", 0)
     total_tokens = summary.get("total_tokens", 0)
     total_cost = summary.get("total_cost_usd", 0.0)
-    daily_avg = summary.get("daily_avg_usd", 0.0)
+    # Removed context stays out on every later turn until compaction; those
+    # avoided re-reads are metered per turn from the transcripts.
+    rr = summary.get("reread_avoided") or {}
+    rr_usd = float(rr.get("reread_usd", 0.0) or 0.0)
+    if rr_usd > 0:
+        rr_tok = int(rr.get("reread_tokens", 0) or 0)
+        print(f"  {'Re-reads avoided':<28s} {'':>8s} {rr_tok:>14,} {'$' + f'{rr_usd:.2f}':>11s}")
+        print(f"  {'-' * 25}  {'-' * 8}  {'-' * 14}  {'-' * 11}")
+        total_tokens += rr_tok
+        total_cost += rr_usd
+    daily_avg = summary.get("daily_avg_usd", 0.0) + rr_usd / max(days, 1)
     est_monthly = daily_avg * 30
 
     print(f"  {'TOTAL (measured)':<28s} {total_events:>8,} {total_tokens:>14,} {'$' + f'{total_cost:.2f}':>11s}")
@@ -50305,6 +50480,11 @@ if __name__ == "__main__":
             usage_trends(days=days, as_json=output_json)
         else:
             savings_report(days=days, as_json=output_json)
+    elif args[0] == "pin-baseline":
+        status = "building"
+        while status == "building":
+            status = _pretool_anchor_step(budget_seconds=30.0)
+        print(f"Pre-install baseline: {status}")
     elif args[0] == "skill" and len(args) >= 3:
         action = args[1]  # archive or restore
         name = args[2]

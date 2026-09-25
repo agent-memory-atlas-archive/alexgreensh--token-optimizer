@@ -1,5 +1,11 @@
 # Changelog
 
+## [5.13.23] - 2026-09-25
+
+- **Full savings in the report.** Measured savings now include the context you no longer re-read on every later turn, often the biggest share.
+- **Your own baseline, pinned.** Savings compare against your sessions from before you installed Token Optimizer, and that baseline no longer drifts as old history ages out.
+- **Weekly card always shows what was measured.**
+
 ## [5.13.22] - 2026-09-25
 
 - **Accurate daily cost.** Each day on the dashboard shows exactly what that day's requests cost, subagents included. Thanks @asaarela-bw (#200).

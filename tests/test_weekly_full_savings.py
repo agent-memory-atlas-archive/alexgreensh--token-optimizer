@@ -129,9 +129,9 @@ def test_child_growth_refresh_does_not_double_count_cached_parent(measure, monke
 def test_collection_catchup_cannot_move_workload_anchor(measure, monkeypatch):
     monkeypatch.setattr(measure,'_SESSION_WEIGHT_MIN_ANCHOR_SESSIONS',2)
     original=dict(sessions=2,usd=10,tokens=10000,flat_usd=12,api_calls=10,messages=12)
-    assert measure._stable_workload_anchor(original,'2026-06')==original
+    assert measure._stable_workload_anchor(original,'2026-06')==(original,'2026-06')
     refreshed=dict(original,flat_usd=100,api_calls=15)
-    assert measure._stable_workload_anchor(refreshed,'2026-06')==original
+    assert measure._stable_workload_anchor(refreshed,'2026-06')==(original,'2026-06')
     assert json.loads((measure.SNAPSHOT_DIR/'workload_anchor.json').read_text())['metrics']==original
 
 
@@ -140,19 +140,28 @@ def _isolate_activity_discovery(measure, monkeypatch):
     monkeypatch.setattr(measure, '_find_all_jsonl_files', lambda days: [])
 
 
-@pytest.mark.parametrize('change', ['older_month', 'rebuilt_month', 'rates', 'bad_shape'])
+@pytest.mark.parametrize('change', ['older_month', 'rates', 'bad_shape'])
 def test_anchor_recovers_when_history_or_rates_change(measure, monkeypatch, change):
     monkeypatch.setattr(measure, '_SESSION_WEIGHT_MIN_ANCHOR_SESSIONS', 2)
     old = dict(sessions=2, usd=10, tokens=10000, flat_usd=12, api_calls=10, messages=12)
     measure._stable_workload_anchor(old, '2026-07')
-    month = {'older_month': '2026-06', 'rebuilt_month': '2026-08'}.get(change, '2026-07')
+    month = {'older_month': '2026-06'}.get(change, '2026-07')
     if change == 'rates':
         monkeypatch.setattr(measure, '_WEIGHT_POOL_FLAT_RATES', dict(measure._WEIGHT_POOL_FLAT_RATES, input=4))
     if change == 'bad_shape':
         (measure.SNAPSHOT_DIR / 'workload_anchor.json').write_text('[]')
     updated = dict(old, flat_usd=20)
-    assert measure._stable_workload_anchor(updated, month) == updated
+    assert measure._stable_workload_anchor(updated, month) == (updated, month)
     assert json.loads((measure.SNAPSHOT_DIR / 'workload_anchor.json').read_text())['month'] == month
+
+
+def test_anchor_never_slides_to_a_later_month(measure, monkeypatch):
+    """Retention pruning leaves a later earliest-month; comparing against it
+    would measure the tool against itself."""
+    monkeypatch.setattr(measure, '_SESSION_WEIGHT_MIN_ANCHOR_SESSIONS', 2)
+    old = dict(sessions=2, usd=10, tokens=10000, flat_usd=12, api_calls=10, messages=12)
+    measure._stable_workload_anchor(old, '2026-07')
+    assert measure._stable_workload_anchor(dict(old, flat_usd=20), '2026-08') == (old, '2026-07')
 
 
 def _pool(saving=50):
@@ -183,11 +192,14 @@ def test_missing_reset_does_not_claim_an_exact_week(measure, monkeypatch):
     assert measure._weekly_full_savings() is None
 
 
-def test_nonpositive_full_result_does_not_fall_back_to_positive_components(measure, monkeypatch):
+def test_flat_full_workload_week_still_shows_measured_savings(measure, monkeypatch):
+    """A week whose whole workload got heavier (bigger models, bigger contexts)
+    must not hide the savings that were actually measured that week."""
     _wire(measure, monkeypatch, resume_lean_usd=30)
-    monkeypatch.setattr(measure, '_weekly_full_savings', lambda **kw: {'saved_usd': 0})
+    monkeypatch.setattr(measure, '_weekly_full_savings',
+                        lambda **kw: measure._positive_full_value({'saved_usd': 0}))
     snap = measure.runway_snapshot()
-    assert snap['saved_usd_context'] + snap['saved_usd_routing'] == 0
+    assert snap['saved_usd_context'] + snap['saved_usd_routing'] > 0
 
 
 def test_new_uncollected_activity_is_included(measure, monkeypatch, tmp_path):
