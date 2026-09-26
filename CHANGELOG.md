@@ -5,6 +5,7 @@
 - Add opt-in native Pi diagnostics, active-branch usage, local archives, and review-before-use continuity checkpoints.
 - Keep OpenCode and OpenClaw core version labels aligned with the release. Fixes #201.
 - Protect Pi's local data from shared directories and symlinked files, reject authorization and cookie headers in archives, and keep optional checkpoint failures from interrupting compaction.
+- Bound Pi archives to 1,024 files and pin OpenCode's transitive TOML parser to a patched release.
 
 ## [5.13.24] - 2026-09-25
 
