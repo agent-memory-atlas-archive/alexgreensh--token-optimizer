@@ -95,6 +95,19 @@ test('native compaction candidates require review and bind to session and active
  assert.equal(handlers.before_agent_start({},ctx),undefined);
  ctx.sessionManager.getSessionId=saved;
 });
+test('checkpoint storage failure cannot interrupt native compaction',()=>{
+ saveSettings({enabled:true,archiveToolOutput:false,continuity:true,retainDays:7},root);
+ const path=join(root,'checkpoints');
+ rmSync(path,{recursive:true,force:true});
+ writeFileSync(path,'not a directory');
+ const event={branchEntries:[entry('checkpoint-error',null,'message',{role:'user',content:'Goal: keep working'})]};
+ const warnings=notices.filter(n=>n.msg.includes('checkpoint unavailable')).length;
+ assert.doesNotThrow(()=>handlers.session_before_compact(event,ctx));
+ assert.equal(notices.filter(n=>n.msg.includes('checkpoint unavailable')).length,warnings+1);
+ assert.doesNotThrow(()=>handlers.session_before_compact(event,ctx));
+ assert.equal(notices.filter(n=>n.msg.includes('checkpoint unavailable')).length,warnings+1);
+ rmSync(path);
+});
 test('disabled continuity filters old injected markers from model context',()=>{
  saveSettings({enabled:false,archiveToolOutput:false,continuity:false,retainDays:7},root);
  const old={role:'custom',customType:'token-optimizer-continuity',content:'Goal: old',display:false};

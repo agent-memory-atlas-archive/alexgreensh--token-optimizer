@@ -14,27 +14,36 @@ export default function tokenOptimizer(pi: ExtensionAPI): void {
   let calls: string[] = [];
   let lastNudge = 0;
   let archiveWarningSent = false;
+  let checkpointWarningSent = false;
   let pendingCheckpoint: { content: string; session: string; leaf: string; approved: boolean } | undefined;
   const validPending = (ctx: { sessionManager: { getSessionId(): string; getBranch(): unknown[] } }) => pendingCheckpoint?.session === ctx.sessionManager.getSessionId() && (ctx.sessionManager.getBranch() as Entry[]).some(e => e.id === pendingCheckpoint?.leaf);
   const seenResults = new Set<string>();
   const readCache = new ReadCache();
   const fingerprint = (path: string): string | undefined => { try { const s = statSync(path); return `${s.dev}:${s.ino}:${s.size}:${s.mtimeMs}`; } catch { return; } };
   const snapshot = (ctx: { sessionManager: { getBranch(): unknown[] }; modelRegistry: { find(provider: string, model: string): { cost: { input: number; output: number; cacheRead: number; cacheWrite: number } } | undefined } }) => usage.update(ctx.sessionManager.getBranch() as Entry[], (provider, model) => ctx.modelRegistry.find(provider, model)?.cost);
-  pi.on("session_start", (_event, ctx) => { calls = []; readCache.clear(); seenResults.clear(); pendingCheckpoint = undefined; archiveWarningSent = false; if (readSettings().enabled) snapshot(ctx); });
+  pi.on("session_start", (_event, ctx) => { calls = []; readCache.clear(); seenResults.clear(); pendingCheckpoint = undefined; archiveWarningSent = false; checkpointWarningSent = false; if (readSettings().enabled) snapshot(ctx); });
   pi.on("session_tree", () => { pendingCheckpoint = undefined; readCache.clear(); });
   pi.on("session_before_switch", () => { pendingCheckpoint = undefined; });
   pi.on("session_before_fork", () => { pendingCheckpoint = undefined; });
   pi.on("session_shutdown", () => { calls = []; readCache.clear(); pendingCheckpoint = undefined; });
   pi.on("session_before_compact", (event, ctx) => {
     if (!readSettings().enabled || !readSettings().continuity) return;
-    const leaf = event.branchEntries.at(-1)?.id;
-    if (!leaf) return;
-    const messages = event.branchEntries.flatMap(e => {
-      if (e.type !== "message" || e.message.role !== "user") return [];
-      return [typeof e.message.content === "string" ? e.message.content : e.message.content.filter(c => c.type === "text").map(c => c.text).join("\n")];
-    });
-    writeCheckpoint(checkpointFromBranch(ctx.sessionManager.getSessionId(), leaf, messages));
-    pruneCheckpoints(readSettings().retainDays);
+    try {
+      const leaf = event.branchEntries.at(-1)?.id;
+      if (!leaf) return;
+      const messages = event.branchEntries.flatMap(e => {
+        if (e.type !== "message" || e.message.role !== "user") return [];
+        return [typeof e.message.content === "string" ? e.message.content : e.message.content.filter(c => c.type === "text").map(c => c.text).join("\n")];
+      });
+      writeCheckpoint(checkpointFromBranch(ctx.sessionManager.getSessionId(), leaf, messages));
+      pruneCheckpoints(readSettings().retainDays);
+    } catch {
+      // Optional continuity storage must never interrupt Pi's compaction.
+      if (!checkpointWarningSent) {
+        checkpointWarningSent = true;
+        try { ctx.ui.notify("Token Optimizer: local continuity checkpoint unavailable; Pi compaction continues", "warning"); } catch { /* UI unavailable */ }
+      }
+    }
   });
   pi.on("session_compact", (event, ctx) => {
     if (!readSettings().enabled || !readSettings().continuity) return;

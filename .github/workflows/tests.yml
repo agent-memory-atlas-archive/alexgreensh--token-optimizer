@@ -69,7 +69,7 @@ jobs:
           cache: npm
           cache-dependency-path: pi/package-lock.json
       - name: Install Pi adapter test dependencies
-        run: npm ci --prefix pi
+        run: npm ci --ignore-scripts --prefix pi
       - name: Typecheck Pi extension
         run: npm run typecheck --prefix pi
       - name: Test Pi adapter
