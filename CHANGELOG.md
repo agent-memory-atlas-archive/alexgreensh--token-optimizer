@@ -1,11 +1,15 @@
 # Changelog
 
-## [5.13.25] - 2026-09-26
+## [5.13.25] - 2026-09-27
 
 - Add opt-in native Pi diagnostics, active-branch usage, local archives, and review-before-use continuity checkpoints.
 - Keep OpenCode and OpenClaw core version labels aligned with the release. Fixes #201.
 - Protect Pi's local data from shared directories and symlinked files, reject authorization and cookie headers in archives, and keep optional checkpoint failures from interrupting compaction.
 - Bound Pi archives to 1,024 files and pin OpenCode's transitive TOML parser to a patched release.
+- Reject malformed Cowork telemetry requests, restrict capture paths, keep captures private, and stop storing authentication headers. Document protected HTTPS ingress for cloud senders.
+- Keep Codex hooks working when an optional launcher is missing, validate Cowork collector URLs, and keep test child processes from inheriting host secrets.
+- Update docs and VS Code development dependencies to audited versions. Install release CI dependencies without lifecycle scripts.
+- Label compact-instruction dry runs as previews.
 
 ## [5.13.24] - 2026-09-25
 
