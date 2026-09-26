@@ -18,6 +18,7 @@ import json
 import os
 import plistlib
 import sys
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -190,7 +191,30 @@ def _telemetry_checks() -> list[dict[str, str]]:
         checks.append(_check("WARN", "TO collector", "TO_COWORK_COLLECTOR_URL/TO_PROBE_URL not set; start cowork/collector/to_collector.py and set probe.env before packaging"))
     else:
         try:
-            with urllib.request.urlopen(f"{collector.rstrip('/')}/healthz", timeout=2) as resp:
+            if any(ord(char) < 32 or ord(char) == 127 for char in collector):
+                raise ValueError("control character")
+            parsed = urllib.parse.urlsplit(collector)
+            if (
+                parsed.scheme not in {"http", "https"}
+                or not parsed.hostname
+                or parsed.username is not None
+                or parsed.password is not None
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ValueError("expected an HTTP(S) base URL without credentials, query, or fragment")
+            _ = parsed.port  # Validate malformed ports before the request.
+        except ValueError:
+            checks.append(_check("WARN", "TO collector", "invalid collector URL; use an HTTP(S) base URL without credentials, query, or fragment"))
+            return checks
+
+        class _NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, request, fp, code, msg, headers, newurl):
+                return None
+
+        try:
+            opener = urllib.request.build_opener(_NoRedirect())
+            with opener.open(f"{collector.rstrip('/')}/healthz", timeout=2) as resp:
                 ok = resp.status == 200
             checks.append(_check("OK" if ok else "WARN", "TO collector", f"{collector} healthz {'OK' if ok else 'unexpected status'}"))
         except Exception as exc:  # noqa: BLE001
