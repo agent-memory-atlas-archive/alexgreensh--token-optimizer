@@ -47,7 +47,7 @@ jobs:
         run: npm install -g npm@11.6.1
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: bun install --frozen-lockfile --ignore-scripts
 
       # Gate the release on the suite, so a broken build cannot reach users.
       - name: Test
