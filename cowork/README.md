@@ -83,11 +83,13 @@ What rides in per event:
    (Organization settings → Cowork; http/protobuf, no gRPC) at a running
    collector:
    ```bash
-   python3 cowork/collector/to_collector.py --host 0.0.0.0 --port 4318
+   python3 cowork/collector/to_collector.py --host 127.0.0.1 --port 4318
    python3 cowork/collector/to_collector.py --summarize   # after a session
    ```
-   The collector must be HTTPS-reachable from cloud VMs (a laptop's
-   localhost is not); its domain is the one you allowlisted.
+   Put a protected HTTPS ingress in front of the loopback collector so cloud
+   VMs can reach it. Restrict that ingress to expected senders and enforce
+   request limits; the collector itself does not authenticate POSTs. Do not
+   expose its raw port. Its domain is the one you allowlisted.
 
 6. **Verify:**
    ```bash

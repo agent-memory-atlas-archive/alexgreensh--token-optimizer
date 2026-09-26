@@ -7,6 +7,7 @@ capture files. The real trends.db is never touched.
 """
 
 import importlib.util
+import io
 import json
 import os
 import sqlite3
@@ -322,6 +323,117 @@ def test_oversized_body_replies_413():
     handler._reply = fake_reply
     handler.do_POST()
     assert captured["status"] == 413
+
+
+def _post_handler(tmp_path, path="/v1/logs", body=b"{}", length=None):
+    handler = tc.CollectorHandler.__new__(tc.CollectorHandler)
+    handler.headers = {"Content-Length": str(len(body)) if length is None else length,
+                       "Content-Type": "application/json"}
+    handler.path = path
+    handler.data_dir = tmp_path
+    handler.rfile = io.BytesIO(body)
+    handler.client_address = ("127.0.0.1", 0)
+    captured = {}
+    handler._reply = lambda status, payload: captured.update(status=status, body=payload)
+    return handler, captured
+
+
+@pytest.mark.parametrize("length,status", [
+    ("-1", 400), ("not-a-number", 400), ("", 400),
+])
+def test_invalid_body_length_is_rejected_before_read(tmp_path, length, status):
+    handler, captured = _post_handler(tmp_path, length=length)
+    handler.do_POST()
+    assert captured["status"] == status
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_missing_and_short_body_are_rejected(tmp_path):
+    handler, captured = _post_handler(tmp_path)
+    del handler.headers["Content-Length"]
+    handler.do_POST()
+    assert captured["status"] == 411
+
+    handler, captured = _post_handler(tmp_path, body=b"{}", length="5")
+    handler.do_POST()
+    assert captured["status"] == 400
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_chunked_or_timed_out_body_is_rejected(tmp_path):
+    handler, captured = _post_handler(tmp_path)
+    handler.headers["Transfer-Encoding"] = "chunked"
+    handler.do_POST()
+    assert captured["status"] == 400
+
+    class TimeoutStream:
+        def read(self, size):
+            raise TimeoutError
+
+    handler, captured = _post_handler(tmp_path)
+    handler.rfile = TimeoutStream()
+    handler.do_POST()
+    assert captured["status"] == 408
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("path", ["/v1/arbitrary", "/probe/extra", "/v1/logs?token=leak"])
+def test_undocumented_post_paths_do_not_create_files(tmp_path, path):
+    handler, captured = _post_handler(tmp_path, path=path)
+    handler.do_POST()
+    assert captured["status"] == 404
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("path,capture_name", tc.POST_CAPTURE_FILES.items())
+def test_documented_post_paths_capture_to_expected_file(tmp_path, path, capture_name):
+    handler, captured = _post_handler(tmp_path, path=path)
+    handler.do_POST()
+    assert captured["status"] == 200
+    assert [item.name for item in tmp_path.iterdir()] == [capture_name]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode and symlink semantics")
+def test_capture_files_are_private_and_symlinks_are_refused(tmp_path):
+    handler, captured = _post_handler(tmp_path)
+    handler.headers["X-TO-Probe-Event"] = "Stop"
+    handler.headers["X-TO-Token"] = "private-auth-token"
+    handler.do_POST()
+    capture = tmp_path / "otlp-logs.jsonl"
+    assert captured["status"] == 200
+    assert capture.stat().st_mode & 0o077 == 0
+    record = json.loads(capture.read_text(encoding="utf-8"))
+    assert record["headers"] == {"X-TO-Probe-Event": "Stop"}
+    assert "private-auth-token" not in capture.read_text(encoding="utf-8")
+
+    capture.unlink()
+    target = tmp_path / "unrelated.txt"
+    target.write_text("preserve", encoding="utf-8")
+    capture.symlink_to(target)
+    handler, captured = _post_handler(tmp_path)
+    handler.do_POST()
+    assert captured["status"] == 500
+    assert target.read_text(encoding="utf-8") == "preserve"
+
+    capture.unlink()
+    capture.write_text("existing", encoding="utf-8")
+    capture.chmod(0o644)
+    handler, captured = _post_handler(tmp_path)
+    handler.do_POST()
+    assert captured["status"] == 500
+    assert capture.read_text(encoding="utf-8") == "existing"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode semantics")
+def test_shared_capture_directory_is_refused(tmp_path):
+    tmp_path.chmod(0o755)
+    try:
+        handler, captured = _post_handler(tmp_path)
+        handler.do_POST()
+        assert captured["status"] == 500
+        assert list(tmp_path.iterdir()) == []
+    finally:
+        tmp_path.chmod(0o700)
 
 
 if __name__ == "__main__":

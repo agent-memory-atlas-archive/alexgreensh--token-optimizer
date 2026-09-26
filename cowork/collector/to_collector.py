@@ -32,10 +32,9 @@ Ingestion notes:
     the otlp proto schema or a dependency); both summarize and ingest skip
     them and report the skip count.
 
-Run the server on a host reachable from Cowork VMs/cloud, behind HTTPS
-(cloud sessions cannot reach a laptop's localhost; the domain must be on
-Cowork's allowlist):
-    python3 to_collector.py --host 0.0.0.0 --port 4318
+Run on loopback behind a protected HTTPS ingress reachable from Cowork
+VMs/cloud (the ingress domain must be on Cowork's allowlist):
+    python3 to_collector.py --host 127.0.0.1 --port 4318
 
 Then, on the machine where Token Optimizer lives:
     python3 to_collector.py --ingest
@@ -50,6 +49,7 @@ import importlib.util
 import json
 import os
 import sqlite3
+import stat
 import sys
 import time
 from datetime import datetime, timezone
@@ -65,10 +65,46 @@ _INT64_MAX = 2**63 - 1  # SQLite INTEGER ceiling; values beyond it fail the bind
 # session-cumulative counter inflates ~linearly with call count, so anything
 # well above derived is rejected in favour of the derived value.
 COST_SANITY_MULTIPLE = 2.0
+POST_CAPTURE_FILES = {
+    "/probe": "probe.jsonl",
+    "/v1/logs": "otlp-logs.jsonl",
+    "/v1/traces": "otlp-traces.jsonl",
+    "/v1/metrics": "otlp-metrics.jsonl",
+}
+POST_READ_TIMEOUT_SECONDS = 30
 
 
 def _now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _assert_private_capture_dir(path: Path) -> None:
+    info = path.lstat()
+    if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
+        raise PermissionError("Capture directory is not a regular directory")
+    if os.name != "nt" and (info.st_mode & 0o077 or info.st_uid != os.getuid()):
+        raise PermissionError("Capture directory is not private")
+
+
+def _append_private_capture(path: Path, line: str) -> None:
+    if path.is_symlink():
+        raise PermissionError("Capture destination is a symlink")
+    flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags, 0o600)
+    try:
+        info = os.fstat(fd)
+        if path.is_symlink():
+            raise PermissionError("Capture destination is a symlink")
+        if not stat.S_ISREG(info.st_mode):
+            raise PermissionError("Capture destination is not a regular file")
+        if os.name != "nt" and (info.st_mode & 0o077 or info.st_uid != os.getuid()):
+            raise PermissionError("Capture file is not private")
+        with os.fdopen(fd, "a", encoding="utf-8") as handle:
+            fd = -1
+            handle.write(line)
+    finally:
+        if fd >= 0:
+            os.close(fd)
 
 
 class CollectorHandler(BaseHTTPRequestHandler):
@@ -96,10 +132,20 @@ class CollectorHandler(BaseHTTPRequestHandler):
         # anything POSTed here becomes billing rows. Auth/allowlist is enforced
         # at the org edge (reverse proxy / shared secret) and must stay there;
         # do not treat this endpoint as trusted.
-        try:
-            declared = int(self.headers.get("Content-Length", 0) or 0)
-        except (TypeError, ValueError):
-            declared = 0
+        capture_name = POST_CAPTURE_FILES.get(self.path)
+        if capture_name is None:
+            self._reply(404, {"ok": False, "error": "unknown endpoint"})
+            return
+        raw_length = self.headers.get("Content-Length")
+        if raw_length is None:
+            self._reply(411, {"ok": False, "error": "Content-Length required"})
+            return
+        length = raw_length.strip()
+        if (not 1 <= len(length) <= 10 or not length.isascii()
+                or not length.isdecimal() or self.headers.get("Transfer-Encoding")):
+            self._reply(400, {"ok": False, "error": "invalid request length"})
+            return
+        declared = int(length)
         if declared > MAX_BODY:
             # Do NOT truncate-then-200: a silently clipped batch fails json.loads,
             # is stored as unparseable text, and every event in it is lost while
@@ -108,14 +154,24 @@ class CollectorHandler(BaseHTTPRequestHandler):
             self._reply(413, {"ok": False, "error": "payload too large",
                               "max_body": MAX_BODY, "content_length": declared})
             return
-        body = self.rfile.read(declared) if declared else b""
+        try:
+            if hasattr(self, "connection"):
+                self.connection.settimeout(POST_READ_TIMEOUT_SECONDS)
+            body = self.rfile.read(declared) if declared else b""
+        except (OSError, TimeoutError):
+            self._reply(408, {"ok": False, "error": "request body timed out"})
+            return
+        if len(body) != declared:
+            self._reply(400, {"ok": False, "error": "incomplete request body"})
+            return
         content_type = self.headers.get("Content-Type", "")
         record: dict[str, Any] = {
             "ts": _now(),
             "path": self.path,
             "content_type": content_type,
             "remote": self.client_address[0],
-            "headers": {k: v for k, v in self.headers.items() if k.lower().startswith("x-to-")},
+            "headers": {"X-TO-Probe-Event": self.headers.get("X-TO-Probe-Event", "")[:64]}
+            if self.headers.get("X-TO-Probe-Event") else {},
         }
         try:
             record["body"] = json.loads(body.decode("utf-8"))
@@ -129,17 +185,13 @@ class CollectorHandler(BaseHTTPRequestHandler):
                 kind = "binary"
         record["kind"] = kind
 
-        if self.path.startswith("/probe"):
-            out = self.data_dir / "probe.jsonl"
-        elif self.path.startswith("/v1/"):
-            out = self.data_dir / f"otlp-{self.path.split('/')[2]}.jsonl"
-        else:
-            out = self.data_dir / "other.jsonl"
+        out = self.data_dir / capture_name
         try:
-            with out.open("a", encoding="utf-8") as fh:
-                fh.write(json.dumps(record) + "\n")
+            _assert_private_capture_dir(self.data_dir)
+            _append_private_capture(out, json.dumps(record) + "\n")
         except OSError as exc:
-            self._reply(500, {"ok": False, "error": str(exc)})
+            print(f"[to-collector] capture write refused: {type(exc).__name__}", file=sys.stderr)
+            self._reply(500, {"ok": False, "error": "capture storage unavailable"})
             return
         self._reply(200, {"ok": True})
 
@@ -752,7 +804,8 @@ def cost_view(measure_path: str | None = None, db_override: str | None = None,
 
 
 def serve(host: str, port: int, data_dir: Path) -> None:
-    data_dir.mkdir(parents=True, exist_ok=True)
+    data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    _assert_private_capture_dir(data_dir)
     CollectorHandler.data_dir = data_dir
     server = ThreadingHTTPServer((host, port), CollectorHandler)
     print(f"[to-collector] listening on http://{host}:{port} -> {data_dir}")

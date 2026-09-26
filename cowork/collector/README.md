@@ -17,8 +17,8 @@ up alongside Claude Code and Codex.
 ## Run
 
 ```bash
-# 1. Serve (must be HTTPS-reachable from cloud VMs; a laptop localhost is not).
-python3 cowork/collector/to_collector.py --host 0.0.0.0 --port 4318
+# 1. Serve on loopback behind a protected HTTPS ingress reachable by cloud VMs.
+python3 cowork/collector/to_collector.py --host 127.0.0.1 --port 4318
 
 # 2. Point Cowork's OTel export at it (Org settings -> Cowork; http/protobuf).
 #    The collector domain must be on Cowork's domain allowlist.
@@ -27,6 +27,14 @@ python3 cowork/collector/to_collector.py --host 0.0.0.0 --port 4318
 python3 cowork/collector/to_collector.py --ingest
 python3 cowork/collector/to_collector.py --cost-view --days 30
 ```
+
+The collector does not authenticate senders. Restrict the HTTPS ingress to
+expected senders and enforce request limits there; do not expose port 4318
+directly. Capture files can contain probe payloads and telemetry. The data
+directory must be private (mode 0700 on POSIX) and capture files must be
+private (mode 0600 on POSIX). Existing broader permissions or symlinked
+capture files are refused, so correct those paths before restarting or use a fresh private
+`--data-dir`.
 
 `--ingest` locates measure.py via `--measure-path`, `TOKEN_OPTIMIZER_MEASURE_PATH`,
 a repo-relative path, or the installed-plugin glob; if none resolve it aborts
