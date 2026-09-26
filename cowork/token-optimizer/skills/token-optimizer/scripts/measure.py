@@ -37258,7 +37258,7 @@ def generate_compact_instructions(as_json=False, install=False, dry_run=False):
         if existing and "Token Optimizer" in existing:
             if dry_run:
                 print(f"\n  [Dry run] Would update existing compact instructions in {settings_path}")
-                print(f"\n  New instructions:\n  {instructions_text}\n")
+                print(f"\n  Compact instructions preview:\n  {instructions_text}\n")
                 return instructions_text
             settings["compactInstructions"] = instructions_text
             if not _write_settings_atomic(settings):
