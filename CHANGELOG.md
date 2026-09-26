@@ -6,7 +6,8 @@
 - Keep OpenCode and OpenClaw core version labels aligned with the release. Fixes #201.
 - Protect Pi's local data from shared directories and symlinked files, reject authorization and cookie headers in archives, and keep optional checkpoint failures from interrupting compaction.
 - Bound Pi archives to 1,024 files and pin OpenCode's transitive TOML parser to a patched release.
-- Reject malformed Cowork telemetry requests, keep concurrent capture records intact, read capture lines with a firm memory bound, skip bad records without blocking later sessions, reject negative or imprecise token counts, and remove stale Cowork copies when a Claude row for the same session arrives. Restrict capture paths, keep captures private, and stop storing authentication headers. Document protected HTTPS ingress for cloud senders.
+- Reject malformed Cowork telemetry requests, keep concurrent capture records intact, read capture lines with a firm memory bound, skip bad records without blocking later sessions, reject negative or imprecise token counts, and remove stale Cowork copies on the next ingest after a Claude row for the same session arrives. Restrict capture paths, keep captures private, and stop storing authentication headers. Document protected HTTPS ingress for cloud senders.
+- Exit with an error when Cowork ingestion writes only some database rows, including in quiet mode.
 - Keep Codex hooks working when an optional launcher is missing, validate Cowork collector URLs, and keep test child processes from inheriting host secrets.
 - Update docs and VS Code development dependencies to audited versions. Install release CI dependencies without lifecycle scripts.
 - Label compact-instruction dry runs as previews.

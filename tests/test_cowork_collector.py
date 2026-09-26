@@ -393,6 +393,31 @@ def test_later_claude_row_replaces_previously_ingested_cowork_copy(tmp_path):
     assert daily == (1, 4242)
 
 
+def test_failed_cowork_row_makes_quiet_ingest_fail(tmp_path):
+    db = tmp_path / "trends.db"
+    measure.TRENDS_DB = db
+    measure.SNAPSHOT_DIR = db.parent
+    conn = measure._init_trends_db()
+    try:
+        conn.execute(
+            "CREATE TRIGGER reject_bad_cowork BEFORE INSERT ON session_log "
+            "WHEN NEW.platform = 'cowork' AND NEW.session_uuid = 'sess-rejected' "
+            "BEGIN SELECT RAISE(FAIL, 'synthetic write failure'); END"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    dd = tmp_path / "cap"
+    _write_capture(dd, [
+        _api_record("sess-good", EVENING_NANOS),
+        _api_record("sess-rejected", EVENING_NANOS + 1),
+    ])
+    assert _ingest(dd, db) == 1
+    assert len(_rows(db, "jsonl_path='cowork:sess-good'")) == 1
+    assert _rows(db, "jsonl_path='cowork:sess-rejected'") == []
+
+
 def test_reported_cost_cumulative_is_rejected(tmp_path):
     dd = tmp_path / "cap"
     # A single call reports an absurd cumulative cost >> derived → reject reported.

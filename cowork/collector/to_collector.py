@@ -748,8 +748,8 @@ def ingest(data_dir: Path, measure_path: str | None = None, db_override: str | N
         if unpriced_models:
             print(f"[to-collector] warning: unpriced model(s) contributed $0 to derived cost: "
                   f"{', '.join(sorted(unpriced_models))}")
-    # Exit non-zero only when rows we tried to write did not land.
-    return 0 if check[0] >= written and remaining_removed == 0 else 1
+    # A partial ingest must be visible to quiet automation through its exit code.
+    return 0 if row_errors == 0 and check[0] >= written and remaining_removed == 0 else 1
 
 
 # ---------------------------------------------------------------------------
