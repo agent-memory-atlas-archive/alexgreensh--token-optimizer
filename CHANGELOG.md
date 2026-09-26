@@ -10,6 +10,7 @@
 - Exit with an error when Cowork ingestion writes only some database rows, including in quiet mode.
 - Keep Codex hooks working when an optional launcher is missing, validate Cowork collector URLs, and keep test child processes from inheriting host secrets.
 - Update docs and VS Code development dependencies to audited versions. Install release CI dependencies without lifecycle scripts.
+- Bound VS Code transcript tail reads so opening a long session cannot allocate memory for the entire file.
 - Label compact-instruction dry runs as previews.
 
 ## [5.13.24] - 2026-09-25

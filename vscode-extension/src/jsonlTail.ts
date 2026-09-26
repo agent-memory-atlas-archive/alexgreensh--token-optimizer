@@ -27,6 +27,7 @@ export interface TailResult {
 // the quality cache (see cacheReader), which this only backstops when absent.
 const HAIKU_WINDOW = 200_000;
 const MILLION_WINDOW = 1_000_000;
+const MAX_TAIL_BYTES = 1024 * 1024;
 
 export function windowForModel(model: string | null): number {
   if (process.env.CLAUDE_CODE_DISABLE_1M_CONTEXT === '1') return HAIKU_WINDOW;
@@ -70,9 +71,12 @@ export class JsonlTailer {
     try {
       const fd = fs.openSync(this.filePath, 'r');
       try {
-        const len = size - this.offset;
+        // A long session can be gigabytes old when the panel first opens.
+        // Only the latest complete records matter, so bound this read.
+        const start = Math.max(this.offset, size - MAX_TAIL_BYTES);
+        const len = size - start;
         const buf = Buffer.allocUnsafe(len);
-        const bytesRead = fs.readSync(fd, buf, 0, len, this.offset);
+        const bytesRead = fs.readSync(fd, buf, 0, len, start);
         // Only consume up to the last newline. A newline byte (0x0A) never
         // appears inside a multi-byte UTF-8 sequence, so cutting there avoids
         // decoding a split codepoint (U+FFFD) AND avoids skipping bytes of an
@@ -80,10 +84,11 @@ export class JsonlTailer {
         const lastNl = buf.lastIndexOf(0x0a, bytesRead - 1);
         if (lastNl < 0) {
           // No complete line yet; leave offset put and wait for more bytes.
+          this.offset = start;
           return this.lastResult;
         }
         chunk = buf.toString('utf8', 0, lastNl + 1);
-        this.offset += lastNl + 1;
+        this.offset = start + lastNl + 1;
       } finally {
         fs.closeSync(fd);
       }
