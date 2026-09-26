@@ -140,6 +140,23 @@ def test_falls_back_to_baked_path_when_glob_empty():
             f"expected launcher to run via glob-or-fallback: {r.stdout!r}"
 
 
+@requires_posix_version_resolver
+@pytest.mark.parametrize("versioned", [False, True])
+@pytest.mark.parametrize("missing", ["python-launcher.sh", "run.py"])
+def test_missing_hook_files_fail_open_without_blocking_tools(tmp_path, versioned, missing):
+    root = tmp_path / "token-optimizer" / "5.11.14" if versioned else tmp_path / "token-optimizer-dev"
+    hooks = root / "hooks"
+    hooks.mkdir(parents=True)
+    (hooks / "python-launcher.sh").write_text("#!/usr/bin/env bash\necho SHOULD_NOT_RUN\n")
+    (hooks / "run.py").write_text("# stub\n")
+    cmd = _gen_command(root)
+    (hooks / missing).unlink()
+    result = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == ""
+    assert result.stderr == ""
+
+
 def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

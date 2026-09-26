@@ -45,7 +45,7 @@ def _repo_root() -> Path:
 # bash; the trailing `exit 0` is a quiet no-op when no bash exists anywhere.
 _BASH_RESOLVER_PREFIX = (
     'for b in bash /bin/bash /usr/bin/bash /usr/local/bin/bash /opt/homebrew/bin/bash; '
-    'do command -v "$b" >/dev/null 2>&1 && '
+    'do command -v "$b" >/dev/null 2>&1 || continue; '
 )
 _BASH_RESOLVER_SUFFIX = "; done; exit 0"
 
@@ -194,8 +194,8 @@ def _hook_command(script: str, *args: str, redirect_quiet: bool = False,
             # bash READS the launcher script (exec "$0" = bash "$T" ...), so it
             # only needs to be readable, not executable; -x would wrongly no-op a
             # readable-but-not-+x launcher (e.g. after an extraction dropped the bit).
-            f'T="${{R}}hooks/python-launcher.sh"; [ -r "$T" ] || exit 0; '
-            f'exec "$0" "$T" "${{R}}hooks/run.py" {command_args}{redirect}'
+            f'T="${{R}}hooks/python-launcher.sh"; P="${{R}}hooks/run.py"; '
+            f'[ -r "$T" ] && [ -r "$P" ] || exit 0; exec "$0" "$T" "$P" {command_args}{redirect}'
         )
         command = (
             f"{_BASH_RESOLVER_PREFIX}"
@@ -207,7 +207,7 @@ def _hook_command(script: str, *args: str, redirect_quiet: bool = False,
         runner = shlex.quote(str(root / "hooks" / "run.py"))
         command = (
             f"{_BASH_RESOLVER_PREFIX}"
-            f'TOKEN_OPTIMIZER_RUNTIME=codex {_posix_env_prefix}exec "$b" {launcher} {runner} {command_args}'
+            f'[ -r {launcher} ] && [ -r {runner} ] || exit 0; TOKEN_OPTIMIZER_RUNTIME=codex {_posix_env_prefix}exec "$b" {launcher} {runner} {command_args}'
             f"{redirect}{_BASH_RESOLVER_SUFFIX}"
         )
     return command
