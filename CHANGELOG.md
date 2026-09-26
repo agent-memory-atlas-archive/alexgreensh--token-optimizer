@@ -1,5 +1,11 @@
 # Changelog
 
+## [5.13.25] - 2026-09-26
+
+- Add opt-in native Pi diagnostics, active-branch usage, local archives, and review-before-use continuity checkpoints.
+- Keep OpenCode and OpenClaw core version labels aligned with the release. Fixes #201.
+- Protect Pi's local data from shared directories and symlinked files, reject authorization and cookie headers in archives, and keep optional checkpoint failures from interrupting compaction.
+
 ## [5.13.24] - 2026-09-25
 
 - **Savings report matches the dashboard.** Measured savings, repeat reads avoided, estimates, and one all-in total.
