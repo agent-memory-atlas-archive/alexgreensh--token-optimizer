@@ -140,9 +140,14 @@ class CollectorHandler(BaseHTTPRequestHandler):
         if raw_length is None:
             self._reply(411, {"ok": False, "error": "Content-Length required"})
             return
+        get_all = getattr(self.headers, "get_all", None)
+        if callable(get_all) and len(get_all("Content-Length", [])) != 1:
+            self._reply(400, {"ok": False, "error": "invalid request length"})
+            return
         length = raw_length.strip()
         if (not 1 <= len(length) <= 10 or not length.isascii()
-                or not length.isdecimal() or self.headers.get("Transfer-Encoding")):
+                or not length.isdecimal()
+                or self.headers.get("Transfer-Encoding") is not None):
             self._reply(400, {"ok": False, "error": "invalid request length"})
             return
         declared = int(length)

@@ -14,6 +14,7 @@ import sqlite3
 import sys
 import time
 from datetime import datetime, timezone
+from email.message import Message
 from pathlib import Path
 
 import pytest
@@ -374,6 +375,22 @@ def test_chunked_or_timed_out_body_is_rejected(tmp_path):
     handler.rfile = TimeoutStream()
     handler.do_POST()
     assert captured["status"] == 408
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_ambiguous_request_framing_is_rejected(tmp_path):
+    handler, captured = _post_handler(tmp_path)
+    headers = Message()
+    headers.add_header("Content-Length", "2")
+    headers.add_header("Content-Length", "100")
+    handler.headers = headers
+    handler.do_POST()
+    assert captured["status"] == 400
+
+    handler, captured = _post_handler(tmp_path)
+    handler.headers["Transfer-Encoding"] = ""
+    handler.do_POST()
+    assert captured["status"] == 400
     assert list(tmp_path.iterdir()) == []
 
 
