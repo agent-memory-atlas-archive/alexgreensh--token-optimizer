@@ -181,7 +181,7 @@ class CollectorHandler(BaseHTTPRequestHandler):
         try:
             record["body"] = json.loads(body.decode("utf-8"))
             kind = "json"
-        except (UnicodeDecodeError, json.JSONDecodeError):
+        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError):
             try:
                 record["body_text"] = body.decode("utf-8")
                 kind = "text"
@@ -202,13 +202,14 @@ class CollectorHandler(BaseHTTPRequestHandler):
 
 
 def _walk(node: Any):
-    if isinstance(node, dict):
-        yield node
-        for v in node.values():
-            yield from _walk(v)
-    elif isinstance(node, list):
-        for v in node:
-            yield from _walk(v)
+    pending = [node]
+    while pending:
+        current = pending.pop()
+        if isinstance(current, dict):
+            yield current
+            pending.extend(reversed(tuple(current.values())))
+        elif isinstance(current, list):
+            pending.extend(reversed(current))
 
 
 def _attr_map(attrs: Any) -> dict[str, Any]:
@@ -216,7 +217,7 @@ def _attr_map(attrs: Any) -> dict[str, Any]:
     out: dict[str, Any] = {}
     if isinstance(attrs, list):
         for a in attrs:
-            if isinstance(a, dict) and "key" in a:
+            if isinstance(a, dict) and isinstance(a.get("key"), str):
                 value = a.get("value")
                 if isinstance(value, dict):
                     value = next(iter(value.values()), None)
@@ -253,7 +254,10 @@ def _iter_events(data_dir: Path):
                         continue
                     try:
                         record = json.loads(line)
-                    except json.JSONDecodeError:
+                    except (json.JSONDecodeError, RecursionError):
+                        tally["undecodable_lines"] += 1
+                        continue
+                    if not isinstance(record, dict):
                         tally["undecodable_lines"] += 1
                         continue
                     kind = record.get("kind")

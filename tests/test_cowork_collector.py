@@ -182,6 +182,21 @@ def test_overflow_and_huge_int_row_is_skipped_not_fatal(tmp_path):
     assert good[2] == 1000 + 200 + 100   # untouched by the bad row
 
 
+def test_malformed_capture_does_not_block_later_valid_event(tmp_path):
+    dd = tmp_path / "cap"
+    dd.mkdir()
+    capture = dd / "otlp-logs.jsonl"
+    capture.write_text(json.dumps(["invalid top-level record"]) + "\n", encoding="utf-8")
+    _write_capture(dd, [{"attributes": [{"key": [], "value": {"stringValue": "bad"}}]}])
+    with capture.open("a", encoding="utf-8") as fh:
+        fh.write('{"kind":"json","body":' + "[" * 1500 + "{}" + "]" * 1500 + "}\n")
+    _write_capture(dd, [_api_record("sess-good-after-bad", EVENING_NANOS)])
+
+    sessions, stats = tc.parse_cowork_sessions(dd)
+    assert "sess-good-after-bad" in sessions
+    assert stats["undecodable_lines"] == 1
+
+
 def test_int_helper_clamps_out_of_range(tmp_path):
     assert tc._int(float("inf")) == 0
     assert tc._int("inf") == 0
