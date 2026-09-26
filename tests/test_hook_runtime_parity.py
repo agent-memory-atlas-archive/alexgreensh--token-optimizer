@@ -23,15 +23,32 @@ sys.path.insert(0, str(SCRIPTS))
 from hook_runtime import HookDeadline, LeaseLock  # noqa: E402
 
 
+def _child_env():
+    env = {"PYTHONPATH": str(SCRIPTS)}
+    if sys.platform == "win32":
+        for name in ("SYSTEMROOT", "WINDIR", "PATH", "PATHEXT", "TEMP", "TMP"):
+            value = os.environ.get(name)
+            if value is not None:
+                env[name] = value
+    return env
+
+
+def test_child_process_does_not_inherit_unrelated_environment(monkeypatch):
+    monkeypatch.setenv("TOKEN_TEST_SECRET", "not-for-child")
+    result, _ = _python(
+        'import os; print("TOKEN_TEST_SECRET" in os.environ)'
+    )
+    assert result.returncode == 0 and result.stdout.strip() == "False"
+    assert _child_env()["PYTHONPATH"] == str(SCRIPTS)
+
+
 def _python(code, *, timeout=60):
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(SCRIPTS)
     started = time.monotonic()
     result = subprocess.run(
         [sys.executable, "-c", code],
         capture_output=True,
         text=True,
-        env=env,
+        env=_child_env(),
         timeout=timeout,
     )
     return result, time.monotonic() - started
@@ -212,12 +229,10 @@ if lock.acquire():
     time.sleep(0.2)
     lock.release()
 """
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(SCRIPTS)
     processes = [
         subprocess.Popen(
             [sys.executable, "-c", code, str(lock_path), str(wins_path)],
-            env=env,
+            env=_child_env(),
         )
         for _ in range(12)
     ]
@@ -404,13 +419,11 @@ if lock.acquire():
     time.sleep(0.2)
     lock.release()
 """
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(SCRIPTS)
     started = time.monotonic()
     processes = [
         subprocess.Popen(
             [sys.executable, "-c", code, str(lock_path), str(wins_path)],
-            env=env,
+            env=_child_env(),
         )
         for _ in range(12)
     ]
@@ -430,9 +443,9 @@ if not lock.acquire():
     raise SystemExit(2)
 os._exit(0)
 """
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(SCRIPTS)
-    subprocess.run([sys.executable, "-c", code, str(path)], env=env, check=True)
+    subprocess.run(
+        [sys.executable, "-c", code, str(path)], env=_child_env(), check=True
+    )
     immediate = LeaseLock(path, acquire_timeout=0, reclaim_grace=0).acquire()
     time.sleep(2.2)
     recovered_lock = LeaseLock(path, acquire_timeout=0, reclaim_grace=0)
