@@ -361,6 +361,38 @@ def test_cross_platform_double_count_skip(tmp_path):
     assert claude[0][0].endswith("shared-sid.jsonl")
 
 
+def test_later_claude_row_replaces_previously_ingested_cowork_copy(tmp_path):
+    dd = tmp_path / "cap"
+    _write_capture(dd, [_api_record("late-claude-sid", EVENING_NANOS)])
+    db = tmp_path / "trends.db"
+    assert _ingest(dd, db) == 0
+    assert len(_rows(db, "session_uuid='late-claude-sid'")) == 1
+
+    conn = sqlite3.connect(str(db))
+    try:
+        conn.execute(
+            "INSERT INTO session_log (jsonl_path, date, platform, input_tokens, "
+            "output_tokens, session_uuid, cost_usd) VALUES "
+            "(?, ?, 'claude', 4242, 111, 'late-claude-sid', 0.99)",
+            ("/home/u/.claude/projects/p/late-claude-sid.jsonl", LOCAL_DAY),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert _ingest(dd, db) == 0
+    assert _rows(db, "jsonl_path='cowork:late-claude-sid'") == []
+    assert len(_rows(db, "session_uuid='late-claude-sid'")) == 1
+    conn = sqlite3.connect(str(db))
+    try:
+        daily = conn.execute(
+            "SELECT session_count, total_input FROM daily_stats WHERE date = ?", (LOCAL_DAY,)
+        ).fetchone()
+    finally:
+        conn.close()
+    assert daily == (1, 4242)
+
+
 def test_reported_cost_cumulative_is_rejected(tmp_path):
     dd = tmp_path / "cap"
     # A single call reports an absurd cumulative cost >> derived → reject reported.

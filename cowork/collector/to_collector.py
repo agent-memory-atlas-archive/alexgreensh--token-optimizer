@@ -550,6 +550,7 @@ def ingest(data_dir: Path, measure_path: str | None = None, db_override: str | N
     conn = measure._init_trends_db()
     written = 0
     written_paths: list[str] = []
+    removed_paths: list[str] = []
     row_errors = 0
     cross_platform_skipped = 0
     unpriced_models: set[str] = set()
@@ -570,6 +571,14 @@ def ingest(data_dir: Path, measure_path: str | None = None, db_override: str | N
             ).fetchone()
             if dup:
                 cross_platform_skipped += 1
+                # The Cowork copy may have landed on an earlier ingest before
+                # Claude's Stop hook wrote its row. Remove that stale copy too.
+                removed = conn.execute(
+                    "DELETE FROM session_log WHERE jsonl_path = ? AND platform = 'cowork'",
+                    (jsonl_path,),
+                ).rowcount
+                if removed > 0:
+                    removed_paths.append(jsonl_path)
                 if not quiet:
                     print(f"[to-collector] skip cowork session {sid}: already counted "
                           f"under platform={dup[0]!r} ({dup[1]})", file=sys.stderr)
@@ -677,7 +686,7 @@ def ingest(data_dir: Path, measure_path: str | None = None, db_override: str | N
             if cur.rowcount > 0:
                 written += 1
             written_paths.append(jsonl_path)
-        if written > 0:
+        if written > 0 or removed_paths:
             measure._rebuild_aggregate_tables(conn)
         conn.commit()
         # Match hermes/copilot: stamp the schema version so a DB first created by
@@ -699,15 +708,26 @@ def ingest(data_dir: Path, measure_path: str | None = None, db_override: str | N
             ).fetchone()
         else:
             check = (0, 0, 0, 0.0)
+        if removed_paths:
+            remaining_removed = sum(
+                conn.execute("SELECT COUNT(*) FROM session_log WHERE jsonl_path = ?", (path,)).fetchone()[0]
+                for path in removed_paths
+            )
+        else:
+            remaining_removed = 0
     finally:
         conn.close()
 
     stats["cross_platform_skipped"] = cross_platform_skipped
+    stats["cross_platform_removed"] = len(removed_paths)
     stats["row_errors"] = row_errors
     if not quiet:
         print(f"[to-collector] upserted {written} Cowork session(s) into {measure.TRENDS_DB}")
         print(f"[to-collector] verified in DB (this run): {check[0]} rows, "
               f"input={check[1]:,} output={check[2]:,} cost=${check[3]:.4f}")
+        if removed_paths:
+            print(f"[to-collector] removed {len(removed_paths)} stale Cowork duplicate(s); "
+                  f"verified remaining: {remaining_removed}")
         skipped_bits = []
         if stats.get("binary_skipped"):
             skipped_bits.append(f"{stats['binary_skipped']} protobuf records (undecoded)")
@@ -729,7 +749,7 @@ def ingest(data_dir: Path, measure_path: str | None = None, db_override: str | N
             print(f"[to-collector] warning: unpriced model(s) contributed $0 to derived cost: "
                   f"{', '.join(sorted(unpriced_models))}")
     # Exit non-zero only when rows we tried to write did not land.
-    return 0 if check[0] >= written else 1
+    return 0 if check[0] >= written and remaining_removed == 0 else 1
 
 
 # ---------------------------------------------------------------------------
