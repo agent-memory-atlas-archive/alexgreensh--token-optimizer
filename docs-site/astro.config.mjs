@@ -27,7 +27,6 @@ export default defineConfig({
       title: "Token Optimizer",
       description:
         "Cut the tokens you waste. Keep the work you'd lose. A fully local context optimizer for Claude Code, Codex, OpenCode, OpenClaw, Hermes, Copilot, Cursor, and Google Antigravity.",
-      tagline: "Cut the tokens you waste. Keep the work you'd lose.",
       logo: {
         src: "./src/assets/logo.png",
       },
