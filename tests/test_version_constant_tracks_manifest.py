@@ -80,10 +80,14 @@ def test_bundled_dashboard_core_versions_match_plugin_manifest():
         assert versions == [_manifest_version()], f"{source}: {name} must match shipped manifest"
     compiled = (ROOT / "openclaw" / "dist" / "dashboard.js").read_text(encoding="utf-8")
     assert f'const CORE_VERSION_FALLBACK = "{_manifest_version()}";' in compiled
+    pi_root = ROOT / "package.json"
+    if pi_root.exists():
+        pi_package = json.loads(pi_root.read_text(encoding="utf-8"))
+        assert pi_package["name"] == "token-optimizer-pi-package"
+        assert pi_package["version"] == _manifest_version()
 
 
-def test_patch_bump_updates_dashboard_core_labels(tmp_path):
-    """A release bump cannot leave installed dashboard labels one version behind."""
+def _copy_bump_inputs(tmp_path):
     for relative in (
         ".claude-plugin/plugin.json", ".claude-plugin/marketplace.json",
         ".codex-plugin/plugin.json", "opencode/src/dashboard/generator.ts",
@@ -92,6 +96,19 @@ def test_patch_bump_updates_dashboard_core_labels(tmp_path):
         dest = tmp_path / relative
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / relative, dest)
+    if (ROOT / "package.json").exists():
+        shutil.copyfile(ROOT / "package.json", tmp_path / "package.json")
+    else:
+        # Exercise the Pi root manifest before the separate Pi PR is merged.
+        (tmp_path / "package.json").write_text(
+            json.dumps({"name": "token-optimizer-pi-package", "version": _manifest_version()}),
+            encoding="utf-8",
+        )
+
+
+def test_patch_bump_updates_dashboard_core_labels(tmp_path):
+    """A release bump cannot leave installed dashboard labels one version behind."""
+    _copy_bump_inputs(tmp_path)
     old = _manifest_version()
     bumped = subprocess.run(
         [sys.executable, str(tmp_path / "scripts" / "bump_patch_version.py")],
@@ -99,6 +116,7 @@ def test_patch_bump_updates_dashboard_core_labels(tmp_path):
     ).stdout.strip()
     assert bumped != old
     assert json.loads((tmp_path / ".claude-plugin/plugin.json").read_text())["version"] == bumped
+    assert json.loads((tmp_path / "package.json").read_text())["version"] == bumped
     for relative, name in (
         ("opencode/src/dashboard/generator.ts", "CORE_VERSION"),
         ("openclaw/src/dashboard.ts", "CORE_VERSION_FALLBACK"),
@@ -106,6 +124,25 @@ def test_patch_bump_updates_dashboard_core_labels(tmp_path):
         text = (tmp_path / relative).read_text()
         assert f'const {name} = "{bumped}";' in text
         assert f'const {name} = "{old}";' not in text
+
+
+def test_patch_bump_checks_every_fallback_before_writing(tmp_path):
+    """A stale dashboard constant must not partially bump the manifests."""
+    _copy_bump_inputs(tmp_path)
+    old = _manifest_version()
+    dashboard = tmp_path / "openclaw" / "src" / "dashboard.ts"
+    source = dashboard.read_text(encoding="utf-8")
+    stale = source.replace(f'const CORE_VERSION_FALLBACK = "{old}";', 'const CORE_VERSION_FALLBACK = "0.0.0";')
+    assert stale != source
+    dashboard.write_text(stale, encoding="utf-8")
+    result = subprocess.run(
+        [sys.executable, str(tmp_path / "scripts" / "bump_patch_version.py")],
+        capture_output=True, text=True,
+    )
+    assert result.returncode != 0
+    assert json.loads((tmp_path / ".claude-plugin/plugin.json").read_text())["version"] == old
+    assert json.loads((tmp_path / ".codex-plugin/plugin.json").read_text())["version"] == old
+    assert json.loads((tmp_path / "package.json").read_text())["version"] == old
 
 
 def test_auto_release_rebuilds_and_guards_after_version_bump():
