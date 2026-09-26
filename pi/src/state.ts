@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { constants, closeSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, writeFileSync, renameSync } from "node:fs";
+import { constants, closeSync, fstatSync, lstatSync, mkdirSync, openSync, readSync, writeFileSync, renameSync } from "node:fs";
 
 export type Settings = {
   enabled: boolean;
@@ -20,13 +20,24 @@ export function ensurePrivateDir(path: string): void {
 }
 export function assertPrivateDir(path: string): void { privateStat(path, false); }
 export function readPrivateFile(path: string, maxBytes: number): string {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) throw new Error("Invalid local data size limit");
   privateStat(path, true);
   const fd = openSync(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
     const stat = fstatSync(fd);
     privateStat(path, true, stat);
     if (stat.size > maxBytes) throw new Error("Local data file exceeds size limit");
-    return readFileSync(fd, "utf8");
+    // The file can grow after fstat. Read at most one byte over the limit so
+    // a concurrent writer cannot turn a bounded recovery read into an OOM.
+    const buffer = Buffer.alloc(maxBytes + 1);
+    let bytes = 0;
+    while (bytes < buffer.length) {
+      const n = readSync(fd, buffer, bytes, buffer.length - bytes, null);
+      if (n === 0) break;
+      bytes += n;
+    }
+    if (bytes > maxBytes) throw new Error("Local data file exceeds size limit");
+    return buffer.toString("utf8", 0, bytes);
   } finally { closeSync(fd); }
 }
 export function dataDir(env: NodeJS.ProcessEnv = process.env): string {
