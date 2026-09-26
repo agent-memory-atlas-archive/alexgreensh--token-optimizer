@@ -52,6 +52,7 @@ import os
 import sqlite3
 import stat
 import sys
+import threading
 import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -73,6 +74,7 @@ POST_CAPTURE_FILES = {
     "/v1/metrics": "otlp-metrics.jsonl",
 }
 POST_READ_TIMEOUT_SECONDS = 30
+_capture_write_lock = threading.Lock()
 
 
 def _now() -> str:
@@ -88,24 +90,27 @@ def _assert_private_capture_dir(path: Path) -> None:
 
 
 def _append_private_capture(path: Path, line: str) -> None:
-    if path.is_symlink():
-        raise PermissionError("Capture destination is a symlink")
-    flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
-    fd = os.open(path, flags, 0o600)
-    try:
-        info = os.fstat(fd)
+    # ThreadingHTTPServer can append to the same JSONL file from several
+    # requests at once. Keep each complete record together in this process.
+    with _capture_write_lock:
         if path.is_symlink():
             raise PermissionError("Capture destination is a symlink")
-        if not stat.S_ISREG(info.st_mode):
-            raise PermissionError("Capture destination is not a regular file")
-        if os.name != "nt" and (info.st_mode & 0o077 or info.st_uid != os.getuid()):
-            raise PermissionError("Capture file is not private")
-        with os.fdopen(fd, "a", encoding="utf-8") as handle:
-            fd = -1
-            handle.write(line)
-    finally:
-        if fd >= 0:
-            os.close(fd)
+        flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(path, flags, 0o600)
+        try:
+            info = os.fstat(fd)
+            if path.is_symlink():
+                raise PermissionError("Capture destination is a symlink")
+            if not stat.S_ISREG(info.st_mode):
+                raise PermissionError("Capture destination is not a regular file")
+            if os.name != "nt" and (info.st_mode & 0o077 or info.st_uid != os.getuid()):
+                raise PermissionError("Capture file is not private")
+            with os.fdopen(fd, "a", encoding="utf-8") as handle:
+                fd = -1
+                handle.write(line)
+        finally:
+            if fd >= 0:
+                os.close(fd)
 
 
 class CollectorHandler(BaseHTTPRequestHandler):

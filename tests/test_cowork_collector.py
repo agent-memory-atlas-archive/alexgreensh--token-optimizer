@@ -12,8 +12,10 @@ import json
 import os
 import sqlite3
 import sys
+import threading
 import time
 import tracemalloc
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from email.message import Message
 from pathlib import Path
@@ -214,6 +216,42 @@ def test_oversize_capture_line_is_drained_before_next_event(tmp_path, monkeypatc
     assert stats["oversize_lines"] == 1
     assert "sess-after-oversize" in sessions
     assert peak < 1024 * 1024
+
+
+def test_concurrent_capture_writes_keep_jsonl_records_intact(tmp_path, monkeypatch):
+    real_fdopen = os.fdopen
+
+    class SplitWriter:
+        def __init__(self, fd, *args, **kwargs):
+            self.inner = real_fdopen(fd, *args, **kwargs)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return self.inner.__exit__(*args)
+
+        def write(self, text):
+            middle = len(text) // 2
+            self.inner.write(text[:middle])
+            self.inner.flush()
+            time.sleep(0.01)
+            self.inner.write(text[middle:])
+            self.inner.flush()
+
+    monkeypatch.setattr(tc.os, "fdopen", SplitWriter)
+    path = tmp_path / "otlp-logs.jsonl"
+    start = threading.Barrier(8)
+
+    def append(index):
+        start.wait()
+        tc._append_private_capture(path, json.dumps({"id": index, "pad": "x" * 1000}) + "\n")
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(append, range(8)))
+
+    records = [json.loads(line) for line in path.read_text().splitlines()]
+    assert sorted(record["id"] for record in records) == list(range(8))
 
 
 def test_int_helper_clamps_out_of_range(tmp_path):
