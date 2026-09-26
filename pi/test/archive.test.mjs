@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
-import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { archive, recover, listArchives, purge, MAX_ARCHIVE_BYTES, MAX_RESULT_BYTES } from '../src/archive.ts';
+import { archive, recover, listArchives, purge, MAX_ARCHIVE_BYTES, MAX_ARCHIVE_FILES, MAX_RESULT_BYTES } from '../src/archive.ts';
 import { redact } from '../src/redact.ts';
 test('archive redacts secrets and recovery checks pointer',()=>{ const root=mkdtempSync(join(tmpdir(),'pi-opt-'));try { const pointer=archive('hello ghp_'+'A'.repeat(36),root); assert.equal(recover(pointer.pointer,root),'hello [REDACTED]'); assert.throws(()=>recover('../etc/passwd:0123456789ab',root)); }finally{rmSync(root,{recursive:true,force:true});} });
 test('redactor catches bearer and private keys',()=>{ assert.equal(redact('Bearer '+ 'a'.repeat(32)), '[REDACTED]');assert.equal(redact('-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----'),'[REDACTED]'); });
@@ -38,6 +38,16 @@ test('total archive quota fails closed without mutating original text',()=>{
   assert.ok(created*Buffer.byteLength(block)<=MAX_ARCHIVE_BYTES);
   assert.equal(archive(block,root),undefined);
   assert.equal(purge('archives',root),created);
+ }finally{rmSync(root,{recursive:true,force:true});}
+});
+
+test('tiny archives stop at a file-count limit before directory scans grow unbounded',()=>{
+ const root=mkdtempSync(join(tmpdir(),'pi-file-cap-'));try {
+  const dir=join(root,'archives');
+  mkdirSync(dir,{mode:0o700});
+  for(let i=0;i<MAX_ARCHIVE_FILES;i++) writeFileSync(join(dir,`${Date.now()}-${randomUUID()}.txt`),'x',{mode:0o600});
+  assert.equal(archive('one more tiny result',root),undefined);
+  assert.equal(readdirSync(dir).length,MAX_ARCHIVE_FILES);
  }finally{rmSync(root,{recursive:true,force:true});}
 });
 

@@ -1,11 +1,12 @@
 import { createHash, randomUUID } from "node:crypto";
-import { writeFileSync, readdirSync, statSync, unlinkSync } from "node:fs";
+import { writeFileSync, readdirSync, lstatSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { redact, suspiciousSecret } from "./redact.ts";
 import { assertPrivateDir, dataDir, ensurePrivateDir, readPrivateFile } from "./state.ts";
 
 export const MAX_RESULT_BYTES = 64 * 1024;
 export const MAX_ARCHIVE_BYTES = 10 * 1024 * 1024;
+export const MAX_ARCHIVE_FILES = 1024;
 /** Refuse unrecognized secret-shaped data rather than persisting it. */
 export function archive(text: string, root = dataDir()): { pointer: string; path: string } | undefined {
   if (Buffer.byteLength(text, "utf8") > MAX_RESULT_BYTES || suspiciousSecret(text)) return;
@@ -14,9 +15,14 @@ export function archive(text: string, root = dataDir()): { pointer: string; path
   ensurePrivateDir(root);
   const dir = join(root, "archives"); ensurePrivateDir(dir);
   let bytes = 0;
+  let files = 0;
   for (const name of readdirSync(dir)) {
     if (!/^[0-9]{10,16}-[0-9a-f-]{36}\.txt$/.test(name)) continue;
-    bytes += statSync(join(dir, name)).size;
+    const stat = lstatSync(join(dir, name));
+    if (!stat.isFile()) continue;
+    files++;
+    if (files >= MAX_ARCHIVE_FILES) return;
+    bytes += stat.size;
   }
   if (bytes + Buffer.byteLength(body, "utf8") > MAX_ARCHIVE_BYTES) return;
   const id = `${Date.now()}-${randomUUID()}`;

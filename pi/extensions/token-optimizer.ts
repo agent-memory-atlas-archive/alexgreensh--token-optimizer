@@ -156,7 +156,7 @@ export default function tokenOptimizer(pi: ExtensionAPI): void {
         if (!settings.enabled) { ctx.ui.notify("Enable Token Optimizer first", "warning"); return; }
         const value = rest[0];
         if (value !== "on" && value !== "off") { ctx.ui.notify("Usage: /token-optimizer archive on|off", "info"); return; }
-        if (value === "on" && ctx.hasUI && !(await ctx.ui.confirm("Local archives", "Store full redacted tool-output text locally (up to 64 KiB per result and approximately 10 MiB total (best-effort across concurrent Pi processes))? Suspected secrets are skipped. This does not trim the result seen by the agent."))) return;
+        if (value === "on" && ctx.hasUI && !(await ctx.ui.confirm("Local archives", "Store full redacted tool-output text locally (up to 64 KiB per result, approximately 10 MiB or 1,024 files total, best-effort across concurrent Pi processes)? Suspected secrets are skipped. This does not trim the result seen by the agent."))) return;
         saveSettings({ ...settings, archiveToolOutput: value === "on" });
         ctx.ui.notify(`Local tool-output archives ${value}${value === "off" ? "; existing archives remain until purged or expired" : ""}`, "info"); return;
       }
