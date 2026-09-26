@@ -20,6 +20,7 @@ export function redact(text: string): string {
 /** Sensitive labels are rejected, not redacted by guessing at their value shape. */
 const SECRET_LABELS = [
   ["secret"], ["token"], ["password"], ["passwd"], ["credential"], ["credentials"],
+  ["authorization"], ["cookie"],
   ["api", "key"], ["access", "key"], ["session", "key"], ["signing", "key"],
   ["private", "key"], ["client", "secret"], ["client", "id"],
   ["access", "token"], ["refresh", "token"], ["session", "token"], ["auth", "token"],

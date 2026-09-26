@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdirSync, writeFileSync, readFileSync, readdirSync, statSync, unlinkSync } from "node:fs";
+import { writeFileSync, readdirSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 import { redact, suspiciousSecret } from "./redact.ts";
-import { dataDir } from "./state.ts";
+import { assertPrivateDir, dataDir, ensurePrivateDir, readPrivateFile } from "./state.ts";
 
 export const MAX_RESULT_BYTES = 64 * 1024;
 export const MAX_ARCHIVE_BYTES = 10 * 1024 * 1024;
@@ -11,7 +11,8 @@ export function archive(text: string, root = dataDir()): { pointer: string; path
   if (Buffer.byteLength(text, "utf8") > MAX_RESULT_BYTES || suspiciousSecret(text)) return;
   const body = redact(text);
   if (suspiciousSecret(body)) return;
-  const dir = join(root, "archives"); mkdirSync(dir, { recursive: true, mode: 0o700 });
+  ensurePrivateDir(root);
+  const dir = join(root, "archives"); ensurePrivateDir(dir);
   let bytes = 0;
   for (const name of readdirSync(dir)) {
     if (!/^[0-9]{10,16}-[0-9a-f-]{36}\.txt$/.test(name)) continue;
@@ -27,13 +28,15 @@ export function archive(text: string, root = dataDir()): { pointer: string; path
 export function recover(pointer: string, root = dataDir()): string {
   const [id, hash] = pointer.split(":");
   if (!/^[0-9]{10,16}-[0-9a-f-]{36}$/.test(id) || !/^[0-9a-f]{12}$/.test(hash)) throw new Error("Invalid recovery pointer");
-  const body = readFileSync(join(root, "archives", `${id}.txt`), "utf8");
+  assertPrivateDir(root); assertPrivateDir(join(root, "archives"));
+  const body = readPrivateFile(join(root, "archives", `${id}.txt`), MAX_RESULT_BYTES);
   if (!createHash("sha256").update(body).digest("hex").startsWith(hash)) throw new Error("Archive checksum mismatch");
   return body;
 }
 export function purge(kind: "archives" | "checkpoints", root = dataDir()): number {
   const dir = join(root, kind); let n = 0;
   try {
+    assertPrivateDir(root); assertPrivateDir(dir);
     for (const name of readdirSync(dir)) {
       if (!(kind === "archives" ? /^[0-9]{10,16}-[0-9a-f-]{36}\.txt$/ : /^[0-9a-f]{24}\.json$/).test(name)) continue;
       unlinkSync(join(dir, name)); n++;
@@ -44,6 +47,7 @@ export function purge(kind: "archives" | "checkpoints", root = dataDir()): numbe
 export function pruneArchives(retainDays: number, root = dataDir(), now = Date.now()): number {
   const dir = join(root, "archives"); let count = 0;
   try {
+    assertPrivateDir(root); assertPrivateDir(dir);
     for (const file of readdirSync(dir)) {
       if (!/^[0-9]{10,16}-[0-9a-f-]{36}\.txt$/.test(file)) continue;
       const target = join(dir, file);
@@ -54,8 +58,10 @@ export function pruneArchives(retainDays: number, root = dataDir(), now = Date.n
 }
 
 export function listArchives(root = dataDir()): string[] {
-  try { return readdirSync(join(root, "archives")).filter(name => /^[0-9]{10,16}-[0-9a-f-]{36}\.txt$/.test(name)).sort().reverse().slice(0, 20).map(name => {
-    const body = readFileSync(join(root, "archives", name), "utf8");
-    return `${name.slice(0, -4)}:${createHash("sha256").update(body).digest("hex").slice(0, 12)}`;
+  try { assertPrivateDir(root); assertPrivateDir(join(root, "archives")); return readdirSync(join(root, "archives")).filter(name => /^[0-9]{10,16}-[0-9a-f-]{36}\.txt$/.test(name)).sort().reverse().slice(0, 20).flatMap(name => {
+    try {
+      const body = readPrivateFile(join(root, "archives", name), MAX_RESULT_BYTES);
+      return [`${name.slice(0, -4)}:${createHash("sha256").update(body).digest("hex").slice(0, 12)}`];
+    } catch { return []; }
   }); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; return []; }
 }

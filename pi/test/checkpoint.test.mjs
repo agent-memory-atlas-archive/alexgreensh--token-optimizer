@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { lstatSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { checkpointFromBranch, writeCheckpoint, readCheckpoint } from '../src/checkpoint.ts';
@@ -22,5 +22,19 @@ test('checkpoint skips secret assignments even when caller provides them directl
     assert.equal(writeCheckpoint({...cp,goals:[value]},root),undefined,`written: ${value}`);
   }
   assert.equal(readCheckpoint('s','leaf',root),undefined);
+ }finally{rmSync(root,{recursive:true,force:true});}
+});
+
+test('checkpoint write replaces a planted symlink without changing its target',()=>{
+ const root=mkdtempSync(join(tmpdir(),'cp-link-'));try {
+  const cp=checkpointFromBranch('s','leaf',['Goal: first']);
+  const id=writeCheckpoint(cp,root);
+  const path=join(root,'checkpoints',`${id}.json`);
+  const target=join(root,'unrelated.txt');writeFileSync(target,'preserve me',{mode:0o600});
+  unlinkSync(path);symlinkSync(target,path);
+  writeCheckpoint({...cp,goals:['Goal: second']},root);
+  assert.equal(readFileSync(target,'utf8'),'preserve me');
+  assert.equal(lstatSync(path).isSymbolicLink(),false);
+  assert.deepEqual(readCheckpoint('s','leaf',root)?.goals,['Goal: second']);
  }finally{rmSync(root,{recursive:true,force:true});}
 });

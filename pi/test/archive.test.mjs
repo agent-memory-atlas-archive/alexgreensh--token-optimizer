@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { archive, recover, purge, MAX_ARCHIVE_BYTES, MAX_RESULT_BYTES } from '../src/archive.ts';
+import { createHash, randomUUID } from 'node:crypto';
+import { archive, recover, listArchives, purge, MAX_ARCHIVE_BYTES, MAX_RESULT_BYTES } from '../src/archive.ts';
 import { redact } from '../src/redact.ts';
 test('archive redacts secrets and recovery checks pointer',()=>{ const root=mkdtempSync(join(tmpdir(),'pi-opt-'));try { const pointer=archive('hello ghp_'+'A'.repeat(36),root); assert.equal(recover(pointer.pointer,root),'hello [REDACTED]'); assert.throws(()=>recover('../etc/passwd:0123456789ab',root)); }finally{rmSync(root,{recursive:true,force:true});} });
 test('redactor catches bearer and private keys',()=>{ assert.equal(redact('Bearer '+ 'a'.repeat(32)), '[REDACTED]');assert.equal(redact('-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----'),'[REDACTED]'); });
@@ -63,6 +64,10 @@ test('secret-named keys reject quoted, short, multiline, JSON and YAML values',(
   'aPi\tKeY: abcd123456789',
   'API\u00A0Key: abcd123456789',
   'vault.token=abcdef1234567890',
+  'Authorization: Basic YWxpY2U6cGFzc3dvcmQ=',
+  'Proxy-Authorization: Digest opaquevalue',
+  'Cookie: sessionid=abc123',
+  'Set-Cookie: sessionid=abc123; HttpOnly',
  ];
  const root=mkdtempSync(join(tmpdir(),'pi-shapes-'));try {
   for (const value of samples) assert.equal(archive(value,root),undefined,`persisted: ${value}`);
@@ -78,5 +83,25 @@ test('ordinary labels and prose remain archivable',()=>{
     assert.ok(stored,`skipped ordinary: ${text}`);
     assert.equal(recover(stored.pointer,root),text);
   }
+ }finally{rmSync(root,{recursive:true,force:true});}
+});
+
+test('archive refuses a shared data directory', { skip: process.platform === 'win32' },()=>{
+ const root=mkdtempSync(join(tmpdir(),'pi-shared-'));try {
+  chmodSync(root,0o755);
+  assert.throws(()=>archive('private output',root),/not private/);
+  assert.equal(readdirSync(root).length,0);
+ }finally{chmodSync(root,0o700);rmSync(root,{recursive:true,force:true});}
+});
+
+test('archive listing and recovery refuse a symlink to another file',()=>{
+ const root=mkdtempSync(join(tmpdir(),'pi-link-'));try {
+  archive('safe output',root);
+  const target=join(root,'private.txt'); writeFileSync(target,'private but unrelated',{mode:0o600});
+  const id=`${Date.now()}-${randomUUID()}`;
+  symlinkSync(target,join(root,'archives',`${id}.txt`));
+  const hash=createHash('sha256').update('private but unrelated').digest('hex').slice(0,12);
+  assert.throws(()=>recover(`${id}:${hash}`,root));
+  assert.ok(!listArchives(root).some(pointer=>pointer.startsWith(id)));
  }finally{rmSync(root,{recursive:true,force:true});}
 });
