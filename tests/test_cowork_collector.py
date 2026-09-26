@@ -13,6 +13,7 @@ import os
 import sqlite3
 import sys
 import time
+import tracemalloc
 from datetime import datetime, timezone
 from email.message import Message
 from pathlib import Path
@@ -197,12 +198,34 @@ def test_malformed_capture_does_not_block_later_valid_event(tmp_path):
     assert stats["undecodable_lines"] == 1
 
 
+def test_oversize_capture_line_is_drained_before_next_event(tmp_path, monkeypatch):
+    dd = tmp_path / "cap"
+    dd.mkdir()
+    monkeypatch.setattr(tc, "MAX_LINE", 1024)
+    (dd / "otlp-logs.jsonl").write_bytes(b"x" * (4 * 1024 * 1024) + b"\n")
+    _write_capture(dd, [_api_record("sess-after-oversize", EVENING_NANOS)])
+
+    tracemalloc.start()
+    try:
+        sessions, stats = tc.parse_cowork_sessions(dd)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert stats["oversize_lines"] == 1
+    assert "sess-after-oversize" in sessions
+    assert peak < 1024 * 1024
+
+
 def test_int_helper_clamps_out_of_range(tmp_path):
     assert tc._int(float("inf")) == 0
     assert tc._int("inf") == 0
     assert tc._int(2 ** 64) == 0
     assert tc._int(-(2 ** 64)) == 0
+    assert tc._int(-1) == 0
     assert tc._int("1000") == 1000
+    assert tc._int("9007199254740993") == 9007199254740993
+    assert tc._int("1.5") == 0
+    assert tc._int(True) == 0
     assert tc._int(None) == 0
 
 

@@ -47,6 +47,7 @@ import argparse
 import base64
 import importlib.util
 import json
+import math
 import os
 import sqlite3
 import stat
@@ -241,15 +242,23 @@ def _iter_events(data_dir: Path):
             # multi-GB capture must not OOM the ingest. An
             # individual over-long line is skipped, not buffered.
             try:
-                fh = path.open(encoding="utf-8", errors="replace")
+                fh = path.open("rb")
             except OSError:
                 continue
             with fh:
-                for line in fh:
+                while True:
+                    line = fh.readline(MAX_LINE + 1)
+                    if not line:
+                        break
                     if len(line) > MAX_LINE:
                         tally["oversize_lines"] += 1
+                        # readline with a limit leaves the rest of this record
+                        # in the stream. Drain it in bounded chunks so the next
+                        # valid record is still parsed.
+                        while line and not line.endswith(b"\n"):
+                            line = fh.readline(MAX_LINE + 1)
                         continue
-                    line = line.strip()
+                    line = line.decode("utf-8", errors="replace").strip()
                     if not line:
                         continue
                     try:
@@ -281,14 +290,21 @@ def _iter_events(data_dir: Path):
 
 
 def _int(value: Any) -> int:
-    """Coerce to a SQLite-safe int. int(float('inf')) raises OverflowError and a
-    value >= 2**63 dies at the bind — both are treated as a bad field and
-    dropped to 0 (fail-open), never allowed to reach SQLite."""
+    """Accept nonnegative integral token counts within SQLite's range."""
     try:
-        n = int(float(value))
+        if isinstance(value, bool):
+            return 0
+        if isinstance(value, float):
+            if not math.isfinite(value) or not value.is_integer():
+                return 0
+            n = int(value)
+        elif isinstance(value, (int, str)):
+            n = int(value)
+        else:
+            return 0
     except (TypeError, ValueError, OverflowError):
         return 0
-    if n > _INT64_MAX or n < -_INT64_MAX:
+    if n > _INT64_MAX or n < 0:
         return 0
     return n
 
