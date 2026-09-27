@@ -13,7 +13,7 @@ import { computeRealizedSavings } from "../savings.js";
 // intentionally independent: the adapter ships at its own cadence and is NOT
 // required to match the core number.
 const CORE_VERSION = "5.13.25";
-const ADAPTER_VERSION = "1.1.7";
+const ADAPTER_VERSION = "1.1.8";
 
 export interface DashboardOptions {
   dataDir: string;
