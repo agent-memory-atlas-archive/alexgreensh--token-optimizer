@@ -88,7 +88,7 @@ import types
 import platform
 import shutil
 from collections import deque
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 try:
@@ -7531,7 +7531,8 @@ def _run_session_end_flush_worker(args):
             except Exception:
                 pass
             try:
-                generate_standalone_dashboard(days=30, quiet=True)
+                if not (_dashboard_hook_backoff_active() or _dashboard_selfheal_inflight()):
+                    generate_standalone_dashboard(days=30, quiet=True)
             except _HookTimeout:
                 # Gap 4: the bounded SessionEnd regen was killed by the 20s budget
                 # (a large history's 4 MB build does not fit), so it may have left
@@ -7864,7 +7865,7 @@ def _dispatch_collect(args):
             pass
 
 
-def _spawn_detached_dashboard_selfheal(days=30, force=False):
+def _spawn_detached_dashboard_selfheal(days=30, force=False, *, hook_timeout=True):
     """Rebuild the dashboard in a DETACHED, unbounded background process.
 
     Bug B self-heal: when a bounded hook-path regen is killed by the 20s budget
@@ -7886,9 +7887,14 @@ def _spawn_detached_dashboard_selfheal(days=30, force=False):
     still applies inside generate_standalone_dashboard (force governs the throttle,
     not version precedence), so a forced heal never clobbers a newer dashboard.
     """
+    if not _dashboard_heal_spawn_due():
+        if hook_timeout:
+            _record_dashboard_hook_timeout()
+        return
     try:
         env = dict(os.environ)
         env["TOKEN_OPTIMIZER_INTERACTIVE"] = "1"
+        env["TOKEN_OPTIMIZER_DASHBOARD_SELFHEAL"] = "1"
         env.pop("TOKEN_OPTIMIZER_HOOK", None)
         # Detach so the child outlives the killed hook: POSIX new session, or
         # (on Windows) DETACHED_PROCESS. start_new_session is POSIX-only.
@@ -7901,7 +7907,7 @@ def _spawn_detached_dashboard_selfheal(days=30, force=False):
         # 0 off-Windows) so a console-less Windows host never flashes a cmd window
         # -- and so the spawn-site invariant test can see it. DETACHED_PROCESS is 0
         # off-Windows, so this evaluates to 0 on POSIX (the only valid value there).
-        subprocess.Popen(
+        child = subprocess.Popen(
             argv,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
@@ -7911,7 +7917,20 @@ def _spawn_detached_dashboard_selfheal(days=30, force=False):
             creationflags=(getattr(subprocess, "DETACHED_PROCESS", 0) | _NO_WINDOW),
             **popen_kw,
         )
+        try:
+            # The marker describes the rebuild child, not the hook that exits.
+            _replace_dashboard_heal_pid(str(os.getpid()), str(child.pid))
+        except (AttributeError, OSError):
+            pass
+        if hook_timeout:
+            _record_dashboard_hook_timeout()
     except Exception as _e:
+        try:
+            marker = SNAPSHOT_DIR / _DASHBOARD_HEAL_LOCK_NAME
+            if marker.read_text().strip() == str(os.getpid()):
+                marker.unlink()
+        except OSError:
+            pass
         # Fire-and-forget: never raise (a failed self-heal must not break the
         # hook). But DO leave a breadcrumb — every other spawn site calls
         # _log_spawn_failure; this was the only one that swallowed silently,
@@ -7932,10 +7951,115 @@ def _spawn_detached_dashboard_selfheal(days=30, force=False):
 # later version bump can heal again (and a crashed spawner never wedges the heal).
 _DASHBOARD_HEAL_LOCK_NAME = "dashboard.heal.lock"
 _DASHBOARD_HEAL_LOCK_STALE_SECONDS = 60
+_DASHBOARD_HOOK_BACKOFF_SECONDS = 3600
+
+
+def _dashboard_hook_backoff_active():
+    """Back off only after the detached child actually refreshed the dashboard."""
+    marker = SNAPSHOT_DIR / "dashboard.hook.backoff"
+    try:
+        marker_mtime = marker.stat().st_mtime
+        age = time.time() - marker_mtime
+        if not 0 <= age < _DASHBOARD_HOOK_BACKOFF_SECONDS:
+            return False
+        if DASHBOARD_PATH.stat().st_mtime < marker_mtime:
+            return False
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        fd = os.open(str(marker), flags)
+        try:
+            return (stat.S_ISREG(os.fstat(fd).st_mode)
+                    and os.read(fd, 64).decode("ascii", errors="ignore") == TOKEN_OPTIMIZER_VERSION)
+        finally:
+            os.close(fd)
+    except OSError:
+        return False
+
+
+def _record_dashboard_hook_timeout():
+    """Record the attempt; an updated dashboard activates the one-hour cooldown."""
+    try:
+        SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+        marker = SNAPSHOT_DIR / "dashboard.hook.backoff"
+        flags = (os.O_WRONLY | os.O_CREAT
+                 | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+        fd = os.open(str(marker), flags, 0o600)
+        try:
+            if stat.S_ISREG(os.fstat(fd).st_mode):
+                os.ftruncate(fd, 0)
+                os.write(fd, TOKEN_OPTIMIZER_VERSION.encode("ascii"))
+        finally:
+            os.close(fd)
+    except OSError:
+        pass
+
+
+def _replace_dashboard_heal_pid(expected, child_pid):
+    marker = SNAPSHOT_DIR / _DASHBOARD_HEAL_LOCK_NAME
+    flags = os.O_RDWR | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    fd = os.open(str(marker), flags)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return
+        if os.read(fd, 64).decode("ascii", errors="ignore").strip() != expected:
+            return
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.write(fd, child_pid.encode("ascii"))
+        os.ftruncate(fd, len(child_pid))
+    finally:
+        os.close(fd)
+
+
+def _dashboard_selfheal_inflight():
+    with _dashboard_selfheal_build_lock() as acquired:
+        return acquired is False
+
+
+@contextmanager
+def _dashboard_selfheal_build_lock():
+    """Let one detached rebuild run; the OS releases this lock after a crash."""
+    fd = None
+    held = None
+    lock_attempted = False
+    try:
+        SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+        path = SNAPSHOT_DIR / "dashboard.selfheal.build.lock"
+        flags = (os.O_RDWR | os.O_CREAT
+                 | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+        fd = os.open(str(path), flags, 0o600)
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError(errno.EINVAL, "dashboard self-heal lock is not a regular file")
+        if os.name == "nt":
+            import msvcrt
+            os.lseek(fd, 0, os.SEEK_SET)
+            lock_attempted = True
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            lock_attempted = True
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        held = True
+    except OSError as exc:
+        if lock_attempted and (exc.errno in (errno.EACCES, errno.EAGAIN) or getattr(exc, "winerror", None) == 33):
+            held = False
+        else:
+            _log_spawn_failure("dashboard self-heal lock failed: %s" % exc)
+    try:
+        yield held
+    finally:
+        if fd is not None:
+            try:
+                if held:
+                    if os.name == "nt":
+                        os.lseek(fd, 0, os.SEEK_SET)
+                        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                    else:
+                        fcntl.flock(fd, fcntl.LOCK_UN)
+            finally:
+                os.close(fd)
 
 
 def _dashboard_heal_spawn_due():
-    """Return True iff THIS caller should spawn the version-bump dashboard heal.
+    """Return True iff THIS caller should spawn a dashboard heal.
 
     Bug (thundering herd): on a version bump every concurrent
     SessionStart's ensure-health tick sees the stale sidecar and each spawns a
@@ -7949,9 +8073,12 @@ def _dashboard_heal_spawn_due():
     on the happy path -- it must OUTLIVE this call to suppress the herd, and it is
     reclaimed by the next caller once it ages past the window.
 
-    Fail-OPEN: any unexpected filesystem error returns True (spawn). A missed
-    dedup just costs one extra rebuild, strictly better than skipping the heal.
+    The child holds a separate OS lock for the full rebuild. Check it here so
+    even an expired marker cannot launch another child while one is working.
+    Fail-OPEN on filesystem errors; the child lock still prevents duplicate work.
     """
+    if _dashboard_selfheal_inflight():
+        return False
     marker = SNAPSHOT_DIR / _DASHBOARD_HEAL_LOCK_NAME
     try:
         SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
@@ -8046,7 +8173,13 @@ def _dispatch_dashboard(args):
         )
         timed_out = False
         try:
-            out = generate_standalone_dashboard(days=days, quiet=quiet, force=force)
+            lock = (_dashboard_selfheal_build_lock()
+                    if os.environ.get("TOKEN_OPTIMIZER_DASHBOARD_SELFHEAL") == "1"
+                    else nullcontext(True))
+            with lock as acquired:
+                if not acquired:
+                    sys.exit(0)
+                out = generate_standalone_dashboard(days=days, quiet=quiet, force=force)
         except _HookTimeout:
             out = None
             timed_out = True
@@ -38333,8 +38466,7 @@ def _arm_dashboard_selfheal_on_timeout(days=30):
 
     def _spawn():
         try:
-            if _dashboard_heal_spawn_due():
-                _spawn_detached_dashboard_selfheal(days=days, force=True)
+            _spawn_detached_dashboard_selfheal(days=days, force=True)
         except Exception:
             pass
 
@@ -47326,9 +47458,8 @@ def run_ensure_health():
                 # already uses; _dashboard_heal_spawn_due() fails OPEN so a lock
                 # glitch never skips the heal.
                 try:
-                    if _dashboard_heal_spawn_due():
-                        _spawn_detached_dashboard_selfheal(days=30, force=True)
-                        print(f"  [Token Optimizer] Refreshing dashboard to v{TOKEN_OPTIMIZER_VERSION} (background)", file=sys.stderr)
+                    _spawn_detached_dashboard_selfheal(days=30, force=True, hook_timeout=False)
+                    print(f"  [Token Optimizer] Refreshing dashboard to v{TOKEN_OPTIMIZER_VERSION} (background)", file=sys.stderr)
                 except Exception as _e:
                     print(f"  [Token Optimizer] dashboard refresh failed: {_e}", file=sys.stderr)
     except Exception as _e:

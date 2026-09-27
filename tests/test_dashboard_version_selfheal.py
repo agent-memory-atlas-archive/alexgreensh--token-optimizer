@@ -138,7 +138,7 @@ def test_dispatch_dashboard_defaults_to_no_force(m, monkeypatch):
 def test_ensure_health_hands_html_heal_to_detached_forced_child(m):
     src = inspect.getsource(m.run_ensure_health)
     # The stale-HTML branch must hand off to the detached, forced child...
-    assert "_spawn_detached_dashboard_selfheal(days=30, force=True)" in src, (
+    assert "_spawn_detached_dashboard_selfheal(days=30, force=True, hook_timeout=False)" in src, (
         "the stale-HTML self-heal must spawn the detached forced child, not run "
         "the ~9s rebuild in-process under the 8s hook budget"
     )
@@ -155,7 +155,7 @@ def test_ensure_health_daemon_update_runs_after_html_heal(m):
     reaches the daemon update -- the block that was stranded when the in-process
     regen blew the budget."""
     src = inspect.getsource(m.run_ensure_health)
-    heal_at = src.index("_spawn_detached_dashboard_selfheal(days=30, force=True)")
+    heal_at = src.index("_spawn_detached_dashboard_selfheal(days=30, force=True, hook_timeout=False)")
     daemon_at = src.index('TOKEN_OPTIMIZER_DAEMON_VERSION = "')
     assert heal_at < daemon_at, "HTML heal must precede the daemon-script update"
     # And the daemon update actually regenerates the script when the marker drifts.
@@ -331,15 +331,10 @@ def test_heal_spawn_due_reclaims_stale_marker(m):
 
 
 def test_ensure_health_guards_spawn_with_herd_lock(m):
-    """Source contract: the version-bump spawn is gated on
-    ``_dashboard_heal_spawn_due`` so N concurrent ticks cannot each fire a
-    detached rebuild -- the guard must PRECEDE the spawn, not follow it."""
-    src = inspect.getsource(m.run_ensure_health)
-    assert "_dashboard_heal_spawn_due()" in src, (
-        "the version-bump spawn is no longer guarded by the herd lock"
-    )
+    """Every self-heal call, including ensure-health, uses the central spawn guard."""
+    src = inspect.getsource(m._spawn_detached_dashboard_selfheal)
     guard_at = src.index("_dashboard_heal_spawn_due()")
-    spawn_at = src.index("_spawn_detached_dashboard_selfheal(days=30, force=True)")
+    spawn_at = src.index("subprocess.Popen(")
     assert guard_at < spawn_at, "the herd guard must gate the spawn, not follow it"
 
 
