@@ -7959,10 +7959,9 @@ def _dashboard_hook_backoff_active():
     marker = SNAPSHOT_DIR / "dashboard.hook.backoff"
     try:
         marker_mtime = marker.stat().st_mtime
-        age = time.time() - marker_mtime
-        if not 0 <= age < _DASHBOARD_HOOK_BACKOFF_SECONDS:
-            return False
-        if DASHBOARD_PATH.stat().st_mtime < marker_mtime:
+        dashboard_mtime = DASHBOARD_PATH.stat().st_mtime
+        age = time.time() - dashboard_mtime
+        if dashboard_mtime < marker_mtime or not 0 <= age < _DASHBOARD_HOOK_BACKOFF_SECONDS:
             return False
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
         fd = os.open(str(marker), flags)

@@ -143,13 +143,13 @@ def test_hook_timeout_backoff_expires_and_resets_on_version_change(measure, monk
     monkeypatch.setattr(measure, "DASHBOARD_PATH", dashboard)
     measure._record_dashboard_hook_timeout()
     assert not measure._dashboard_hook_backoff_active(), "a failed child must not suppress retries"
-    dashboard.write_text("updated")
     marker = measure.SNAPSHOT_DIR / "dashboard.hook.backoff"
-    updated = marker.stat().st_mtime + 1
-    os.utime(dashboard, (updated, updated))
+    old = time.time() - 5
+    os.utime(marker, (old, old))
+    dashboard.write_text("updated")
     assert measure._dashboard_hook_backoff_active()
     old = time.time() - measure._DASHBOARD_HOOK_BACKOFF_SECONDS - 1
-    os.utime(marker, (old, old))
+    os.utime(dashboard, (old, old))
     assert not measure._dashboard_hook_backoff_active()
     measure._record_dashboard_hook_timeout()
     monkeypatch.setattr(measure, "TOKEN_OPTIMIZER_VERSION", "next-version")
@@ -161,10 +161,10 @@ def test_flush_skips_expensive_dashboard_during_backoff(measure, monkeypatch):
     dashboard = measure.SNAPSHOT_DIR / "dashboard.html"
     monkeypatch.setattr(measure, "DASHBOARD_PATH", dashboard)
     measure._record_dashboard_hook_timeout()
-    dashboard.write_text("updated")
     marker = measure.SNAPSHOT_DIR / "dashboard.hook.backoff"
-    updated = marker.stat().st_mtime + 1
-    os.utime(dashboard, (updated, updated))
+    old = time.time() - 5
+    os.utime(marker, (old, old))
+    dashboard.write_text("updated")
     monkeypatch.setattr(measure, "_acquire_session_end_flush_lock", lambda: object())
     monkeypatch.setattr(measure, "_release_session_end_flush_lock", lambda _: None)
     monkeypatch.setattr(measure, "_install_hook_budget", lambda _: type("Budget", (), {"remaining": lambda self: 20})())
