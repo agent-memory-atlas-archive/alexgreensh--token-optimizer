@@ -197,7 +197,9 @@ def test_malformed_capture_does_not_block_later_valid_event(tmp_path):
 
     sessions, stats = tc.parse_cowork_sessions(dd)
     assert "sess-good-after-bad" in sessions
-    assert stats["undecodable_lines"] == 1
+    # Python versions differ on whether the deeply nested record reaches the
+    # decoder's recursion limit. The invalid top-level record always counts.
+    assert stats["undecodable_lines"] in (1, 2)
 
 
 def test_oversize_capture_line_is_drained_before_next_event(tmp_path, monkeypatch):
