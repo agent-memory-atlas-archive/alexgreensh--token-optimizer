@@ -148,6 +148,12 @@ def test_hook_timeout_backoff_expires_and_resets_on_version_change(measure, monk
     os.utime(marker, (old, old))
     dashboard.write_text("updated")
     assert measure._dashboard_hook_backoff_active()
+    future = time.time() + 1
+    os.utime(dashboard, (future, future))
+    assert measure._dashboard_hook_backoff_active(), "small filesystem clock skew must not rerun hooks"
+    future = time.time() + 10
+    os.utime(dashboard, (future, future))
+    assert not measure._dashboard_hook_backoff_active(), "a far-future timestamp must not pin backoff"
     old = time.time() - measure._DASHBOARD_HOOK_BACKOFF_SECONDS - 1
     os.utime(dashboard, (old, old))
     assert not measure._dashboard_hook_backoff_active()

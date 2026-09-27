@@ -7952,6 +7952,7 @@ def _spawn_detached_dashboard_selfheal(days=30, force=False, *, hook_timeout=Tru
 _DASHBOARD_HEAL_LOCK_NAME = "dashboard.heal.lock"
 _DASHBOARD_HEAL_LOCK_STALE_SECONDS = 60
 _DASHBOARD_HOOK_BACKOFF_SECONDS = 3600
+_DASHBOARD_BACKOFF_CLOCK_SKEW_SECONDS = 5
 
 
 def _dashboard_hook_backoff_active():
@@ -7961,7 +7962,7 @@ def _dashboard_hook_backoff_active():
         marker_mtime = marker.stat().st_mtime
         dashboard_mtime = DASHBOARD_PATH.stat().st_mtime
         age = time.time() - dashboard_mtime
-        if dashboard_mtime < marker_mtime or not 0 <= age < _DASHBOARD_HOOK_BACKOFF_SECONDS:
+        if dashboard_mtime < marker_mtime or not -_DASHBOARD_BACKOFF_CLOCK_SKEW_SECONDS <= age < _DASHBOARD_HOOK_BACKOFF_SECONDS:
             return False
         flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
         fd = os.open(str(marker), flags)
