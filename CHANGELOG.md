@@ -1,5 +1,11 @@
 # Changelog
 
+## [5.13.26] - 2026-09-27
+
+- Keep detached dashboard self-heals single-flight for the entire rebuild, even on large histories, and record the rebuild child's PID.
+- Back off repeated Stop-hook dashboard attempts for one hour after a successful background refresh, while retrying promptly after a failed refresh or version upgrade. Fixes #204.
+- Keep OpenCode and OpenClaw core dashboard labels aligned with 5.13.26; correct the OpenClaw adapter fallback to its current 2.4.24 package version.
+
 ## [5.13.25] - 2026-09-27
 
 - Add opt-in native Pi diagnostics, active-branch usage, local archives, and review-before-use continuity checkpoints.
