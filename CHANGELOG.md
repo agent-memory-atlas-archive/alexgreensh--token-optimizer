@@ -1,5 +1,9 @@
 # Changelog
 
+## [5.13.27] - 2026-09-29
+
+- Up-to-date model prices: sonnet_5_5.
+
 ## [5.13.26] - 2026-09-27
 
 - Keep detached dashboard self-heals single-flight for the entire rebuild, even on large histories, and record the rebuild child's PID.

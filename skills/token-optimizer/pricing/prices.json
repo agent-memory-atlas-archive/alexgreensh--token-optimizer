@@ -178,6 +178,13 @@
    "cache_read": 0.2,
    "output": 10.0
   },
+  "sonnet_5_5": {
+   "input": 2.0,
+   "cache_write": 2.5,
+   "cache_write_1h": 4.0,
+   "cache_read": 0.2,
+   "output": 10.0
+  },
   "sonnet_legacy": {
    "input": 3.0,
    "cache_write": 3.75,
@@ -645,5 +652,5 @@
    "cache_read": 0.4
   }
  },
- "generated_at": "2026-09-24T22:51:12Z"
+ "generated_at": "2026-09-29T06:50:32Z"
 }

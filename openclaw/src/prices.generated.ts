@@ -29,6 +29,7 @@ export const GENERATED_PRICING: Record<string, ModelPricing> = {
   "sonnet-4-5": { input: 3.0 / 1e6, output: 15.0 / 1e6, cacheRead: 0.3 / 1e6, cacheWrite: 3.75 / 1e6, cacheWrite1h: 6.0 / 1e6 },
   "sonnet-4-6": { input: 3.0 / 1e6, output: 15.0 / 1e6, cacheRead: 0.3 / 1e6, cacheWrite: 3.75 / 1e6, cacheWrite1h: 6.0 / 1e6 },
   "sonnet-5": { input: 2.0 / 1e6, output: 10.0 / 1e6, cacheRead: 0.2 / 1e6, cacheWrite: 2.5 / 1e6, cacheWrite1h: 4.0 / 1e6 },
+  "sonnet-5-5": { input: 2.0 / 1e6, output: 10.0 / 1e6, cacheRead: 0.2 / 1e6, cacheWrite: 2.5 / 1e6, cacheWrite1h: 4.0 / 1e6 },
   "sonnet-legacy": { input: 3.0 / 1e6, output: 15.0 / 1e6, cacheRead: 0.3 / 1e6, cacheWrite: 3.75 / 1e6, cacheWrite1h: 6.0 / 1e6 },
   "gpt-3.5-turbo": { input: 0.5 / 1e6, output: 1.5 / 1e6, cacheRead: 0.5 / 1e6, cacheWrite: 0 / 1e6 },
   "gpt-3.5-turbo-16k": { input: 3.0 / 1e6, output: 4.0 / 1e6, cacheRead: 3.0 / 1e6, cacheWrite: 0 / 1e6 },
