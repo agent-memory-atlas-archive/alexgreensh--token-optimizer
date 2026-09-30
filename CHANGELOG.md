@@ -1,5 +1,9 @@
 # Changelog
 
+## [5.13.28] - 2026-09-30
+
+- Up-to-date model prices: gpt-6.1-sol.
+
 ## [5.13.27] - 2026-09-29
 
 - Up-to-date model prices: sonnet_5_5.
