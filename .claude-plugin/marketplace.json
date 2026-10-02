@@ -71,6 +71,26 @@
         "beta"
       ],
       "category": "productivity"
+    },
+    {
+      "name": "token-optimizer-desktop",
+      "source": "./desktop/token-optimizer-desktop",
+      "description": "Token Optimizer status bar for the Claude desktop app: quality, context, cache and limits at a glance above the prompt. Needs Claude Code 2.1.287+.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Alex Greenshpun",
+        "url": "https://linkedin.com/in/alexgreensh"
+      },
+      "homepage": "https://github.com/alexgreensh/token-optimizer",
+      "repository": "https://github.com/alexgreensh/token-optimizer",
+      "license": "PolyForm-Noncommercial-1.0.0",
+      "keywords": [
+        "token",
+        "optimization",
+        "desktop",
+        "status-bar"
+      ],
+      "category": "productivity"
     }
   ]
 }
