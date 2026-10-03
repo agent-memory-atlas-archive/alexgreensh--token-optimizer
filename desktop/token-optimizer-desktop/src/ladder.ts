@@ -1,12 +1,12 @@
-// The sentence ladder (R2, R3, R11): the single most urgent thing to say, and
-// at most one button. Pure (KTD4).
+// The sentence ladder: the single most urgent thing to say, and
+// at most one button. Pure.
 import type { Limit, Mood, Snapshot } from './contracts.ts'
 import type { IconName } from './icons.ts'
 import { clock, gradeOf, renewalPhrase, tokens, type FormatOptions } from './format.ts'
 
 export type Tone = 'good' | 'caution' | 'bad' | 'cold'
 
-/** A run of text. Text is full ink (R18); only `lose` (bold red, R11) carries colour. `strong` is bold ink. */
+/** A run of text. Text is full ink; only `lose` (bold red) carries colour. `strong` is bold ink. */
 export type Run = { text: string; lose?: true; strong?: true }
 
 export type ActionId = 'clean' | 'clean-first' | 'fresh' | 'warm'
@@ -38,7 +38,7 @@ function limitSentence(name: string, limit: Limit, now: number, opts: FormatOpti
 }
 
 export function sentence(s: Snapshot, opts: FormatOptions = {}): Sentence {
-  // What the band is doing right now leads, with no button (R13, R14).
+  // What the band is doing right now leads, with no button.
   if (s.busy === 'clean') return say('compact', 'good', [plain('Cleaning up.')])
   if (s.busy === 'fresh-capture') return say('bookmark', 'good', [plain('Saving checkpoint.')])
   if (s.busy === 'fresh-clear') return say('bookmark', 'good', [plain('Clearing.')])
@@ -51,7 +51,7 @@ export function sentence(s: Snapshot, opts: FormatOptions = {}): Sentence {
   }
   if (s.handoffPending) return say('bookmark', 'good', [plain('Checkpoint ready, it joins your first message.')])
 
-  // The ladder, first match wins (R2). Null limits (API users) skip their rules.
+  // The ladder, first match wins. Null limits (API users) skip their rules.
   const five = s.fiveHour
   const week = s.week
   if (five && five.percentUsed >= 100) return limitSentence('5-hour', five, s.now, opts)
@@ -87,7 +87,7 @@ export function sentence(s: Snapshot, opts: FormatOptions = {}): Sentence {
         c.tokensAtStake != null
           ? [plain(`${head} Then the next message re-reads `), loseRun(c.tokensAtStake), plain('.')]
           : [plain(`${head} Then the next message re-reads the whole context.`)]
-      // Keep warm only on a measured lifetime (R10, R12, K1).
+      // Keep warm only on a measured lifetime.
       return say('hourglass', 'caution', runs, c.measured ? { id: 'warm', label: 'Keep warm' } : null)
     }
   }

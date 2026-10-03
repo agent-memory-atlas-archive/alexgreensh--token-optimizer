@@ -1,4 +1,4 @@
-// The band as drawn (U8): Clawd, the sentence, five marks, hover cards and
+// The band as drawn: Clawd, the sentence, five marks, hover cards and
 // the unfolding row on desktop; nothing on the terminal or when switched off.
 import { expect, test } from 'claude-code/testing'
 
@@ -47,11 +47,11 @@ test('desktop draws Clawd, "Token Optimizer", the sentence and five marks', asyn
   expect((await exactly(ui, '88')).length).toBeGreaterThan(0)
   expect((await exactly(ui, '60m')).length).toBeGreaterThan(0)
 
-  // Every Svg names its state (R18).
+  // Every Svg names its state.
   for (const svg of svgs) {
     expect(typeof svg.props.alt === 'string' && (svg.props.alt as string).length > 0).toBe(true)
   }
-  // Text is ink: nothing grey, nothing italic (R18).
+  // Text is ink: nothing grey, nothing italic.
   for (const t of await ui.findAll({ type: 'Text' })) {
     expect(t.props.dimColor).toBeUndefined()
     expect(t.props.italic).toBeUndefined()
@@ -155,7 +155,7 @@ test('a healthy session offers no row buttons: nothing is called for', async ($,
   for (const id of ['clean', 'fresh', 'warm']) expect(await ui.find({ key: `row-${id}` }), id).toBeUndefined()
 })
 
-test('the unfolded row carries every card action that can run now, with no pointer needed (R5, TR-13)', async ($, on) => {
+test('the unfolded row carries every card action that can run now, with no pointer needed', async ($, on) => {
   const w = stub(on)
   sag(w)
   w.status = { ...w.status, requestAgoS: 3600 - 120 } // two minutes of cache left

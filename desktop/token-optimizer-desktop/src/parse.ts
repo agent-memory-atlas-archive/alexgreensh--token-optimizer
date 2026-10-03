@@ -1,19 +1,19 @@
 // Token Optimizer's files and the engine's usage, read into the band's shapes
-// (U7). Pure and forgiving: a half-written or foreign file reads as nothing
+//. Pure and forgiving: a half-written or foreign file reads as nothing
 // rather than throwing, so one bad read never blanks the band.
 import type { Limit, Quality, Savings } from './contracts.ts'
 
-/** How fresh `measure.py status-bar`'s savings are (KTD5). */
+/** How fresh `measure.py status-bar`'s savings are. */
 export type SavingsState = 'fresh' | 'stale' | 'loading' | 'unavailable'
 
-/** The last measured cache-write lifetime on the main thread (R10). */
+/** The last measured cache-write lifetime on the main thread. */
 export type CacheLifetime = '1h' | '5m'
 
 /** `measure.py status-bar --json`, reduced to what the band uses. Epochs in seconds. */
 export type StatusBar = {
   savings: Savings | null
   savingsState: SavingsState
-  /** One short reason when savings is null (R6). */
+  /** One short reason when savings is null. */
   savingsReason: string | null
   lastRequestEpoch: number | null
   cacheLifetime: CacheLifetime | null
@@ -26,7 +26,7 @@ export type StatusBar = {
 
 export type EarlierCheckpoint = { epoch: number; about: string | null } | null
 
-/** `$.session.usage()`, reduced to fill and limits (R16). */
+/** `$.session.usage()`, reduced to fill and limits. */
 export type UsageView = {
   contextPercent: number | null
   contextTokens: number | null
@@ -44,7 +44,7 @@ export type TokenOptimizerRoot = {
   runner: string | null
 }
 
-/** Days of savings bars (R6). */
+/** Days of savings bars. */
 export const SAVINGS_DAYS = 30
 
 /** Epochs this far past now are clock skew or milliseconds, not a real time. */
@@ -255,7 +255,7 @@ function trimSlash(path: string): string {
 }
 
 /**
- * Where to look for measure.py, in order (KTD6): every `token-optimizer@<market>`
+ * Where to look for measure.py, in order: every `token-optimizer@<market>`
  * install in `~/.claude/plugins/installed_plugins.json`, newest first, then
  * the skill install `~/.claude/skills/token-optimizer`. The caller keeps the
  * first whose measure.py exists.

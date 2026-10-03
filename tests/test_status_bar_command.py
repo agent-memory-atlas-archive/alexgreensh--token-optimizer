@@ -1,6 +1,6 @@
 """`measure.py status-bar --session <id> --json`: the desktop band's one read.
 
-Plan U2 / KTD5. One spawn returns savings (this session, 30 local days by day,
+One spawn returns savings (this session, 30 local days by day,
 the 30-day headline), the last main-thread request time and measured cache
 lifetime from the transcript, and the checkpoint saved time from the freshest
 quality cache. Savings are answered from a per-session JSON cache under
@@ -296,7 +296,7 @@ def test_earlier_checkpoint_hidden_when_not_relevant(sb):
 
 
 # --------------------------------------------------------------------------
-# Cache and refresh (KTD5)
+# Cache and refresh
 # --------------------------------------------------------------------------
 
 def test_cached_answer_is_fast_and_reports_age(sb, monkeypatch):
@@ -365,7 +365,7 @@ def test_full_compute_within_5s_on_50k_rows(sb):
 
 
 # --------------------------------------------------------------------------
-# Refresh lock: atomic stale takeover and owner token (TR-22)
+# Refresh lock: atomic stale takeover and owner token
 # --------------------------------------------------------------------------
 
 def _stale_lock(sb, content="old-owner", age_s=200):

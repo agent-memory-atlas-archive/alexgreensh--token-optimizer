@@ -1,16 +1,16 @@
-// The three buttons' pure parts (U9: KTD9, KTD10, KTD11). register.tsx owns
+// The three buttons' pure parts. register.tsx owns
 // every `$` call; this file decides. Nothing here imports from 'claude-code'.
 import { tokens } from './format.ts'
 
-/** Start fresh waits this long for its second click (R14, K4). */
+/** Start fresh waits this long for its second click. */
 export const FRESH_ARM_MS = 5_000
-/** A busy state ends by itself after this, so no step label outlives its work (R13). */
+/** A busy state ends by itself after this, so no step label outlives its work. */
 export const BUSY_TIMEOUT_MS = 120_000
 /** How long an outcome note replaces "All clear." */
 export const NOTE_MS = 8_000
-/** Keep warm's one-line fork prompt (KTD11). */
+/** Keep warm's one-line fork prompt. */
 export const WARM_PROMPT = 'Reply with exactly: ok'
-/** The `$.store` key of a pending Start fresh hand-off (survives restarts, R14). */
+/** The `$.store` key of a pending Start fresh hand-off (survives restarts). */
 export const HANDOFF_KEY = 'handoff'
 /** compact-capture reads a transcript; generous, still bounded. */
 export const CAPTURE_TIMEOUT_MS = 30_000
@@ -42,11 +42,11 @@ export type HandoffFate = 'attach' | 'skip' | { drop: string }
 
 /**
  * What the session `at.sessionId` in `at.cwd` does with a held hand-off
- * (KTD10). It joins a different session than the one that saved it, in the
+ *. It joins a different session than the one that saved it, in the
  * same project, that started at or after it was saved (`startedAt`, null when
  * unknown), within 10 minutes of the save. No marker ties it to one clear, so
  * a typed /clear, a reload or a lost start event cannot strand or steal it.
- * Another project's hand-off is never this session's to touch (R1); an
+ * Another project's hand-off is never this session's to touch; an
  * expired one in this project is dropped (the reason ends a one-line note).
  */
 export function handoffFate(h: Handoff, at: { sessionId: string; cwd: string; startedAt: number | null; now: number }): HandoffFate {
@@ -98,7 +98,7 @@ const POINTER = /^.*Cross-session checkpoint.*$/
 /**
  * Removes Token Optimizer's "Cross-session checkpoint" pointer lines from a
  * SessionStart's context: after Start fresh the held hand-off replaces it
- * (KTD10). Every other line stays; an entry left empty is dropped.
+ *. Every other line stays; an entry left empty is dropped.
  */
 export function stripCrossSessionPointer(entries: readonly string[] | undefined): string[] | undefined {
   if (!entries) return undefined
@@ -137,7 +137,7 @@ export type WarmOutcome =
   | { ok: true; lapsed: boolean; contextTokens: number; cacheRead?: number; lifetimeS?: number }
   | { ok: false; reason: string }
 
-/** One line for the Keep warm outcome; a lapsed cache names what the warm-up cost (KTD11). */
+/** One line for the Keep warm outcome; a lapsed cache names what the warm-up cost. */
 export function warmToast(o: WarmOutcome): string {
   if (!o.ok) return `Keep warm did not run: ${o.reason}.`
   if (o.lapsed) return `The cache had already dropped, so the warm-up re-read ${tokens(o.contextTokens)} tokens at full price.`
@@ -163,7 +163,7 @@ export type HandoffPort = {
 export type HandoffResult = { ok: true; handoff: Handoff } | { ok: false; reason: string }
 
 /**
- * Start fresh up to the clear (KTD10): save a checkpoint, check it is real,
+ * Start fresh up to the clear: save a checkpoint, check it is real,
  * build the lean resume text. Any failure returns a one-line reason and
  * nothing is cleared.
  */

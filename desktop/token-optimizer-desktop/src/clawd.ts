@@ -150,7 +150,7 @@ export function clawdSvg(pose: Pose, mood: Mood, opts: ClawdOptions): string {
       rect(5.8, 5, 0.5, 0.5, '#ffffff', ' opacity="0.9"') + rect(9.8, 5, 0.5, 0.5, '#ffffff', ' opacity="0.9"'),
   }
   const look = pose === 'think' ? ' transform="translate(0.5 -0.45)"' : pose === 'write' ? ' transform="translate(0.2 0.5)"' : ''
-  // Watching with no pointer to follow: centred eyes that glance left, then right, about every 7 s (R9).
+  // Watching with no pointer to follow: centred eyes that glance left, then right, about every 7 s.
   const gazeAt = opts.gaze ? GAZE[opts.gaze] : null
   const scan = gazeAt ? '' : pose === 'type'
     ? a.move('translate', '-0.5 0.55;0.5 0.55;-0.5 0.55', { dur: 2.6 })

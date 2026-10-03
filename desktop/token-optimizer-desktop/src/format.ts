@@ -1,5 +1,5 @@
 // Pure formatting for the band: clocks, token counts, relative and local times,
-// grades. No I/O and nothing from 'claude-code' (KTD4).
+// grades. No I/O and nothing from 'claude-code'.
 
 /** Injectable zone and locale so tests do not depend on the machine's clock settings. */
 export type FormatOptions = { timeZone?: string; locale?: string }

@@ -1,4 +1,4 @@
-// Clawd's pose as a pure reducer (KTD7). A base pose derived from what is
+// Clawd's pose as a pure reducer. A base pose derived from what is
 // going on, plus short transient poses with holds. No I/O, no 'claude-code':
 // register.tsx maps engine events onto PoseEvent and passes the time in.
 import type { Pose } from './contracts.ts'

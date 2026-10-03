@@ -1,4 +1,4 @@
-// The cache clock (KTD8, R10, R12, K1, K3). Pure: time is passed in.
+// The cache clock. Pure: time is passed in.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
@@ -88,7 +88,7 @@ test('canKeepWarm: false at deadline minus 10 s, true at deadline minus 200 s', 
   assert.equal(canKeepWarm(s, T + 2 * MIN), true, 'offered while warm, not only in warning')
 })
 
-test('K1: no Keep warm the instant the cache expires, or after', () => {
+test('no Keep warm the instant the cache expires, or after', () => {
   const s = turnEndedAt(T, '5m')
   const deadline = T + 5 * MIN
   assert.equal(canKeepWarm(s, deadline), false)
@@ -181,9 +181,9 @@ test('clear: back to unknown', () => {
   assert.equal(view(cold, T + 20 * MIN, 300).state, 'unknown')
 })
 
-// R10: an unmeasured lifetime counts against the plan default for display only.
+// An unmeasured lifetime counts against the plan default for display only.
 
-test('R10: unmeasured on a Claude plan counts down from an hour but warns and goes cold on five minutes', () => {
+test('unmeasured on a Claude plan counts down from an hour but warns and goes cold on five minutes', () => {
   const s = turnEndedAt(T, null)
   const early = view(s, T + MIN, 3600)
   assert.equal(early.state, 'warm')
@@ -196,7 +196,7 @@ test('R10: unmeasured on a Claude plan counts down from an hour but warns and go
   assert.equal(lapsed.secondsLeft, 0)
 })
 
-test('R10: unmeasured on the API is the five-minute clock', () => {
+test('unmeasured on the API is the five-minute clock', () => {
   const s = turnEndedAt(T, null)
   const v = view(s, T + MIN, 300)
   assert.equal(v.lifetime, 300)
@@ -204,7 +204,7 @@ test('R10: unmeasured on the API is the five-minute clock', () => {
   assert.equal(v.measured, false)
 })
 
-test('R10: Keep warm is never offered while unmeasured', () => {
+test('Keep warm is never offered while unmeasured', () => {
   const s = turnEndedAt(T, null)
   assert.equal(canKeepWarm(s, T + MIN), false)
   const pressed = reduceClock(s, { type: 'warm-start' }, T + MIN)
@@ -248,7 +248,7 @@ test('tick changes nothing in the state; time lives in view and canKeepWarm', ()
   assert.deepEqual(reduceClock(s, { type: 'tick', now: T + 59 * MIN }), s)
 })
 
-test('an older request changes neither the lifetime nor the tokens at stake (TR-20)', () => {
+test('an older request changes neither the lifetime nor the tokens at stake', () => {
   let s = turnEndedAt(T, '1h', 800_000)
   s = reduceClock(s, { type: 'request-done', at: T - 30 * MIN, lifetime: '5m', contextTokens: 70_000 }, T + MIN)
   const v = view(s, T + 59 * MIN, 3600)

@@ -1,4 +1,4 @@
-// The three buttons (U9): Clean up, Start fresh and Keep warm through
+// The three buttons: Clean up, Start fresh and Keep warm through
 // register.tsx inside the engine, every guard on the mocked clock.
 import { expect, test, type Engine } from 'claude-code/testing'
 
@@ -238,7 +238,7 @@ const confirmFresh = async (ui: Mount) => {
   await ui.press({ key: 'action' })
 }
 
-test('a /clear typed while Start fresh saves its checkpoint queues no second clear (TR-01)', async ($, on) => {
+test('a /clear typed while Start fresh saves its checkpoint queues no second clear', async ($, on) => {
   const w = stub(on, { captureDelayMs: 1000 })
   await $.session.start(START)
   await w.clock.settle() // the status read runs just after the start
@@ -256,7 +256,7 @@ test('a /clear typed while Start fresh saves its checkpoint queues no second cle
   expect(first.context ?? []).toEqual([])
 })
 
-test('a turn started while Start fresh saves its checkpoint stops it before the clear (TR-02)', async ($, on) => {
+test('a turn started while Start fresh saves its checkpoint stops it before the clear', async ($, on) => {
   const w = stub(on, { captureDelayMs: 1000 })
   await $.session.start(START)
   await w.clock.settle() // the status read runs just after the start
@@ -270,7 +270,7 @@ test('a turn started while Start fresh saves its checkpoint stops it before the 
   expect(w.toasts).toEqual(['Start fresh waits until the turn finishes.'])
 })
 
-test('two presses of Clean up at once start one compaction (TR-02)', async ($, on) => {
+test('two presses of Clean up at once start one compaction', async ($, on) => {
   const w = stub(on)
   await $.session.start(START)
   await w.clock.settle() // the status read runs just after the start
@@ -280,7 +280,7 @@ test('two presses of Clean up at once start one compaction (TR-02)', async ($, o
   expect(w.compacts).toBe(1)
 })
 
-test('a /clear disarms Start fresh: one press in the new session arms again, never clears (TR-07)', async ($, on) => {
+test('a /clear disarms Start fresh: one press in the new session arms again, never clears', async ($, on) => {
   const w = stub(on)
   await $.session.start(START)
   await w.clock.settle() // the status read runs just after the start
@@ -297,7 +297,7 @@ test('a /clear disarms Start fresh: one press in the new session arms again, nev
 for (const [why, held] of [
   ['saved more than 10 minutes ago', { fromSessionId: 'sess-0', cwd: '/work/project', checkpointPath: '/cp.md', text: 'TOO OLD', createdAt: NOW_MS - 10 * 60_000 - 1 }],
 ] as const) {
-  test(`a hand-off ${why} is discarded with a one-line note, never joined (TR-05)`, async ($, on) => {
+  test(`a hand-off ${why} is discarded with a one-line note, never joined`, async ($, on) => {
     // A session that started since the save: only the age rules it out.
     const w = stub(on, { store: { handoff: held }, startedAt: NOW_MS - 1 })
     await $.session.start(START)
@@ -316,7 +316,7 @@ for (const [why, held] of [
   })
 }
 
-test('a clear still queued after 120 s keeps the hand-off and says when it will clear (TR-06)', async ($, on) => {
+test('a clear still queued after 120 s keeps the hand-off and says when it will clear', async ($, on) => {
   const w = stub(on)
   await $.session.start(START)
   await w.clock.settle() // the status read runs just after the start
@@ -338,7 +338,7 @@ test('a clear still queued after 120 s keeps the hand-off and says when it will 
   expect(first.context).toEqual(['LEAN HANDOFF TEXT'])
 })
 
-test('a prompt rejected beneath the band keeps the hand-off for the next one (TR-08)', async ($, on) => {
+test('a prompt rejected beneath the band keeps the hand-off for the next one', async ($, on) => {
   const handoff = { fromSessionId: 'sess-0', cwd: '/work/project', checkpointPath: '/cp.md', text: 'LEAN HANDOFF TEXT', createdAt: NOW_MS - 1000 }
   const w = stub(on, { store: { handoff }, submitFails: 1, startedAt: NOW_MS - 500 })
   await $.session.start(START)
@@ -348,7 +348,7 @@ test('a prompt rejected beneath the band keeps the hand-off for the next one (TR
   expect(retry.context).toEqual(['LEAN HANDOFF TEXT'])
 })
 
-test('a Keep warm that lands after a clear leaves the new session\'s clock alone (TR-09)', async ($, on) => {
+test('a Keep warm that lands after a clear leaves the new session\'s clock alone', async ($, on) => {
   const w = stub(on, { forkDelayMs: 2000 })
   w.status = { ...w.status, requestAgoS: 3400 }
   await $.session.start(START)
@@ -367,7 +367,7 @@ test('a Keep warm that lands after a clear leaves the new session\'s clock alone
   expect(w.toasts).toEqual([])
 })
 
-test('a Keep warm fork that never answers gives up after 120 s and can be pressed again (TR-10)', async ($, on) => {
+test('a Keep warm fork that never answers gives up after 120 s and can be pressed again', async ($, on) => {
   const w = stub(on, { forkDelayMs: 10 * 60_000 })
   w.status = { ...w.status, requestAgoS: 3400 }
   await $.session.start(START)
@@ -383,7 +383,7 @@ test('a Keep warm fork that never answers gives up after 120 s and can be presse
   expect((await ui.find({ key: 'action' }))?.props.label).toBe('Keep warm')
 })
 
-test('a hand-off the band cannot hold stops Start fresh before the clear (TR-11)', async ($, on) => {
+test('a hand-off the band cannot hold stops Start fresh before the clear', async ($, on) => {
   const w = stub(on, { handoffWriteFails: 100 })
   await $.session.start(START)
   await w.clock.settle() // the status read runs just after the start
@@ -401,7 +401,7 @@ test('a hand-off the band cannot hold stops Start fresh before the clear (TR-11)
   expect(first.context ?? []).toEqual([])
 })
 
-test('a turn that fails beneath the band still ends the turn on the band (TR-18)', async ($, on) => {
+test('a turn that fails beneath the band still ends the turn on the band', async ($, on) => {
   const w = stub(on, { completeFails: 1 })
   await $.session.start(START)
   await w.clock.settle() // the status read runs just after the start
@@ -416,7 +416,7 @@ test('a turn that fails beneath the band still ends the turn on the band (TR-18)
   expect(w.compacts).toBe(1)
 })
 
-test('an open question from before a reload closes at the end of the turn (TR-19)', async ($, on) => {
+test('an open question from before a reload closes at the end of the turn', async ($, on) => {
   // A reload finds Clawd asking; the band is live but has not run a pose event yet (a store read is slow).
   const asking = { pose: 'ask', since: NOW_MS, now: NOW_MS, working: true, rawSub: null, rawSince: NOW_MS, sub: null, agents: {}, permissions: 1, questions: 0, compacting: false, cold: false, lastActivity: NOW_MS, until: { wake: 0, done: 0, stop: 0, error: 0 } }
   const w = stub(on, { storeGetDelayMs: 1000, seed: { pose: asking } })
@@ -430,7 +430,7 @@ test('an open question from before a reload closes at the end of the turn (TR-19
   await starting
 })
 
-test('Keep warm with no recorded context size names the session\'s own size when the cache lapsed (TR-21)', async ($, on) => {
+test('Keep warm with no recorded context size names the session\'s own size when the cache lapsed', async ($, on) => {
   const w = stub(on, { fork: { read: 0 }, seed: { clock: { anchor: NOW_MS - 3400_000, lifetime: '1h', contextTokens: 0, working: false, warming: false, lapsed: false } } })
   w.status = { ...w.status, requestAgoS: 3400 }
   await $.session.start(START)
@@ -442,7 +442,7 @@ test('Keep warm with no recorded context size names the session\'s own size when
   expect(w.toasts.at(-1)).toMatch(/620k tokens at full price/)
 })
 
-test('a new session starts with its own clock, not the last one\'s (TR-04)', async ($, on) => {
+test('a new session starts with its own clock, not the last one\'s', async ($, on) => {
   const w = stub(on)
   await $.session.start(START)
   await w.clock.settle() // the status read runs just after the start
@@ -456,7 +456,7 @@ test('a new session starts with its own clock, not the last one\'s (TR-04)', asy
   expect(labels.includes('Keep warm')).toBe(false)
 })
 
-test('resuming an older session shows that session\'s own cache clock (TR-04)', async ($, on) => {
+test('resuming an older session shows that session\'s own cache clock', async ($, on) => {
   const w = stub(on)
   await $.session.start(START)
   await w.clock.settle() // the status read runs just after the start
@@ -468,7 +468,7 @@ test('resuming an older session shows that session\'s own cache clock (TR-04)', 
   expect((await cacheAlt(ui))?.startsWith('Cache cold')).toBe(true)
 })
 
-test('a refresh that started before a clear never brings the old clock into the new session (TR-03)', async ($, on) => {
+test('a refresh that started before a clear never brings the old clock into the new session', async ($, on) => {
   const w = stub(on)
   await $.session.start(START)
   await w.clock.settle() // the status read runs just after the start
@@ -487,7 +487,7 @@ test('a refresh that started before a clear never brings the old clock into the 
   expect(await cacheAlt(ui)).toBe('Cache clock starts after the first reply')
 })
 
-test('a hand-off from another project is left for its owner: not joined, not deleted, no note (R1)', async ($, on) => {
+test('a hand-off from another project is left for its owner: not joined, not deleted, no note', async ($, on) => {
   const handoff = { fromSessionId: 'sess-a1', cwd: '/work/other', checkpointPath: '/cp.md', text: 'PROJECT A WORK', createdAt: NOW_MS - 1000 }
   // Project B's session started after the save: only the project rules it out.
   const w = stub(on, { store: { handoff }, startedAt: NOW_MS - 500 })
@@ -506,7 +506,7 @@ test('a hand-off from another project is left for its owner: not joined, not del
   expect(own.context).toEqual(['PROJECT A WORK'])
 })
 
-test('an expired hand-off from another project is still left for its owner, who drops it with the note (R1)', async ($, on) => {
+test('an expired hand-off from another project is still left for its owner, who drops it with the note', async ($, on) => {
   const handoff = { fromSessionId: 'sess-a1', cwd: '/work/other', checkpointPath: '/cp.md', text: 'PROJECT A WORK', createdAt: NOW_MS - 1000 }
   const w = stub(on, { store: { handoff }, startedAt: NOW_MS - 500 })
   await $.session.start(START)
@@ -523,7 +523,7 @@ test('an expired hand-off from another project is still left for its owner, who 
   expect(w.toasts).toEqual(["Start fresh's saved hand-off was discarded: it is more than 10 minutes old."])
 })
 
-test('a session that began before the hand-off was saved never takes it, and says nothing (KTD10)', async ($, on) => {
+test('a session that began before the hand-off was saved never takes it, and says nothing', async ($, on) => {
   const handoff = { fromSessionId: 'sess-0', cwd: '/work/project', checkpointPath: '/cp.md', text: 'NOT FOR AN OLDER SESSION', createdAt: NOW_MS - 1000 }
   const w = stub(on, { store: { handoff } })
   await $.session.start(START)
@@ -536,7 +536,7 @@ test('a session that began before the hand-off was saved never takes it, and say
   expect(w.store.handoff).toEqual(handoff)
 })
 
-test('a /clear typed right after Start fresh: the fresh conversation still gets the hand-off, once (KTD10)', async ($, on) => {
+test('a /clear typed right after Start fresh: the fresh conversation still gets the hand-off, once', async ($, on) => {
   const w = stub(on)
   await $.session.start(START)
   await w.clock.settle() // the status read runs just after the start
@@ -562,7 +562,7 @@ test('a /clear typed right after Start fresh: the fresh conversation still gets 
   expect(third.context ?? []).toEqual([])
 })
 
-test('a reload between Start fresh\'s clear and the first prompt still delivers the hand-off (KTD10)', async ($, on) => {
+test('a reload between Start fresh\'s clear and the first prompt still delivers the hand-off', async ($, on) => {
   const w = stub(on)
   await $.session.start(START)
   await w.clock.settle() // the status read runs just after the start
@@ -581,7 +581,7 @@ test('a reload between Start fresh\'s clear and the first prompt still delivers 
   expect(first.context).toEqual(['LEAN HANDOFF TEXT'])
 })
 
-test('a lost classic SessionStart still delivers the hand-off on the first prompt (KTD10)', async ($, on) => {
+test('a lost classic SessionStart still delivers the hand-off on the first prompt', async ($, on) => {
   const w = stub(on)
   await $.session.start(START)
   await w.clock.settle() // the status read runs just after the start
@@ -598,7 +598,7 @@ test('a lost classic SessionStart still delivers the hand-off on the first promp
   expect(second.context ?? []).toEqual([])
 })
 
-test('the session that pressed Start fresh never takes its own hand-off while the clear waits (KTD10)', async ($, on) => {
+test('the session that pressed Start fresh never takes its own hand-off while the clear waits', async ($, on) => {
   const w = stub(on)
   await $.session.start(START)
   await w.clock.settle() // the status read runs just after the start
@@ -616,7 +616,7 @@ test('the session that pressed Start fresh never takes its own hand-off while th
   expect(first.context).toEqual(['LEAN HANDOFF TEXT'])
 })
 
-test('a Start fresh that stands down because the session changed says so (R2)', async ($, on) => {
+test('a Start fresh that stands down because the session changed says so', async ($, on) => {
   const w = stub(on, { captureDelayMs: 1000 })
   await $.session.start(START)
   await w.clock.settle() // the status read runs just after the start
@@ -631,7 +631,7 @@ test('a Start fresh that stands down because the session changed says so (R2)', 
   expect(w.toasts).toEqual(['Start fresh stopped: the session changed.'])
 })
 
-test('a press that hangs frees the buttons once the busy timeout passes (R3)', async ($, on) => {
+test('a press that hangs frees the buttons once the busy timeout passes', async ($, on) => {
   const w = stub(on, { uiWriteHangs: 1 })
   await $.session.start(START)
   await w.clock.settle() // the status read runs just after the start
@@ -645,7 +645,7 @@ test('a press that hangs frees the buttons once the busy timeout passes (R3)', a
   expect(w.compacts).toBe(1)
 })
 
-test('a resume with no session.start shows no old clock and offers no Keep warm, then reads its own (TR-04)', async ($, on) => {
+test('a resume with no session.start shows no old clock and offers no Keep warm, then reads its own', async ($, on) => {
   const w = stub(on)
   w.status = { ...w.status, requestAgoS: 3400 }
   await $.session.start(START)
@@ -662,7 +662,7 @@ test('a resume with no session.start shows no old clock and offers no Keep warm,
   expect((await cacheAlt(resumed))?.startsWith('Cache cold')).toBe(true)
 })
 
-test('a warm-up left marked running by a reload is cleared, and Keep warm can run (TR-10)', async ($, on) => {
+test('a warm-up left marked running by a reload is cleared, and Keep warm can run', async ($, on) => {
   const w = stub(on, { seed: { clock: { anchor: NOW_MS - 3400_000, lifetime: '1h', contextTokens: 620_000, working: false, warming: true, lapsed: false } } })
   w.status = { ...w.status, requestAgoS: 3400 }
   await $.session.start(START)
@@ -674,7 +674,7 @@ test('a warm-up left marked running by a reload is cleared, and Keep warm can ru
   expect(w.forks).toBe(1)
 })
 
-test('a /clear typed while Start fresh\'s clear waits: the hand-off joins the conversation its own clear creates (R4)', async ($, on) => {
+test('a /clear typed while Start fresh\'s clear waits: the hand-off joins the conversation its own clear creates', async ($, on) => {
   const w = stub(on)
   await $.session.start(START)
   await w.clock.settle() // the status read runs just after the start

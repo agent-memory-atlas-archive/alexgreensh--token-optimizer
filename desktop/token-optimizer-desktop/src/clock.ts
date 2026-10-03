@@ -1,11 +1,11 @@
-// The cache clock as a pure state machine (KTD8). The anchor is the last
+// The cache clock as a pure state machine. The anchor is the last
 // main-thread request; the deadline is anchor plus lifetime. Time is passed
-// in; `canKeepWarm` is the single guard every Keep warm caller uses (R12).
+// in; `canKeepWarm` is the single guard every Keep warm caller uses.
 import type { CacheState, CacheView } from './contracts.ts'
 
-/** Keep warm is refused this close to expiry (R12). Agent default (plan Assumptions). */
+/** Keep warm is refused this close to expiry. Agent default (plan Assumptions). */
 export const KEEP_WARM_MARGIN_MS = 15_000
-/** Lifetime the warning and cold rules use until a measurement lands (R10, K3). */
+/** Lifetime the warning and cold rules use until a measurement lands. */
 const UNMEASURED_RULE_SECONDS = 300
 /** A warm-up that read less than this share of the context found the cache lapsed. */
 const LAPSED_READ_SHARE = 0.5
@@ -49,7 +49,7 @@ const seconds = (l: Lifetime): number => (l === '1h' ? 3600 : 300)
 export function reduceClock(state: ClockState, event: ClockEvent, now?: number): ClockState {
   switch (event.type) {
     case 'request-done':
-      // An older request than the anchor says nothing about the cache now (TR-20).
+      // An older request than the anchor says nothing about the cache now.
       if (state.anchor !== null && event.at < state.anchor) return state
       return {
         ...state,
@@ -78,7 +78,7 @@ export function reduceClock(state: ClockState, event: ClockEvent, now?: number):
     case 'warm-failed':
       return { ...state, warming: false }
     case 'clear':
-      // A new session: re-measure before trusting a lifetime again (R10).
+      // A new session: re-measure before trusting a lifetime again.
       return { ...initialClock(), working: state.working }
     case 'lifetime-measured':
       return { ...state, lifetime: event.lifetime }
@@ -87,7 +87,7 @@ export function reduceClock(state: ClockState, event: ClockEvent, now?: number):
   }
 }
 
-/** The single Keep warm guard (R10, R12, K1). */
+/** The single Keep warm guard. */
 export function canKeepWarm(state: ClockState, now: number): boolean {
   if (state.working || state.warming || state.lapsed) return false
   if (state.anchor === null || state.lifetime === null) return false
@@ -98,7 +98,7 @@ export function canKeepWarm(state: ClockState, now: number): boolean {
 /**
  * The clock as the band shows it. While unmeasured, the countdown runs against
  * the plan default (1h on Claude plans, 5m on the API) but warning and cold use
- * five minutes, so a lapsed cache is never shown as warm (R10, K3).
+ * five minutes, so a lapsed cache is never shown as warm.
  */
 export function view(state: ClockState, now: number, planDefault: 3600 | 300): CacheView {
   const measured = state.lifetime !== null

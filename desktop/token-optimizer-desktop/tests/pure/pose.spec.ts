@@ -1,4 +1,4 @@
-// Clawd's pose reducer (KTD7). Pure: every step takes `now` explicitly.
+// Clawd's pose reducer. Pure: every step takes `now` explicitly.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 

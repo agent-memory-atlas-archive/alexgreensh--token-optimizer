@@ -1,7 +1,7 @@
 // The plugin's published state contract (types/index.d.ts) is written out by
 // hand because the engine ships it to other plugins as is. These assignments
 // fail `npm run typecheck` the moment a reducer's state and its published
-// shape drift apart (TR-28). Type-only: nothing here runs.
+// shape drift apart. Type-only: nothing here runs.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 

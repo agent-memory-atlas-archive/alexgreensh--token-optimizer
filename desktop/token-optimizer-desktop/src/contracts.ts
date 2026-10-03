@@ -21,7 +21,7 @@ export type Pose =
 /** How healthy the session looks; drives Clawd's eyes and sweat drop. */
 export type Mood = 'calm' | 'worried' | 'panic'
 
-/** Where the cache clock stands (KTD8). */
+/** Where the cache clock stands. */
 export type CacheState = 'unknown' | 'refreshing' | 'warm' | 'warning' | 'cold' | 'warming'
 
 /** The cache clock as the view model reads it. */
@@ -31,7 +31,7 @@ export type CacheView = {
   secondsLeft: number | null
   /** Lifetime in seconds the clock is counting against (3600 or 300). */
   lifetime: number
-  /** True when the lifetime came from a measurement, not the plan default (R10). */
+  /** True when the lifetime came from a measurement, not the plan default. */
   measured: boolean
   /** Tokens the next message would re-read at full price if the cache lapsed. */
   tokensAtStake: number | null

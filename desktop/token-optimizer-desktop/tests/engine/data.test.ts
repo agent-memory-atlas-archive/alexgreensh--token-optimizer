@@ -1,4 +1,4 @@
-// Data gathering and re-keying inside the engine (U7), through the plugin's
+// Data gathering and re-keying inside the engine, through the plugin's
 // own hooks module: the engine lets only that module call `$`, so these tests
 // raise the events register.tsx wires (session.start, and the classic
 // SessionStart with source clear) and read what it stored by stubbing the

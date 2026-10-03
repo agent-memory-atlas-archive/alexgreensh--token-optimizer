@@ -46098,7 +46098,7 @@ def _get_merged_savings(days=30, since=None):
 
 
 # ---------------------------------------------------------------------------
-# status-bar: the desktop band's single read (plan U2 / KTD5).
+# status-bar: the desktop band's single read.
 #
 # One spawn answers everything the band needs from Token Optimizer's stores.
 # Savings are the slow part (~0.5 s warm, ~10 s cold on a large trends.db), so
@@ -49844,7 +49844,7 @@ if __name__ == "__main__":
     elif args[0] == "dashboard":
         _dispatch_dashboard(args)
     elif args[0] == "status-bar":
-        # Desktop status band: one JSON read (plan U2). See STATUS_BAR_HELP.
+        # Desktop status band: one JSON read. See STATUS_BAR_HELP.
         _status_bar_cli(args[1:])
     elif args[0] == "runway-json":
         # Machine-readable runway snapshot so a non-Python dashboard (the OpenClaw

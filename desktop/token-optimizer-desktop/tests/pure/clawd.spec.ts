@@ -64,7 +64,7 @@ test('a worried session sweats; a calm idle one does not', () => {
   assert.ok(!clawdSvg('idle', 'calm', { animate: true, palette: LIGHT }).includes('#5aa9e6'))
 })
 
-test('watching, the eyes glance left and right every few seconds; the still frame keeps them centred (R9, TR-15)', () => {
+test('watching, the eyes glance left and right every few seconds; the still frame keeps them centred', () => {
   const live = clawdSvg('idle', 'calm', { animate: true, palette: LIGHT })
   const glance = /<animateTransform attributeName="transform" type="translate" values="([^"]+)" dur="([\d.]+)s"[^>]*\/>/g
   const found = [...live.matchAll(glance)].find(m => (m[1] ?? '').includes('-0.6 0') && (m[1] ?? '').includes('0.6 0'))

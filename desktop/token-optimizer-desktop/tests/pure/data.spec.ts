@@ -1,4 +1,4 @@
-// Data gathering and re-keying (U7) over a fake engine port: the U7 scenarios
+// Data gathering and re-keying over a fake engine port: the scenarios
 // under Node, so CI covers them. tests/engine/data.test.ts runs the same
 // gatherer through register.tsx inside the engine.
 import { test } from 'node:test'

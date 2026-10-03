@@ -1,5 +1,5 @@
 // Parsing Token Optimizer's files and the engine's usage into the band's
-// shapes (U7, R6, R10, R16, KTD5, KTD6). Pure: every input is passed in.
+// shapes. Pure: every input is passed in.
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 

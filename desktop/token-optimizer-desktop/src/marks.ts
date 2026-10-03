@@ -1,5 +1,5 @@
-// The five marks (R4), their hover cards (R5) and the detail row (R6) as plain
-// data the drawing layer maps to elements. Pure (KTD4).
+// The five marks, their hover cards and the detail row as plain
+// data the drawing layer maps to elements. Pure.
 import type { CacheView, Limit, Snapshot } from './contracts.ts'
 import type { IconName } from './icons.ts'
 import { ago, clock, duration, minutes, gradeOf, relative, renewal, tokens, type FormatOptions } from './format.ts'
@@ -23,7 +23,7 @@ export type Mark = {
   ringPercent?: number
   /** The grade letter on the quality mark. */
   badge?: string
-  /** Alt text naming the state (R18). */
+  /** Alt text naming the state. */
   alt: string
 }
 
@@ -109,7 +109,7 @@ function limitMark(id: 'fiveHour' | 'week', limit: Limit, now: number, opts: For
   }
 }
 
-/** The marks under the sentence, in order. Limit marks are omitted when the limit is null (R4). */
+/** The marks under the sentence, in order. Limit marks are omitted when the limit is null. */
 export function marks(s: Snapshot, opts: FormatOptions = {}): Mark[] {
   const q = s.quality
   const quality: Mark = q
@@ -188,7 +188,7 @@ function limitCard(id: 'fiveHour' | 'week', limit: Limit, now: number, opts: For
   return { id, title: `Renews ${when}`, body: [plain(`That is ${relative(at, now)}.`)], actions: [] }
 }
 
-/** Hover card bodies, one per mark, same order and omissions as `marks` (R5). */
+/** Hover card bodies, one per mark, same order and omissions as `marks`. */
 export function cards(s: Snapshot, opts: FormatOptions = {}): Card[] {
   const q = s.quality
   const qualityActions: Action[] = [
@@ -243,7 +243,7 @@ function savingsBlock(s: Snapshot): SavingsBlock {
 }
 
 /**
- * The detail row under Clawd (R6): only what the bar does not show.
+ * The detail row under Clawd: only what the bar does not show.
  * `s.now` is epoch milliseconds; the quality cache's epochs are seconds.
  */
 /** Longer branch names are cut so the unfolded row stays on one line. */

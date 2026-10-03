@@ -1,9 +1,9 @@
-// The token-optimizer-desktop contract (KTD10, KTD12). Plain JSON only, and
+// The token-optimizer-desktop contract. Plain JSON only, and
 // self-contained: the engine ships this file to other plugins as is.
 //
 // `session` is one atom keyed by the session it describes. Readers compare its
 // sessionId to the live session and reset on a mismatch, so a /clear never
-// shows the previous session's figures (R15). null means nothing read yet.
+// shows the previous session's figures. null means nothing read yet.
 //
 // `handoff` is Start fresh's pending hand-off. It deliberately lives outside
 // `session`: it is written in the old session and read in the new one, so a
@@ -44,14 +44,14 @@ export type TokenOptimizerDesktopSession = {
   week: TokenOptimizerDesktopLimit | null
   /** Current git branch; null outside a repository or on a detached HEAD. */
   branch: string | null
-  /** Last known savings; kept while a refresh loads or times out (R6). */
+  /** Last known savings; kept while a refresh loads or times out. */
   savings: TokenOptimizerDesktopSavings | null
   savingsState: 'fresh' | 'stale' | 'loading' | 'unavailable'
-  /** One short reason when savings is null (R6). */
+  /** One short reason when savings is null. */
   savingsReason: string | null
   /** Last main-thread request, epoch seconds (the cache clock's anchor). */
   lastRequestEpoch: number | null
-  /** Last measured cache lifetime; null while unmeasured (R10). */
+  /** Last measured cache lifetime; null while unmeasured. */
   cacheLifetime: '1h' | '5m' | null
   /** When Token Optimizer last saved a checkpoint, epoch seconds. */
   checkpointEpoch: number | null
@@ -64,7 +64,7 @@ export type TokenOptimizerDesktopSession = {
   /** Compactions counted in the transcript by the status command. */
   compactions?: number | null
   earlierCheckpoint?: { epoch: number; about: string | null } | null
-  /** The detail row under Clawd is unfolded (R6). */
+  /** The detail row under Clawd is unfolded. */
   sheetOpen: boolean
 }
 
@@ -72,7 +72,7 @@ export type TokenOptimizerDesktopState = TokenOptimizerDesktopSession | null
 
 /**
  * Start fresh's hand-off, waiting for the first prompt of a session in the
- * same project that started since it was saved, within 10 minutes (KTD10).
+ * same project that started since it was saved, within 10 minutes.
  */
 export type TokenOptimizerDesktopHandoff = {
   fromSessionId: string
@@ -84,7 +84,7 @@ export type TokenOptimizerDesktopHandoff = {
   createdAt: number
 } | null
 
-/** The cache clock's reducer state (src/clock.ts ClockState, KTD8). */
+/** The cache clock's reducer state (src/clock.ts ClockState). */
 export type TokenOptimizerDesktopClock = {
   anchor: number | null
   lifetime: '1h' | '5m' | null
@@ -94,7 +94,7 @@ export type TokenOptimizerDesktopClock = {
   lapsed: boolean
 }
 
-/** Clawd's pose reducer state (src/pose.ts PoseState, KTD7). */
+/** Clawd's pose reducer state (src/pose.ts PoseState). */
 export type TokenOptimizerDesktopPose = {
   pose: 'wake' | 'idle' | 'think' | 'read' | 'type' | 'lift' | 'ask' | 'write' | 'compact' | 'done' | 'stop' | 'error' | 'cold' | 'sleep'
   since: number
@@ -141,7 +141,7 @@ declare module 'claude-code' {
       pose: TokenOptimizerDesktopPose | null
       ui: TokenOptimizerDesktopUi | null
       engineCall: TokenOptimizerDesktopEngineCall
-      /** Bumped by the clock tick when the visible clock changes (KTD13). */
+      /** Bumped by the clock tick when the visible clock changes. */
       frame: number
     }
   }

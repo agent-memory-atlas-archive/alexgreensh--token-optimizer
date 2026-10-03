@@ -1,5 +1,5 @@
 // 16x16 stroke icons from the design page, plus a standalone SVG builder for
-// the drawing layer's Svg element. Pure (KTD4).
+// the drawing layer's Svg element. Pure.
 
 export const ICONS = {
   branch: '<circle cx="4" cy="3.5" r="1.6"></circle><circle cx="4" cy="12.5" r="1.6"></circle><circle cx="12" cy="5" r="1.6"></circle><path d="M4 5.1v5.8M12 6.6c0 2.6-4 2.2-6.6 4.2"></path>',
@@ -18,7 +18,7 @@ export const ICONS = {
 
 export type IconName = keyof typeof ICONS
 
-/** Default alt text naming each icon, used when the caller passes none (R18). */
+/** Default alt text naming each icon, used when the caller passes none. */
 export const ICON_ALT: Record<IconName, string> = {
   branch: 'Branch',
   clock: 'Clock',

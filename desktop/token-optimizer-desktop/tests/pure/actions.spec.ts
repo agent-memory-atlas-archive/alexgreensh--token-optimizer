@@ -1,4 +1,4 @@
-// The three buttons' pure parts (U9): arming, busy timeouts, notes, the
+// The three buttons' pure parts: arming, busy timeouts, notes, the
 // Start fresh capture and hand-off, the cross-session pointer strip, and the
 // per-request usage reads. tests/engine/actions.test.ts drives the same
 // handlers through register.tsx inside the engine.
@@ -142,7 +142,7 @@ test('Start fresh aborts on a failed capture, a missing or stub checkpoint, or a
   }
 })
 
-test('a capture that exits non-zero aborts before resume-lean, even with a path printed (TR-12)', async () => {
+test('a capture that exits non-zero aborts before resume-lean, even with a path printed', async () => {
   const { port: p, calls } = port({ captureExit: 1 })
   const r = await prepareHandoff(p, { sessionId: 'old-1', transcriptPath: null, cwd: '/work/a', now: T })
   assert.deepEqual(r, { ok: false, reason: 'the checkpoint could not be saved' })
@@ -158,7 +158,7 @@ test('the capture budget it asks for stays under the time Start fresh waits for 
   assert.ok(budget * 1000 < CAPTURE_TIMEOUT_MS)
 })
 
-test('a hand-off joins another session in its project that started since the save, within 10 minutes (KTD10, TR-05, R1)', () => {
+test('a hand-off joins another session in its project that started since the save, within 10 minutes', () => {
   const h = { fromSessionId: 'old-1', cwd: '/work/a', checkpointPath: '/cp/a.md', text: 'LEAN', createdAt: T }
   const at = { sessionId: 'new-1', cwd: '/work/a', startedAt: T + 500, now: T + 1000 }
   assert.equal(handoffFate(h, at), 'attach')
