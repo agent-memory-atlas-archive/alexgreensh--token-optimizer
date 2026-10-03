@@ -934,8 +934,8 @@ function drawBand(D: Desktop, m: Model, on: Handlers) {
     ...(m.canWarm && snap.cache.state === 'warning' ? [{ id: 'warm' as const, label: 'Keep warm' }] : []),
   ].filter(a => a.id !== say.action?.id && !(a.id === 'clean' && say.action?.id === 'clean-first'))
 
-  // Said as a sentence: a bare "47M past 30 days" reads like tokens spent, and a 30-bar
-  // chart ruled by one big day said nothing. The total is the dashboard's own.
+  // Said plainly: a bare "47M past 30 days" reads like tokens spent, and a 30-bar chart
+  // ruled by one big day said nothing. The total is the dashboard's own.
   const sessionSaved = (detail.savings.sessionTokens ?? 0) >= SESSION_SAVED_MIN
   const savingsBlock =
     detail.savings.state === 'unavailable' && detail.savings.last30Tokens == null ? (
@@ -947,10 +947,10 @@ function drawBand(D: Desktop, m: Model, on: Handlers) {
       <Box flexDirection="row" alignItems="center" columnGap={1}>
         {icon(D, 'saved', t.good)}
         <Text>
-          Token Optimizer saved you <Text bold>{detail.savings.last30Text}</Text> tokens in the last 30 days
+          Saved <Text bold>{detail.savings.last30Text}</Text> tokens in 30 days
           {sessionSaved ? (
             <Text>
-              , <Text bold>{detail.savings.sessionText}</Text> of them this session
+              {' '}(<Text bold>{detail.savings.sessionText}</Text> this session)
             </Text>
           ) : (
             ''
@@ -1014,8 +1014,8 @@ function drawBand(D: Desktop, m: Model, on: Handlers) {
         </Box>
       </Box>
       {m.sheetOpen ? (
-        <Box key="row" flexDirection="row" flexWrap="wrap" alignItems="center" justifyContent="space-between" columnGap={4} rowGap={1} hover={{ scope: gazeScope('down-right') }}>
-          <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={3} rowGap={1}>
+        <Box key="row" flexDirection="row" flexWrap="wrap" alignItems="center" justifyContent="space-between" columnGap={2} rowGap={1} hover={{ scope: gazeScope('down-right') }}>
+          <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={2} rowGap={1}>
             {detail.facts.map(f => (
               <Box flexDirection="row" alignItems="center" columnGap={1}>
                 {icon(D, f.icon, t.ink)}
@@ -1197,7 +1197,16 @@ export const register: Register = (on, options) => {
     if (!active || e.trigger === 'precompute' || e.agentId !== undefined) return next(e)
     await feedPose($, { type: 'compact-start' })
     try {
-      return await next(e)
+      const result = await next(e)
+      // The band watched this one land: count it now, before Claude Code writes its
+      // marker to the transcript (it does so late) and before Token Optimizer re-reads.
+      if (!('skip' in result && result.skip)) {
+        await attempt(
+          () => update($, sessionAtom, cur => (cur?.quality ? { ...cur, quality: { ...cur.quality, compactions: cur.quality.compactions + 1 } } : cur)),
+          undefined,
+        )
+      }
+      return result
     } finally {
       await feedPose($, { type: 'compact-end' })
       // Any compaction (button, typed /compact, automatic): Token Optimizer saved a checkpoint

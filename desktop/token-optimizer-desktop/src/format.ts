@@ -53,7 +53,7 @@ export function relative(targetMs: number, nowMs: number): string {
 export function ago(thenMs: number, nowMs: number): string {
   const mins = Math.floor(Math.max(0, nowMs - thenMs) / MINUTE)
   if (mins < 1) return 'just now'
-  if (mins < 60) return `${mins} min ago`
+  if (mins < 60) return `${mins}m ago`
   if (mins < DAY_MIN) {
     const m = mins % 60
     return m === 0 ? `${Math.floor(mins / 60)}h ago` : `${Math.floor(mins / 60)}h ${m}m ago`

@@ -492,3 +492,21 @@ def test_compactions_counted_from_transcript(sb, tmp_path):
     f.write_text("\n".join(rows) + "\n", encoding="utf-8")
     assert sb._status_bar_compactions(f) == 2
     assert sb._status_bar_compactions(tmp_path / "missing.jsonl") is None
+
+
+# --------------------------------------------------------------------------
+# Compaction count vs Claude Code's late compact_boundary write
+# --------------------------------------------------------------------------
+
+def test_post_compact_counts_a_compaction_the_transcript_does_not_show_yet(sb):
+    # PostCompact runs before Claude Code appends the compact_boundary row.
+    assert sb._settled_compactions(0, {"compactions": 0}, post_compact=True, now=1000) == 1
+    # Once the boundary is written, the parse agrees instead of adding another.
+    assert sb._settled_compactions(1, {"compactions": 1, "_compact_bumped_at": 1000}, post_compact=False, now=1100) == 1
+    # A second PostCompact for the same compaction (within a minute) is not a second one.
+    assert sb._settled_compactions(0, {"compactions": 1, "_compact_bumped_at": 1000}, post_compact=True, now=1030) == 1
+    # The next real compaction, later: counted again.
+    assert sb._settled_compactions(1, {"compactions": 1, "_compact_bumped_at": 1000}, post_compact=True, now=5000) == 2
+    # Never lower than what was known; a parse that sees more wins.
+    assert sb._settled_compactions(0, {"compactions": 3}, post_compact=False) == 3
+    assert sb._settled_compactions(4, {"compactions": 3}, post_compact=True, now=9000) == 4

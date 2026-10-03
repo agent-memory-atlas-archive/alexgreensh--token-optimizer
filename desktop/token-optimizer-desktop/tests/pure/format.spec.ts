@@ -34,7 +34,7 @@ test('relative time reads like speech', () => {
   assert.equal(relative(NOW + 20_000, NOW), 'in under a minute')
   assert.equal(relative(NOW + 6 * 24 * 60 * m, NOW), 'in 6 days')
   assert.equal(relative(NOW + 30 * 60 * m, NOW), 'in 1 day 6h')
-  assert.equal(ago(NOW - 3 * m, NOW), '3 min ago')
+  assert.equal(ago(NOW - 3 * m, NOW), '3m ago')
   assert.equal(ago(NOW - 10_000, NOW), 'just now')
   assert.equal(ago(NOW - 125 * m, NOW), '2h 5m ago')
   assert.equal(ago(NOW - 3 * 24 * 60 * m, NOW), '3 days ago')

@@ -89,7 +89,7 @@ test("the arrow under Clawd unfolds the row, points up while open, and folds it 
   expect(await ui.find({ key: 'row' })).toBeDefined()
   expect((await exactly(ui, 'feat/band')).length).toBeGreaterThan(0)
   expect((await exactly(ui, '41k')).length).toBeGreaterThan(0)
-  expect(await ui.find({ type: 'Text', text: /Token Optimizer saved you/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^Saved / })).toBeDefined()
 
   await ui.press({ key: 'details' })
   expect(await ui.find({ key: 'row' })).toBeUndefined()
@@ -119,13 +119,13 @@ test('without savings the row shows "--" totals and the reason, and every other 
   await ui.press({ key: 'details' })
 
   // Only the 30-day total: "saved this session" stays off below 1K.
-  // No figures to state: the reason stands alone, never a "saved you --" sentence.
-  expect(await ui.find({ type: 'Text', text: /saved you/ })).toBeUndefined()
+  // No figures to state: the reason stands alone, never a "Saved -- tokens" line.
+  expect(await ui.find({ type: 'Text', text: /^Saved / })).toBeUndefined()
   expect((await exactly(ui, 'Savings database not found.')).length).toBeGreaterThan(0)
   expect((await exactly(ui, 'feat/band')).length).toBeGreaterThan(0)
   expect((await exactly(ui, '1h 0m')).length).toBeGreaterThan(0)
-  expect(await ui.find({ type: 'Text', text: /12 tool calls/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /Checkpoint saved/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /12 tools/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Checkpoint / })).toBeDefined()
 })
 
 test("the terminal's dark theme does not darken the desktop: pictures draw light and carry their own dark-mode rule", async ($, on) => {
@@ -209,4 +209,17 @@ test('watching, Clawd has a hidden look for each part of the band, shown while t
   const looks = (await ui.findAll({ type: 'Svg' })).filter(s => s.props.alt === 'Clawd: watching your pointer')
   expect(looks.length).toBe(4)
   expect(looks.every(s => !String(s.props.source).includes('attributeName="opacity"'))).toBe(true)
+})
+
+test('a compaction the band watched counts at once, before the transcript or Token Optimizer catch up', async ($, on) => {
+  const w = stub(on)
+  await $.session.start(START)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await w.clock.settle()
+  await $.session.compact({
+    trigger: 'manual',
+    messages: [{ role: 'user', text: 'Earlier work.', toolUses: [], handle: 'm-1' }],
+  } as never)
+  await ui.press({ key: 'details' })
+  expect(await ui.find({ type: 'Text', text: /1×/ })).toBeDefined()
 })

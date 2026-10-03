@@ -265,7 +265,8 @@ export function stub(on: On, patch: Partial<Omit<World, 'clock' | 'runs' | 'toas
     w.compacts += 1
     if (w.compact === 'hang') await w.clock.sleep(10 * 60_000)
     if (w.compact === 'skip') return { skip: 'nothing to compact' }
-    return { messages: [] }
+    // A compaction leaves at least its summary (the shape the engine hands hooks).
+    return { messages: [{ role: 'user', text: 'Summary of the conversation so far.', toolUses: [], handle: 'summary-1' }] as never }
   })
   on('model.fork', async () => {
     w.forks += 1

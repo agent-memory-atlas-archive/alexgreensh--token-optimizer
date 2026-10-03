@@ -39165,6 +39165,35 @@ _LOOP_LAST_MESSAGES = 4
 # _maybe_nudge, _maybe_loop_warning, or _maybe_quality_warn MUST be registered
 # here — a sibling key silently missing from this set is exactly what broke the
 # nudge follow-through credit (A6).
+_COMPACT_BUMP_WINDOW_S = 60
+
+
+def _settled_compactions(parsed, prev_result, post_compact, now=None):
+    """The session's compaction count, never lower than what was already known.
+
+    Claude Code appends the compact_boundary row to the transcript after the
+    PostCompact hooks run, so the PostCompact refresh parses a transcript that
+    does not show the compaction yet. That refresh therefore counts one more
+    than before when the parse has not caught up, once per compaction (a
+    second PostCompact within a minute is the same one). A later parse that
+    sees the boundary agrees with that count rather than adding to it.
+    """
+    try:
+        prev = max(0, int((prev_result or {}).get("compactions", 0) or 0))
+    except (TypeError, ValueError):
+        prev = 0
+    count = max(int(parsed or 0), prev)
+    if post_compact and int(parsed or 0) <= prev:
+        now = time.time() if now is None else now
+        try:
+            last = float((prev_result or {}).get("_compact_bumped_at") or 0)
+        except (TypeError, ValueError):
+            last = 0.0
+        if now - last > _COMPACT_BUMP_WINDOW_S:
+            count = prev + 1
+    return count
+
+
 _CARRY_KEYS = (
     "_nudge_fill_pct_at_fire",
     "_nudge_fire_epoch",
@@ -39531,7 +39560,7 @@ def _maybe_loop_warning(result, cache_path, quality_data, quiet=False):
     return None
 
 
-def _acquire_quality_lock(cache_path, acquire_timeout=0.15):
+def _acquire_quality_lock(cache_path, acquire_timeout=0.15, reclaim_released=False):
     """Bounded portable lock serializing quality_cache recompute+write.
 
     Returns a LeaseLock on success or False when unavailable/contended. The
@@ -39556,6 +39585,7 @@ def _acquire_quality_lock(cache_path, acquire_timeout=0.15):
         cache_path.with_suffix(".qlease"),
         deadline=current_deadline(),
         acquire_timeout=acquire_timeout,
+        reclaim_released=reclaim_released,
     )
     if not lock.acquire():
         return False
@@ -39568,7 +39598,7 @@ def _release_quality_lock(lock):
     lock.release()
 
 
-def quality_cache(throttle_seconds=120, warn_threshold=70, quiet=False, session_jsonl=None, force=False, pure_time_throttle=False, session_id=None, warn=False):
+def quality_cache(throttle_seconds=120, warn_threshold=70, quiet=False, session_jsonl=None, force=False, pure_time_throttle=False, session_id=None, warn=False, post_compact=False):
     """Run quality analysis and write score to cache file for status line.
 
     Skips analysis if cache is younger than throttle_seconds (unless force=True).
@@ -39658,7 +39688,14 @@ def quality_cache(throttle_seconds=120, warn_threshold=70, quiet=False, session_
         if _bootstrapping
         else _float_env("TOKEN_OPTIMIZER_QUALITY_LOCK_TIMEOUT", 0.15)
     )
-    _qlock = _acquire_quality_lock(cache_path, acquire_timeout=_lock_timeout)
+    # The PostCompact refresh is the one recompute that must land (it records the
+    # compaction); the cohort reservation another hook's released lease leaves
+    # behind must not turn it away.
+    _qlock = (
+        _acquire_quality_lock(cache_path, acquire_timeout=_lock_timeout, reclaim_released=True)
+        if post_compact
+        else _acquire_quality_lock(cache_path, acquire_timeout=_lock_timeout)
+    )
     if _qlock is False:
         # Breadcrumb (was silent): a lost lease serves the STALE score on a refresh,
         # or writes NOTHING on a bootstrap -- the "ContextQ stuck / not showing"
@@ -39741,7 +39778,15 @@ def quality_cache(throttle_seconds=120, warn_threshold=70, quiet=False, session_
         # accurate. Routing the statusline through the same dedup would add
         # latency to every prompt for a number the user glances at.
         result["decisions_found"] = len(quality_data["decisions"])
-        result["compactions"] = quality_data["compactions"]
+        result["compactions"] = _settled_compactions(quality_data["compactions"], prev_result, post_compact)
+        try:
+            _prev_compactions = int(prev_result.get("compactions", 0) or 0)
+        except (TypeError, ValueError):
+            _prev_compactions = 0
+        if post_compact and result["compactions"] > max(int(quality_data["compactions"] or 0), _prev_compactions):
+            result["_compact_bumped_at"] = time.time()
+        elif prev_result.get("_compact_bumped_at"):
+            result["_compact_bumped_at"] = prev_result["_compact_bumped_at"]
         result["turns"] = len([m for m in quality_data["messages"] if m[1] == "user"])
         result["timestamp"] = datetime.now(timezone.utc).isoformat()
         result["session_file"] = Path(filepath).name
@@ -50878,7 +50923,7 @@ if __name__ == "__main__":
             _qc_score_box = {}
 
             def _qc_run():
-                _qc_score_box["score"] = quality_cache(throttle_seconds=throttle, warn_threshold=warn_threshold, quiet=quiet, session_jsonl=session_jsonl, force=force, pure_time_throttle=throttle_only, session_id=session_id_from_hook, warn=warn)
+                _qc_score_box["score"] = quality_cache(throttle_seconds=throttle, warn_threshold=warn_threshold, quiet=quiet, session_jsonl=session_jsonl, force=force, pure_time_throttle=throttle_only, session_id=session_id_from_hook, warn=warn, post_compact=isinstance(payload, dict) and payload.get("hook_event_name") == "PostCompact")
 
             # SessionStart is the one wiring where Codex parses this hook's stdout
             # against the strict session-start schema, so collapse whatever was

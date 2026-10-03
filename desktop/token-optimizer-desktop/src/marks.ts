@@ -242,19 +242,23 @@ function savingsBlock(s: Snapshot): SavingsBlock {
  * The detail row under Clawd (R6): only what the bar does not show.
  * `s.now` is epoch milliseconds; the quality cache's epochs are seconds.
  */
+/** Longer branch names are cut so the unfolded row stays on one line. */
+const BRANCH_MAX = 20
+
 export function row(s: Snapshot, _opts: FormatOptions = {}): Row {
   const q = s.quality
   const facts: Fact[] = []
-  if (s.branch) facts.push({ icon: 'branch', runs: [strong(s.branch)] })
+  // One line in the band: every fact in its shortest plain form.
+  if (s.branch) facts.push({ icon: 'branch', runs: [strong(s.branch.length > BRANCH_MAX ? `${s.branch.slice(0, BRANCH_MAX - 1)}…` : s.branch)] })
   if (q?.sessionStartEpoch != null) facts.push({ icon: 'clock', runs: [strong(duration(s.now / 1000 - q.sessionStartEpoch))] })
-  if (q?.toolCalls != null) facts.push({ icon: 'tool', runs: [strong(String(q.toolCalls)), plain(q.toolCalls === 1 ? ' tool call' : ' tool calls')] })
-  if (q && q.compactions > 0) facts.push({ icon: 'compact', runs: [plain('Compacted '), strong(`${q.compactions}×`)] })
+  if (q?.toolCalls != null) facts.push({ icon: 'tool', runs: [strong(String(q.toolCalls)), plain(q.toolCalls === 1 ? ' tool' : ' tools')] })
+  if (q && q.compactions > 0) facts.push({ icon: 'compact', runs: [strong(`${q.compactions}×`), plain(' compacted')] })
   facts.push({
     icon: 'bookmark',
     runs: (s.checkpointEpoch ?? q?.checkpointEpoch) != null
-      ? [plain(`Checkpoint saved ${ago((s.checkpointEpoch ?? q!.checkpointEpoch!) * 1000, s.now)}`)]
+      ? [plain('Checkpoint '), strong(ago((s.checkpointEpoch ?? q!.checkpointEpoch!) * 1000, s.now))]
       : s.earlierCheckpoint
-        ? [plain(`Earlier checkpoint ${ago(s.earlierCheckpoint.epoch * 1000, s.now)}`), ...(s.earlierCheckpoint.about ? [plain(' · '), strong(s.earlierCheckpoint.about)] : [])]
+        ? [plain('Earlier checkpoint '), strong(ago(s.earlierCheckpoint.epoch * 1000, s.now))]
         : [plain('No checkpoint yet')],
   })
   return { facts, savings: savingsBlock(s) }

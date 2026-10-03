@@ -332,8 +332,12 @@ export async function gather(
       : kept
 
   // The higher count wins: the quality cache can lag a compaction that just landed.
-  const counted = 'compactions' in facts ? facts.compactions : null
-  const merged = quality && counted != null && counted > quality.compactions ? { ...quality, compactions: counted } : quality
+  // Never lower than the band already knew this session (it may have seen the compaction itself).
+  const known = Math.max(
+    'compactions' in facts && facts.compactions != null ? facts.compactions : 0,
+    base?.quality?.compactions ?? 0,
+  )
+  const merged = quality && known > quality.compactions ? { ...quality, compactions: known } : quality
 
   return {
     sessionId: sid,
@@ -361,5 +365,9 @@ export function mergeStored(
 ): TokenOptimizerDesktopSession {
   const sameSession = !reset && current !== null && current.sessionId === fresh.sessionId
 
-  return { ...fresh, sheetOpen: sameSession ? current.sheetOpen : fresh.sheetOpen }
+  // A refresh that began before a compaction landed must not write its count back down.
+  const counted = sameSession ? Math.max(current.quality?.compactions ?? 0, fresh.quality?.compactions ?? 0) : null
+  const quality = fresh.quality && counted !== null && counted > fresh.quality.compactions ? { ...fresh.quality, compactions: counted } : fresh.quality
+
+  return { ...fresh, quality, sheetOpen: sameSession ? current.sheetOpen : fresh.sheetOpen }
 }

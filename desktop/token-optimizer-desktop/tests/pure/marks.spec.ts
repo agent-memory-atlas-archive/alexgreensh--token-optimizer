@@ -108,12 +108,12 @@ test('quality, context and limit cards', () => {
   assert.deepEqual(cards(snap({ fiveHour: null, week: null }), TZ).map((c) => c.id), ['quality', 'context', 'cache'])
 })
 
-test('row: compaction count zero has no compaction fact; three says Compacted 3×', () => {
+test('row: compaction count zero has no compaction fact; three says 3× compacted', () => {
   const zero = row(snap(), TZ)
   assert.equal(zero.facts.find((f) => f.icon === 'compact'), undefined)
   const three = row(withQuality(snap(), { compactions: 3 }), TZ)
   const fact = three.facts.find((f) => f.icon === 'compact')!
-  assert.equal(fact.runs.map((r) => r.text).join(''), 'Compacted 3×')
+  assert.equal(fact.runs.map((r) => r.text).join(''), '3× compacted')
 })
 
 test('row facts: branch, session time, tool calls, checkpoint', () => {
@@ -122,8 +122,8 @@ test('row facts: branch, session time, tool calls, checkpoint', () => {
   assert.deepEqual(texts, [
     ['branch', 'feat/billing-tests'],
     ['clock', '1h 5m'],
-    ['tool', '86 tool calls'],
-    ['bookmark', 'Checkpoint saved 3 min ago'],
+    ['tool', '86 tools'],
+    ['bookmark', 'Checkpoint 3m ago'],
   ])
   const bare = row(snap({ branch: null, quality: null }), TZ)
   assert.deepEqual(bare.facts.map((f) => f.icon), ['bookmark'])
