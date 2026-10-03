@@ -18896,7 +18896,8 @@ def _session_model_reprice(conn, cutoff, session_uuid=None, by_day=False):
         where = "WHERE e.timestamp >= ? "
         params = [cutoff]
         if session_uuid is not None:
-            # Same match as the savings buckets: non-UUID ids live in session_id.
+            # Same rows as the savings buckets (non-UUID ids live in session_id).
+            # Those rows have no session_uuid to join, so they stay unmeasured here.
             where += "AND (e.session_uuid = ? OR (e.session_uuid IS NULL AND e.session_id = ?)) "
             params.extend([session_uuid, session_uuid])
         rows = conn.execute(
@@ -46312,6 +46313,7 @@ def _status_bar_savings_or_reason(session_id, _retried=False):
             # 30-day headline below runs on its own connection, as the dashboard's does).
             conn.execute("BEGIN")
             days = _realized_savings_buckets(conn, cutoff, by_day=True)
+            window = _realized_savings_buckets(conn, cutoff).get("", {"tokens": 0})
             sess = _realized_savings_buckets(conn, "", session_uuid=session_id).get(
                 "", {"tokens": 0, "usd": 0.0})
             conn.execute("COMMIT")
@@ -46343,9 +46345,11 @@ def _status_bar_savings_or_reason(session_id, _retried=False):
                       "usd": float(b.get("usd", 0.0))})
     headline = _get_merged_savings(days=_STATUS_BAR_DAYS)
     shown, measured = _dashboard_saved_tokens(headline)
-    # The headline pass fails open to zeros; when the day buckets show savings
-    # but the headline is zero, it failed: say so rather than cache a false 0.
-    if measured == 0 and any(int(b.get("tokens", 0)) > 0 for b in days.values()):
+    # The headline pass fails open to zeros; when the window, netted the way the
+    # headline nets it, shows savings but the headline is zero, it failed: say so
+    # rather than cache a false 0. Single days are not compared, since a debit on
+    # one day can honestly cancel savings on another.
+    if measured == 0 and int(window.get("tokens", 0)) > 0:
         return None, "savings database busy"
     return {
         "unit": "tokens",
@@ -46461,8 +46465,7 @@ def _status_bar_acquire_lock(session_id):
                 # Another caller replaced the stale lock between our check and the
                 # rename, so we moved its live lock. Put it back without
                 # overwriting anything (link fails if the name is taken) and back off.
-                if _status_bar_put_back(quarantine, lock):
-                    return None
+                _status_bar_put_back(quarantine, lock)
                 try:
                     quarantine.unlink()
                 except OSError:
@@ -46519,8 +46522,8 @@ def _status_bar_release_lock(session_id, token):
         mine = aside.read_text(encoding="ascii", errors="replace").strip() == token
     except OSError:
         mine = False
-    if not mine and _status_bar_put_back(aside, lock):
-        return False
+    if not mine:
+        _status_bar_put_back(aside, lock)
     try:
         aside.unlink()
     except OSError:
@@ -46531,24 +46534,15 @@ def _status_bar_release_lock(session_id, token):
 def _status_bar_put_back(aside, lock):
     """Return a lock moved aside to its name, never over a newer one.
 
-    True when `aside` itself now holds the name (renamed into place, so the
-    caller must not delete it); False when a hard link put it back (the caller
-    removes `aside`) or a newer lock already holds the name.
+    The caller still removes `aside` afterwards. A hard link puts it back only
+    while the name is free. Without hard links it is dropped: a check-then-rename
+    could replace a newer lock, and losing an old one only allows a duplicate
+    refresh.
     """
     try:
         os.link(str(aside), str(lock))
-        return False
-    except FileExistsError:
-        return False
     except (OSError, AttributeError):
-        # No hard links here: rename into place only while the name is free.
-        try:
-            if not os.path.exists(str(lock)):
-                os.rename(str(aside), str(lock))
-                return True
-        except OSError:
-            pass
-        return False
+        pass
 
 
 _COMPACT_MARK = b'"subtype":"compact_boundary"'
@@ -46584,6 +46578,11 @@ def _status_bar_compactions(path, session_id=None):
     try:
         end = start
         with open(path, "rb") as fh:
+            if start > 0:
+                # Resume only on a line boundary; anything else recounts from the top.
+                fh.seek(start - 1)
+                if fh.read(1) != b"\n":
+                    start, count, end = 0, 0, 0
             fh.seek(start)
             for line in fh:
                 if not line.endswith(b"\n"):

@@ -14,7 +14,7 @@ import os
 import subprocess
 import sys
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -516,7 +516,7 @@ def test_recent_compact_boundary_reads_the_tail(sb, tmp_path):
     f = tmp_path / "t.jsonl"
     now = 1_800_000_000
     def iso(t):
-        return datetime.utcfromtimestamp(t).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+        return datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
     f.write_text('{"type":"user"}\n{"type":"system","subtype":"compact_boundary","timestamp":"%s"}\n{"type":"assistant"}\n' % iso(now - 30), encoding="utf-8")
     assert sb._recent_compact_boundary(f, now=now) is True
     assert sb._recent_compact_boundary(f, now=now + 600) is False
@@ -609,7 +609,7 @@ def test_compaction_memo_never_moves_backwards(sb, tmp_path):
 def test_boundary_probe_ignores_the_words_inside_a_message(sb, tmp_path):
     f = tmp_path / "t.jsonl"
     now = 1_800_000_000
-    iso = datetime.utcfromtimestamp(now - 10).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    iso = datetime.fromtimestamp(now - 10, timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
     f.write_text(json.dumps({"type": "user", "timestamp": iso,
                              "message": {"content": 'a pasted log: "subtype":"compact_boundary"'}}) + "\n",
                  encoding="utf-8")
@@ -647,3 +647,50 @@ def test_earlier_checkpoint_outside_token_optimizer_folders_is_not_read(sb, tmp_
     (sb._sb_claude / "token-optimizer" / f"resumable-{SID_A}.json").write_text(
         json.dumps({"checkpoint": str(outside), "relevant": True}), encoding="utf-8")
     assert sb._status_bar_earlier_checkpoint(SID_A) is None
+
+
+def test_savings_that_net_to_zero_across_days_are_not_reported_busy(sb):
+    # A re-expanded archive on a later day cancels the earlier day's credit:
+    # the honest 30-day figure is 0 while one day still shows a saving.
+    _seed(sb, rows=[
+        (_day(3), "tool_archive", 500, 0.005, SID_A),
+        (_day(1), "tool_archive_reexpand", 500, 0.005, SID_A),
+    ])
+    sav, reason = sb._status_bar_savings_or_reason(SID_A)
+    assert reason is None
+    assert sav["total_30d_measured_tokens"] == 0
+
+
+def test_a_zero_headline_over_real_savings_is_reported_busy(sb, monkeypatch):
+    _three_day_fixture(sb)
+    monkeypatch.setattr(sb, "_get_merged_savings", lambda days=30, since=None: {
+        "total_tokens": 0, "total_cost_usd": 0.0})
+    assert sb._status_bar_savings_or_reason(SID_A) == (None, "savings database busy")
+
+
+def test_put_back_without_hard_links_never_replaces_a_newer_lock(sb, monkeypatch):
+    sid = "aaaaaaaa-1111-2222-3333-666666666666"
+    lock = sb._status_bar_lock_path(sid)
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text("old-owner", encoding="ascii")
+
+    def no_links(src, dst):
+        # A newer owner takes the name the moment ours is moved aside.
+        lock.write_text("newer-owner", encoding="ascii")
+        raise OSError("hard links not supported")
+
+    monkeypatch.setattr(sb.os, "link", no_links)
+    assert sb._status_bar_release_lock(sid, "my-token") is False
+    assert lock.read_text(encoding="ascii") == "newer-owner"
+    assert not list(lock.parent.glob(f"{lock.name}.*.release"))
+
+
+def test_compaction_memo_off_a_line_boundary_recounts(sb, tmp_path):
+    f = tmp_path / "t.jsonl"
+    mark = '{"type":"system","subtype":"compact_boundary"}\n'
+    f.write_text(mark * 3, encoding="utf-8")
+    memo = sb._status_bar_dir() / "compactions-sess-mid.json"
+    memo.parent.mkdir(parents=True, exist_ok=True)
+    # A memo that stopped partway into the second row.
+    memo.write_text(json.dumps({"path": str(f), "size": len(mark) + 5, "count": 1}), encoding="utf-8")
+    assert sb._status_bar_compactions(f, "sess-mid") == 3
