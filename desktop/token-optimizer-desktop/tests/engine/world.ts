@@ -34,7 +34,7 @@ export type World = {
   /** How the next compact-capture / resume-lean runs answer. */
   capture: 'ok' | 'fail' | 'stub'
   lean: string
-  /** How `$.session.compact()` answers: a compaction, a skip, or never. */
+  /** How Clean up's /compact answers: a compaction, a refusal, or never. */
   compact: 'ok' | 'skip' | 'hang'
   /** How `$.model.fork()` answers. */
   fork: { read: number } | 'nothing'
@@ -281,6 +281,12 @@ export function stub(on: On, patch: Partial<Omit<World, 'clock' | 'runs' | 'toas
   })
   on('command.run', async (_, e) => {
     w.commands.push(e.command)
+    // Clean up runs /compact as a command (a headless session refuses $.session.compact()).
+    if (e.command === 'compact') {
+      w.compacts += 1
+      if (w.compact === 'hang') await w.clock.sleep(10 * 60_000)
+      if (w.compact === 'skip') throw new Error('nothing to compact')
+    }
     if (e.command === 'clear' && w.clearBeneath) await w.clearBeneath()
     return { text: '' }
   })

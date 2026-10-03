@@ -34777,7 +34777,7 @@ def _resumable_flag_path(sid):
     return QUALITY_CACHE_DIR / f"resumable-{safe}.json"
 
 
-def _write_resumable_flag(sid, checkpoint_path):
+def _write_resumable_flag(sid, checkpoint_path, relevant=False):
     """Record that a relevance-cleared checkpoint exists for this session.
 
     Best-effort, never raises: the flag is a UI nicety, not a correctness gate.
@@ -34788,8 +34788,11 @@ def _write_resumable_flag(sid, checkpoint_path):
     try:
         p.parent.mkdir(parents=True, exist_ok=True)
         import time as _t
+        # relevant: same-work (cwd) match or cleared the relevance bar, the
+        # same test the billed pointer uses; the desktop band shows only those.
         payload = json.dumps({"checkpoint": str(checkpoint_path),
-                              "ts": int(_t.time() * 1000)})
+                              "ts": int(_t.time() * 1000),
+                              "relevant": bool(relevant)})
         tmp = p.with_suffix(".json.tmp")
         tmp.write_text(payload, encoding="utf-8")
         tmp.replace(p)
@@ -35286,7 +35289,9 @@ def compact_restore(session_id=None, cwd=None, is_compact=False, new_session_onl
         # points at the strongest eligible candidate we can identify (cwd match >
         # relevance winner > most-recent eligible; candidates are recent-first).
         flag_target = chosen or best or candidates[0]
-        _write_resumable_flag(sid_safe, flag_target["path"])
+        flag_relevant = chosen is not None or (
+            best is not None and flag_target is best and best_score >= CHECKPOINT_RELEVANCE_THRESHOLD)
+        _write_resumable_flag(sid_safe, flag_target["path"], relevant=flag_relevant)
 
         # Billed pointer: fire only on a strong same-work (cwd) signal or when the
         # relevance winner clears the threshold. Otherwise stay silent -- the
@@ -46422,7 +46427,11 @@ def _status_bar_earlier_checkpoint(session_id):
     if best is None:
         return None
     try:
-        cp = Path(str(json.loads(best.read_text(encoding="utf-8")).get("checkpoint") or ""))
+        flag = json.loads(best.read_text(encoding="utf-8"))
+        # Only a checkpoint on this work: an unrelated recent one is noise here.
+        if flag.get("relevant") is not True:
+            return None
+        cp = Path(str(flag.get("checkpoint") or ""))
         epoch = int(cp.stat().st_mtime)
     except (OSError, ValueError, AttributeError, TypeError):
         return None

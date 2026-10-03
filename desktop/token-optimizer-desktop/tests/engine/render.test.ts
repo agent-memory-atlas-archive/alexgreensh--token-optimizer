@@ -2,7 +2,13 @@
 // the unfolding row on desktop; nothing on the terminal or when switched off.
 import { expect, test } from 'claude-code/testing'
 
-import { BAND, START, stub } from './world.ts'
+import { BAND, START, quality, stub, type World } from './world.ts'
+
+/** Sags the session's quality below the floor, so the row's clean-up buttons are called for. */
+function sag(w: World): void {
+  const key = Object.keys(w.files).find(k => k.includes('quality-cache-sess-1'))!
+  w.files[key] = [1, quality(60, 0)]
+}
 
 const RED = '#d6453d' // clawd.ts LIGHT.bad
 
@@ -29,7 +35,7 @@ test('desktop draws Clawd, "Token Optimizer", the sentence and five marks', asyn
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
 
   const svgs = await ui.findAll({ type: 'Svg' })
-  expect(svgs.some(s => String(s.props.alt).startsWith('Clawd: ') && s.props.isInteractive === true)).toBe(true)
+  expect(svgs.some(s => String(s.props.alt).startsWith('Clawd: ') && s.props.isInteractive !== true)).toBe(true)
   expect((await exactly(ui, 'Token Optimizer')).length).toBeGreaterThan(0)
   expect((await exactly(ui, 'All clear.')).length).toBeGreaterThan(0)
 
@@ -114,7 +120,8 @@ test('without savings the row shows "--" totals and the reason, and every other 
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   await ui.press({ key: 'details' })
 
-  expect((await exactly(ui, '--')).length).toBe(2)
+  // Only the 30-day total: "saved this session" stays off below 1K.
+  expect((await exactly(ui, '--')).length).toBe(1)
   expect((await exactly(ui, 'Savings database not found.')).length).toBeGreaterThan(0)
   expect((await ui.findAll({ type: 'Svg' })).some(s => String(s.props.alt).startsWith('Tokens saved'))).toBe(false)
   expect((await exactly(ui, 'feat/band')).length).toBeGreaterThan(0)
@@ -123,39 +130,58 @@ test('without savings the row shows "--" totals and the reason, and every other 
   expect(await ui.find({ type: 'Text', text: /Checkpoint saved/ })).toBeDefined()
 })
 
-test('the dark theme draws Clawd from the dark palette', async ($, on) => {
+test("the terminal's dark theme does not darken the desktop: pictures draw light and carry their own dark-mode rule", async ($, on) => {
   stub(on, { theme: 'dark-daltonized' })
   await $.session.start(START)
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  const clawd = (await ui.findAll({ type: 'Svg' })).find(s => String(s.props.alt).startsWith('Clawd: '))
-  expect(String(clawd?.props.source)).toContain('#e08a6c') // DARK.skin
+  const svgs = await ui.findAll({ type: 'Svg' })
+  const clawd = svgs.find(s => String(s.props.alt).startsWith('Clawd: '))
+  expect(String(clawd?.props.source)).toContain('#d97757') // LIGHT.skin
+  const quality = svgs.find(s => String(s.props.alt).startsWith('Quality'))
+  expect(String(quality?.props.source)).toContain('prefers-color-scheme: dark')
+})
+
+test('a healthy session offers no row buttons: nothing is called for', async ($, on) => {
+  stub(on)
+  await $.session.start(START)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await ui.press({ key: 'details' })
+  for (const id of ['clean', 'fresh', 'warm']) expect(await ui.find({ key: `row-${id}` }), id).toBeUndefined()
 })
 
 test('the unfolded row carries every card action that can run now, with no pointer needed (R5, TR-13)', async ($, on) => {
   const w = stub(on)
+  sag(w)
+  w.status = { ...w.status, requestAgoS: 3600 - 120 } // two minutes of cache left
   await $.session.start(START)
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  expect(await ui.find({ key: 'row-clean' })).toBeUndefined()
+  expect(await ui.find({ key: 'row-fresh' })).toBeUndefined()
   await ui.press({ key: 'details' })
 
-  expect((await ui.find({ key: 'row-clean' }))?.props.label).toBe('Clean up')
+  // Never twice: what the sentence's button offers stays off the row.
+  const offered = (await ui.find({ key: 'action' }))?.props.label
+  if (offered !== 'Clean up' && offered !== 'Clean up first') expect((await ui.find({ key: 'row-clean' }))?.props.label).toBe('Clean up')
+  else expect(await ui.find({ key: 'row-clean' })).toBeUndefined()
   expect((await ui.find({ key: 'row-fresh' }))?.props.label).toBe('Start fresh')
-  expect((await ui.find({ key: 'row-warm' }))?.props.label).toBe('Keep warm')
+  if (offered !== 'Keep warm') expect((await ui.find({ key: 'row-warm' }))?.props.label).toBe('Keep warm')
 
   await ui.press({ key: 'row-fresh' })
-  expect((await ui.find({ key: 'row-fresh' }))?.props.label).toBe('Click again to clear')
-  await ui.press({ key: 'row-fresh' })
+  // Armed, the confirm sits beside the sentence that says what it does (and leaves the row).
+  expect((await ui.find({ key: 'action' }))?.props.label).toBe('Click again to clear')
+  expect(await ui.find({ key: 'row-fresh' })).toBeUndefined()
+  await ui.press({ key: 'action' })
   await w.clock.settle()
   expect(w.runs.some(r => r.argv.includes('compact-capture'))).toBe(true)
 })
 
 test('the row offers Keep warm only while it can run: never on a cold cache', async ($, on) => {
   const w = stub(on)
+  sag(w)
   w.status = { ...w.status, requestAgoS: 2 * 3600 }
   await $.session.start(START)
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   await ui.press({ key: 'details' })
-  expect(await ui.find({ key: 'row-clean' })).toBeDefined()
+  expect(await ui.find({ key: 'row-fresh' })).toBeDefined()
   expect(await ui.find({ key: 'row-warm' })).toBeUndefined()
 })
 
@@ -174,4 +200,15 @@ test('a new pose fades in over the old one, which stays beneath until the fade i
   await w.clock.advance(1000)
   await w.clock.settle()
   expect((await clawds()).length).toBe(1)
+})
+
+test('watching, Clawd has a hidden look for each part of the band, shown while the pointer is over it', async ($, on) => {
+  const w = stub(on)
+  await $.session.start(START)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await w.clock.advance(5000) // past the wake-up
+  await w.clock.settle()
+  const looks = (await ui.findAll({ type: 'Svg' })).filter(s => s.props.alt === 'Clawd: watching your pointer')
+  expect(looks.length).toBe(4)
+  expect(looks.every(s => !String(s.props.source).includes('attributeName="opacity"'))).toBe(true)
 })

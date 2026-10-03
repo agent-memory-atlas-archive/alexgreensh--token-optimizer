@@ -46,7 +46,25 @@ export const DARK: Palette = {
   ground: '#f3f1ea',
 }
 
-export type ClawdOptions = { animate: boolean; palette: Palette }
+/** Where Clawd looks while watching: toward the part of the band the pointer is over. */
+export type Gaze = 'up-right' | 'right' | 'down-right' | 'down'
+
+/** Eye offsets per gaze, in the picture's own units (the face is 9 wide). */
+export const GAZE: Record<Gaze, [number, number]> = {
+  'up-right': [0.7, -0.6],
+  right: [0.8, 0],
+  'down-right': [0.7, 0.5],
+  down: [0, 0.6],
+}
+
+export type ClawdOptions = {
+  animate: boolean
+  palette: Palette
+  /** A watching Clawd's steady look toward the pointer; no glance, no fade in. */
+  gaze?: Gaze
+  /** Fade in when drawn (a new pose); off for the gaze pictures stacked over him. */
+  fadeIn?: boolean
+}
 
 const ALT: Record<Pose, string> = {
   wake: 'Clawd: waking up',
@@ -136,12 +154,13 @@ export function clawdSvg(pose: Pose, mood: Mood, opts: ClawdOptions): string {
   }
   const look = pose === 'think' ? ' transform="translate(0.5 -0.45)"' : pose === 'write' ? ' transform="translate(0.2 0.5)"' : ''
   // Watching with no pointer to follow: centred eyes that glance left, then right, about every 7 s (R9).
-  const scan = pose === 'type'
+  const gazeAt = opts.gaze ? GAZE[opts.gaze] : null
+  const scan = gazeAt ? '' : pose === 'type'
     ? a.move('translate', '-0.5 0.55;0.5 0.55;-0.5 0.55', { dur: 2.6 })
     : pose === 'idle'
       ? a.move('translate', '0 0;0 0;-0.6 0;-0.6 0;0.6 0;0.6 0;0 0;0 0', { dur: 7, keyTimes: '0;0.7;0.74;0.8;0.85;0.91;0.95;1' })
       : ''
-  const eyes = `<g${look}>${scan}${eyesFor[pose] ?? openEyes}</g>`
+  const eyes = `<g${gazeAt ? ` transform="translate(${gazeAt[0]} ${gazeAt[1]})"` : look}>${scan}${eyesFor[pose] ?? openEyes}</g>`
 
   // Arms.
   const arm = (side: 'l' | 'r', y: number, h = 1.2, anim = '', x?: number, w = 1.3) =>
@@ -256,7 +275,7 @@ export function clawdSvg(pose: Pose, mood: Mood, opts: ClawdOptions): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -1.6 18 14.2" role="img" aria-label="${ALT[pose]}">` +
     `<title>${ALT[pose]}</title>` +
     // A new pose fades in over the old one the band keeps beneath it, so a switch never cuts.
-    (opts.animate ? `<g opacity="0"><animate attributeName="opacity" from="0" to="1" begin="0s" dur="${FADE_IN_S}s" fill="freeze"/>` : '<g>') +
+    (opts.animate && opts.fadeIn !== false ? `<g opacity="0"><animate attributeName="opacity" from="0" to="1" begin="0s" dur="${FADE_IN_S}s" fill="freeze"/>` : '<g>') +
     `<ellipse cx="8.5" cy="11.2" rx="5.2" ry="0.5" fill="${p.ground}" opacity="0.1"/>` +
     `<g>${rigMotion[pose] ?? ''}${arms}${body}${glow}${frost}${eyes}${drop}${hold}</g>` +
     (frontFor[pose] ?? '') + '</g></svg>'

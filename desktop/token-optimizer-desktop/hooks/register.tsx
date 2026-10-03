@@ -39,10 +39,10 @@ import {
   type UiState,
 } from '../src/actions.ts'
 import { canKeepWarm, initialClock, reduceClock, view, type ClockEvent, type ClockState } from '../src/clock.ts'
-import { DARK, LIGHT, clawdSvg, type Palette } from '../src/clawd.ts'
+import { LIGHT, clawdSvg, type Gaze, type Palette } from '../src/clawd.ts'
 import type { Snapshot } from '../src/contracts.ts'
 import { ICONS, ICON_ALT, iconSvg, type IconName } from '../src/icons.ts'
-import { moodOf, sentence, type ActionId, type Run } from '../src/ladder.ts'
+import { COMPACT_HEAVY, QUALITY_FLOOR, moodOf, sentence, type ActionId, type Run } from '../src/ladder.ts'
 import { cards, marks, row, type Card, type Mark, type MarkTone } from '../src/marks.ts'
 import { DEBOUNCE_MS, initialPose, reducePose, type PoseEvent, type PoseState } from '../src/pose.ts'
 import {
@@ -74,8 +74,8 @@ type Tones = { good: string; caution: string; bad: string; cold: string; ink: st
 /** The design page's tone colours, light and dark; bad, cold and ink come from Clawd's palette. */
 function tonesFor(theme: 'light' | 'dark', p: Palette): Tones {
   return theme === 'dark'
-    ? { good: '#57c27c', caution: '#e0a63c', bad: p.bad, cold: p.cold, ink: p.ink, track: 'rgba(243,241,234,0.17)', card: p.card, line: '#3e3e3b' }
-    : { good: '#2f9e55', caution: '#c98a1b', bad: p.bad, cold: p.cold, ink: p.ink, track: 'rgba(31,30,29,0.13)', card: p.card, line: '#e2dfd6' }
+    ? { good: '#57c27c', caution: '#e0a63c', bad: p.bad, cold: p.cold, ink: p.ink, track: '#4b4a46', card: p.card, line: '#3e3e3b' }
+    : { good: '#2f9e55', caution: '#c98a1b', bad: p.bad, cold: p.cold, ink: p.ink, track: '#d9d6cd', card: p.card, line: '#e2dfd6' }
 }
 
 // ---- module state: plain variables, rebuilt from the atoms after a reload ----
@@ -88,7 +88,8 @@ let statusTimer: { cancel: () => void } | null = null
 let poseLive: PoseState | null = null
 let poseSig = ''
 let settleQueued = false
-let lastCold = false
+/** The cache coldness last told to Clawd; null until the first tick tells him, so a cold pose kept across a reload never sticks. */
+let lastCold: boolean | null = null
 let frameText = ''
 let transcriptPath: string | null = null
 let warmInFlight = false
@@ -160,7 +161,7 @@ async function refresh($: EngineInterface, options: GatherOptions = {}): Promise
     sessionGen += 1
     await feedClock($, { type: 'clear' })
     await setUi($, () => initialUi())
-    lastCold = false
+    lastCold = null
     await feedPose($, { type: 'session-start' })
   }
   await update($, sessionAtom, cur => mergeStored(cur, fresh, options.reset))
@@ -498,8 +499,9 @@ async function runCompact($: EngineInterface, since: number): Promise<void> {
     skip = 'it could not be recorded'
   } else {
     try {
-      const result = await $.session.compact()
-      if (result.skip) skip = result.skip
+      // The command, as if typed: $.session.compact() is refused in a headless
+      // session, and the desktop app runs its sessions headless.
+      await $.command.run({ command: 'compact' })
     } catch (error) {
       skip = error instanceof Error && error.message ? error.message.split('\n')[0] ?? 'it failed' : 'it failed'
     } finally {
@@ -778,11 +780,25 @@ async function act($: EngineInterface, id: ActionId): Promise<void> {
 
 const ring = (p: number, color: string, track: string, cold: boolean): string => {
   const c = 2 * Math.PI * 7
-  const bg = cold ? `stroke="${color}" stroke-dasharray="2.2 2.2"` : `stroke="${track}"`
+  const bg = cold ? `stroke="${color}" stroke-dasharray="2.2 2.2"` : `class="t" stroke="${track}"`
   return (
     `<circle cx="10" cy="10" r="7" fill="none" stroke-width="3.2" ${bg}/>` +
     (p > 0 ? `<circle cx="10" cy="10" r="7" fill="none" stroke-width="3.2" stroke="${color}" stroke-linecap="round" stroke-dasharray="${((c * p) / 100).toFixed(1)} ${c.toFixed(1)}" transform="rotate(-90 10 10)"/>` : '')
   )
+}
+
+/**
+ * The desktop gives the band no light/dark signal (the config's theme is the
+ * terminal's), so each picture follows the app's own appearance through its
+ * colour-scheme query; the drawn colours are the light ones, the fallback.
+ * Classes: k = ink stroke, kf = ink fill, t = track stroke, tf = track fill.
+ */
+const DARK_STYLE = '<style>@media (prefers-color-scheme: dark){.k{stroke:#f3f1ea}.kf{fill:#f3f1ea}.t{stroke:#4b4a46}.tf{fill:#4b4a46}}</style>'
+
+function themed(svg: string, rootClass?: string): string {
+  const open = svg.indexOf('>') + 1
+  const head = rootClass ? svg.slice(0, open - 1).replace('<svg ', `<svg class="${rootClass}" `) + '>' : svg.slice(0, open)
+  return head + DARK_STYLE + svg.slice(open)
 }
 
 const esc = (v: string): string => v.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -790,13 +806,13 @@ const esc = (v: string): string => v.replace(/&/g, '&amp;').replace(/"/g, '&quot
 /** A mark's icon beside its ring or grade badge, as one small picture. */
 function markSvg(mark: Mark, t: Tones): string {
   const color = toneColor(mark.tone, t)
-  const icon = `<g transform="translate(0 2)" fill="none" stroke="${mark.tone === 'none' ? t.ink : color}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${ICONS[mark.icon]}</g>`
+  const icon = `<g transform="translate(0 2)"${mark.tone === 'none' ? ' class="k"' : ''} fill="none" stroke="${mark.tone === 'none' ? t.ink : color}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${ICONS[mark.icon]}</g>`
   const right =
     mark.badge !== undefined
-      ? `<rect x="20" y="1" width="18" height="18" rx="5" fill="${mark.tone === 'none' ? t.track : color}"/>` +
+      ? `<rect x="20" y="1" width="18" height="18" rx="5"${mark.tone === 'none' ? ' class="tf"' : ''} fill="${mark.tone === 'none' ? t.track : color}"/>` +
         `<text x="29" y="14" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11.5" font-weight="700" fill="${t.card}">${esc(mark.badge)}</text>`
       : `<g transform="translate(19 0)">${ring(mark.ringPercent ?? 0, color, t.track, mark.tone === 'cold')}</g>`
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20" viewBox="0 0 40 20" role="img" aria-label="${esc(mark.alt)}"><title>${esc(mark.alt)}</title>${icon}${right}</svg>`
+  return themed(`<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20" viewBox="0 0 40 20" role="img" aria-label="${esc(mark.alt)}"><title>${esc(mark.alt)}</title>${icon}${right}</svg>`)
 }
 
 function toneColor(tone: MarkTone, t: Tones): string {
@@ -810,15 +826,17 @@ function barsSvg(bars: number[], t: Tones): { source: string; alt: string; width
   const body = bars
     .map((h, i) => {
       const height = Math.max(2, Math.round((h / 100) * 28))
-      return `<rect x="${i * 6}" y="${28 - height}" width="4" height="${height}" rx="1.5" fill="${i === bars.length - 1 ? t.good : t.track}"/>`
+      return i === bars.length - 1
+        ? `<rect x="${i * 6}" y="${28 - height}" width="4" height="${height}" rx="1.5" fill="${t.good}"/>`
+        : `<rect class="tf" x="${i * 6}" y="${28 - height}" width="4" height="${height}" rx="1.5" fill="${t.track}"/>`
     })
     .join('')
-  return { source: `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="28" viewBox="0 0 ${width} 28" role="img" aria-label="${alt}"><title>${alt}</title>${body}</svg>`, alt, width }
+  return { source: themed(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="28" viewBox="0 0 ${width} 28" role="img" aria-label="${alt}"><title>${alt}</title>${body}</svg>`), alt, width }
 }
 
 function chevronSvg(open: boolean, ink: string): { source: string; alt: string } {
   const alt = open ? 'Session details open' : 'Session details folded'
-  const svg = iconSvg('chevron', ink, { alt })
+  const svg = themed(iconSvg('chevron', ink, { alt }), 'k')
   return { source: open ? svg.replace(ICONS.chevron, `<g transform="rotate(180 8 8)">${ICONS.chevron}</g>`) : svg, alt }
 }
 
@@ -830,7 +848,8 @@ function runsOf(D: Desktop, runs: Run[], t: Tones) {
 function icon(D: Desktop, name: IconName, color: string, alt?: string) {
   const { Svg } = D
   const label = alt ?? ICON_ALT[name]
-  return <Svg source={iconSvg(name, color, { alt: label })} alt={label} width={16} height={16} />
+  const svg = iconSvg(name, color, { alt: label })
+  return <Svg source={color === LIGHT.ink ? themed(svg, 'k') : svg} alt={label} width={16} height={16} />
 }
 
 type Model = {
@@ -845,7 +864,12 @@ type Model = {
   canWarm: boolean
   /** Clawd's pictures, bottom first: the previous pose stays beneath a new one while it fades in. */
   clawd: ClawdLayer[]
+  /** While watching: one picture per look, each shown while the pointer is over its part of the band. */
+  gazes: (ClawdLayer & { gaze: Gaze })[]
 }
+
+/** The hover group that turns Clawd's eyes toward one part of the band. */
+const gazeScope = (g: Gaze): string => `token-optimizer-gaze-${g}`
 
 type ClawdLayer = { key: string; source: string; alt: string }
 
@@ -868,6 +892,9 @@ function clawdLayers($: EngineInterface, layer: ClawdLayer, now: number): ClawdL
   if (clawdUnder !== null && (clawdUnder.until <= now || clawdUnder.key === layer.key)) clawdUnder = null
   return clawdUnder !== null ? [clawdUnder, layer] : [layer]
 }
+
+/** Below this, "saved this session" is noise and stays off the row. */
+const SESSION_SAVED_MIN = 1000
 
 type Handlers = { act: (id: ActionId) => void; details: () => void }
 
@@ -912,29 +939,40 @@ function drawBand(D: Desktop, m: Model, on: Handlers) {
   const detail = row(snap)
   const chevron = chevronSvg(m.sheetOpen, t.ink)
   const bars = m.narrow ? detail.savings.bars.slice(-14) : detail.savings.bars
-  // Every card action that can run now, for a keyboard (R5): the quality card's two, and Keep warm.
+  // A card action joins the row only when the moment calls for it (quality sagging, the cache
+  // about to drop) and the sentence's own button is not already offering it.
+  const q = snap.quality
+  const sagging = q !== null && (q.score < QUALITY_FLOOR || q.compactions >= COMPACT_HEAVY)
   const rowActions = [
-    ...(cardList.find(c => c.id === 'quality')?.actions ?? []),
-    ...(m.canWarm ? [{ id: 'warm' as const, label: 'Keep warm' }] : []),
-  ]
+    ...(sagging ? cardList.find(c => c.id === 'quality')?.actions ?? [] : []),
+    ...(m.canWarm && snap.cache.state === 'warning' ? [{ id: 'warm' as const, label: 'Keep warm' }] : []),
+  ].filter(a => a.id !== say.action?.id && !(a.id === 'clean' && say.action?.id === 'clean-first'))
 
   return (
     <Box flexDirection="row" alignItems="flex-start" columnGap={2} paddingX={1}>
-      <Box flexDirection="column" alignItems="center" flexShrink={0}>
-        <Box position="relative" width={72} height={57}>
-          {m.clawd.map(c => (
-            <Box key={c.key} position="absolute" top={0} left={0}>
-              <Svg source={c.source} alt={c.alt} width={72} height={57} isInteractive />
+      <Box flexDirection="column" alignItems="flex-start" flexShrink={0}>
+        {/* Box sizes count text cells on desktop, so the bottom picture sizes the stack and the new one sits over it. */}
+        <Box position="relative">
+          {m.clawd.map((c, i) => (
+            <Box key={c.key} {...(i === 0 ? {} : { position: 'absolute' as const, top: 0, left: 0 })}>
+              {/* Not isInteractive: the desktop reloads an interactive picture on every redraw (a blank frame); a plain one keeps its animation. */}
+              <Svg source={c.source} alt={c.alt} width={72} height={57} />
+            </Box>
+          ))}
+          {/* Hover can reveal but not move: each look is its own picture, drawn hidden over him and shown by its part of the band. */}
+          {m.gazes.map(g => (
+            <Box key={g.key} position="absolute" top={0} left={0} display="none" hover={{ scope: gazeScope(g.gaze), display: 'flex' }}>
+              <Svg source={g.source} alt={g.alt} width={72} height={57} />
             </Box>
           ))}
         </Box>
-        <Box flexDirection="row" alignItems="center" columnGap={0}>
+        <Box flexDirection="row" alignItems="center" columnGap={0} hover={{ scope: gazeScope('down') }}>
           <Svg source={chevron.source} alt={chevron.alt} width={16} height={16} />
           <Button key="details" plain label="Details" onPress={() => on.details()} />
         </Box>
       </Box>
       <Box flexDirection="column" flexGrow={1} flexShrink={1} rowGap={1}>
-        <Box flexDirection="row" alignItems="flex-start" justifyContent="space-between" columnGap={2}>
+        <Box flexDirection="row" alignItems="flex-start" justifyContent="space-between" columnGap={2} hover={{ scope: gazeScope('up-right') }}>
           <Box flexDirection="row" alignItems="flex-start" columnGap={1} flexShrink={1}>
             <Text bold>Token Optimizer</Text>
             {icon(D, say.icon, toneColor(say.tone, t))}
@@ -943,7 +981,7 @@ function drawBand(D: Desktop, m: Model, on: Handlers) {
           {say.action ? <Button key="action" variant="primary" label={say.action.label} onPress={() => on.act(say.action!.id)} /> : ''}
         </Box>
         {/* One line, never wrapped: a wrapped mark's card would open over the marks above it. */}
-        <Box flexDirection="row" flexWrap="nowrap" columnGap={2}>
+        <Box flexDirection="row" flexWrap="nowrap" columnGap={2} hover={{ scope: gazeScope('right') }}>
           {markList.map((mark, i) => (
             <Box key={`mark-${mark.id}`} position="relative" flexDirection="row" alignItems="center" columnGap={1}>
               <Svg source={markSvg(mark, t)} alt={mark.alt} width={40} height={20} />
@@ -954,7 +992,7 @@ function drawBand(D: Desktop, m: Model, on: Handlers) {
           ))}
         </Box>
         {m.sheetOpen ? (
-          <Box key="row" flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={3} rowGap={1}>
+          <Box key="row" flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={3} rowGap={1} hover={{ scope: gazeScope('down-right') }}>
             {detail.facts.map(f => (
               <Box flexDirection="row" alignItems="center" columnGap={1}>
                 {icon(D, f.icon, t.ink)}
@@ -967,20 +1005,24 @@ function drawBand(D: Desktop, m: Model, on: Handlers) {
                 return <Svg source={b.source} alt={b.alt} width={b.width} height={28} />
               })() : icon(D, 'bookmark', t.ink, 'Savings')}
               <Box flexDirection="column">
-                <Text>
-                  <Text bold>{detail.savings.sessionText}</Text> saved this session
-                </Text>
+                {(detail.savings.sessionTokens ?? 0) >= SESSION_SAVED_MIN ? (
+                  <Text>
+                    <Text bold>{detail.savings.sessionText}</Text> saved this session
+                  </Text>
+                ) : (
+                  ''
+                )}
                 <Text>
                   <Text bold>{detail.savings.last30Text}</Text> past 30 days
                 </Text>
                 {detail.savings.state === 'unavailable' ? <Text>{m.savingsReason ?? detail.savings.reason ?? ''}</Text> : ''}
               </Box>
             </Box>
-            <Box flexDirection="row" alignItems="center" columnGap={1}>
+            {rowActions.length > 0 ? <Box flexDirection="row" alignItems="center" columnGap={1}>
               {rowActions.map(a => (
                 <Button key={`row-${a.id}`} label={a.label} onPress={() => on.act(a.id)} />
               ))}
-            </Box>
+            </Box> : ''}
           </Box>
         ) : (
           ''
@@ -1035,7 +1077,7 @@ export const register: Register = (on, options) => {
     // means nothing is attached or announced until a prompt can read it.
     const startedAt = await sessionStartedAt($)
     await feedClock($, { type: 'clear' })
-    lastCold = false
+    lastCold = null
     await feedPose($, { type: 'session-start' })
     // Every step, note and Start fresh arm belonged to the old session (TR-01, TR-07).
     await setUi($, () => initialUi())
@@ -1218,13 +1260,14 @@ export const register: Register = (on, options) => {
       freshArmed: isArmed(ui, now),
       earlierCheckpoint: s?.earlierCheckpoint ?? null,
     }
-    const palette = theme === 'dark' ? DARK : LIGHT
+    // Light pictures always; each follows the app's dark mode by itself (see DARK_STYLE).
+    const palette = LIGHT
     const poseNow = pose?.pose ?? 'idle'
     const mood = moodOf(snap)
     const clawdSource = clawdSvg(poseNow, mood, { animate, palette })
     const clawd = clawdLayers(
       $,
-      { key: `clawd-${poseNow}-${mood}-${theme ?? 'light'}-${animate ? 'a' : 's'}`, source: clawdSource, alt: /aria-label="([^"]*)"/.exec(clawdSource)?.[1] ?? 'Clawd' },
+      { key: `clawd-${poseNow}-${mood}-${animate ? 'a' : 's'}`, source: clawdSource, alt: /aria-label="([^"]*)"/.exec(clawdSource)?.[1] ?? 'Clawd' },
       now,
     )
 
@@ -1233,13 +1276,20 @@ export const register: Register = (on, options) => {
       {
         snap,
         palette,
-        tones: tonesFor(theme === 'dark' ? 'dark' : 'light', palette),
+        tones: tonesFor('light', palette),
         pose: pose?.pose ?? 'idle',
         sheetOpen: s?.sheetOpen ?? false,
         savingsReason: s?.savingsReason ?? null,
         narrow: e.props.bodyColumns < 90,
         canWarm: canKeepWarm({ ...shownClock, working }, now),
         clawd,
+        gazes:
+          poseNow === 'idle' && animate
+            ? (['up-right', 'right', 'down-right', 'down'] as const).map(gaze => {
+                const source = clawdSvg('idle', mood, { animate, palette, gaze, fadeIn: false })
+                return { key: `gaze-${gaze}-${mood}`, source, alt: 'Clawd: watching your pointer', gaze }
+              })
+            : [],
       },
       {
         act: id => void act($, id),
