@@ -11,7 +11,7 @@
 // the rest still fill. Nothing here registers a hook; register.tsx wires the
 // events and the cadence below.
 import type { TokenOptimizerDesktopSession } from '../types/index.d.ts'
-import type { Quality } from '../src/contracts.ts'
+import type { Limit, Quality } from '../src/contracts.ts'
 import {
   parseQualityCache,
   parseStatusBar,
@@ -289,7 +289,16 @@ export async function gather(
   const base = options.reset || shouldReset(previous, sid) ? null : previous
   const cwd = await attempt(() => io.cwd(), '')
   const home = await readHome(io)
-  const usage = parseUsage(await attempt(() => io.usage(), null))
+  const reported = parseUsage(await attempt(() => io.usage(), null))
+  // A limit does not vanish mid-session: a refresh that comes back without one (right
+  // after a compact, say) keeps the last known value; once that window has renewed, 0%.
+  const keep = (fresh: Limit | null, last: Limit | null | undefined): Limit | null => {
+    if (fresh) return fresh
+    if (!last) return null
+    const renewed = last.resetsAt !== null && Date.parse(last.resetsAt) <= now
+    return renewed ? { percentUsed: 0, resetsAt: null } : last
+  }
+  const usage = { ...reported, fiveHour: keep(reported.fiveHour, base?.fiveHour), week: keep(reported.week, base?.week) }
   const branch = await readBranch(io, cwd)
   const quality = await readQuality(io, home, sid)
 

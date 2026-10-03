@@ -59,6 +59,8 @@ export type World = {
   store: Record<string, unknown>
   /** The live session's project. */
   cwd: string
+  /** The engine leaves the 5-hour limit out of its usage (as it can right after a compact). */
+  dropFiveHour?: boolean
   /** When the live session began (`$.session.usage().startedAt`, mocked-clock ms); a clear sets it to its own moment; null when the engine cannot say. */
   startedAt: number | null
   /** How many of the next `$.store.get` / `$.store.delete` calls throw. */
@@ -174,7 +176,7 @@ export function stub(on: On, patch: Partial<Omit<World, 'clock' | 'runs' | 'toas
       ...(w.startedAt === null ? {} : { startedAt: w.startedAt }),
       context: { window: 1_000_000, tokens: 620_000, percent: 62 },
       rateLimits: [
-        { kind: 'five_hour', percentUsed: 40, resetsAt: '2026-10-03T12:00:00Z' },
+        ...(w.dropFiveHour ? [] : [{ kind: 'five_hour', percentUsed: 40, resetsAt: '2026-10-03T12:00:00Z' }]),
         { kind: 'seven_day', percentUsed: 20 },
       ],
       // An engine that reports no start time is a case the band must survive; the types now require it.

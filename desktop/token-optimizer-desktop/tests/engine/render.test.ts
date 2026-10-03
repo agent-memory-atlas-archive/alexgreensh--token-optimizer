@@ -223,3 +223,16 @@ test('a compaction the band watched counts at once, before the transcript or Tok
   await ui.press({ key: 'details' })
   expect(await ui.find({ type: 'Text', text: /1×/ })).toBeDefined()
 })
+
+test('a refresh that comes back without the 5-hour limit keeps the mark', async ($, on) => {
+  const w = stub(on)
+  await $.session.start(START)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await w.clock.settle()
+  expect((await exactly(ui, '5 hours')).length).toBeGreaterThan(0)
+  w.dropFiveHour = true
+  await w.clock.advance(61_000) // the minute's quality refresh
+  await w.clock.settle()
+  expect((await exactly(ui, '5 hours')).length).toBeGreaterThan(0)
+  expect((await exactly(ui, '40%')).length).toBeGreaterThan(0)
+})
