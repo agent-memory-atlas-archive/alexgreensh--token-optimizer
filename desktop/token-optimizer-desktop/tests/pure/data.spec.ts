@@ -13,7 +13,6 @@ import {
   readQuality,
   resetLauncher,
   shouldReset,
-  supersededByBundled,
   type DataIo,
 } from '../../hooks/data.ts'
 
@@ -367,23 +366,4 @@ test('loaded on its own from a checkout, the scripts two folders up are used', a
   w.files[`${repo}/skills/token-optimizer/scripts/measure.py`] = [1, '#']
   const found = await findTokenOptimizerRoot({ ...fakeIo(w), pluginRoot: () => `${repo}/desktop/token-optimizer-desktop` }, HOME)
   assert.equal(found?.scriptsDir, `${repo}/skills/token-optimizer/scripts`)
-})
-
-test('a separately installed copy stays hidden only when Token Optimizer carries the band', async () => {
-  const standalone = `${HOME}/.claude/plugins/cache/alexgreensh-token-optimizer/token-optimizer-desktop/0.1.0`
-  const registry = JSON.stringify({ version: 2, plugins: { 'token-optimizer@x': [{ scope: 'user', installPath: TO_ROOT }] } })
-  const at = (hooks: string | null) => {
-    const w = world()
-    w.files[`${HOME}/.claude/plugins/installed_plugins.json`] = [1, registry]
-    if (hooks !== null) w.files[`${TO_ROOT}/hooks/hooks.json`] = [1, hooks]
-    return w
-  }
-  const carries = at(JSON.stringify({ modules: ['../desktop/token-optimizer-desktop/hooks/register.tsx'], hooks: {} }))
-  assert.equal(await supersededByBundled({ ...fakeIo(carries), pluginRoot: () => standalone }, HOME), true)
-  // An older Token Optimizer without the band: the separate copy keeps drawing it.
-  const older = at(JSON.stringify({ hooks: {} }))
-  assert.equal(await supersededByBundled({ ...fakeIo(older), pluginRoot: () => standalone }, HOME), false)
-  // The copy inside Token Optimizer is the one that draws.
-  carries.files[`${SCRIPTS}/measure.py`] = [1, '#']
-  assert.equal(await supersededByBundled({ ...fakeIo(carries), pluginRoot: () => TO_ROOT }, HOME), false)
 })

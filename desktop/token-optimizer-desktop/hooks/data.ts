@@ -204,25 +204,6 @@ export async function findTokenOptimizerRoot(io: DataIo, home: string): Promise<
   return null
 }
 
-/**
- * True when this copy was installed on its own and an installed Token Optimizer
- * already carries the status bar: that one draws it, so this copy stays hidden
- * rather than draw a second band.
- */
-export async function supersededByBundled(io: DataIo, home: string): Promise<boolean> {
-  const root = io.pluginRoot ? (await attempt(async () => io.pluginRoot!(), '')).replace(/[\\/]+$/, '') : ''
-  if (root === '' || (await attempt(() => io.stat(`${root}/skills/token-optimizer/scripts/measure.py`), null))) return false
-  const claude = await claudeDir(io, home)
-  const registry = claude ? await attempt(() => io.read(`${claude}/plugins/installed_plugins.json`), null) : null
-  for (const install of resolveTokenOptimizerRoot(registry, '')) {
-    const dir = install.scriptsDir.replace(/\/skills\/token-optimizer\/scripts$/, '')
-    const hooks = await attempt(() => io.read(`${dir}/hooks/hooks.json`), '')
-    const modules = await attempt(async () => (JSON.parse(hooks || '{}') as { modules?: unknown }).modules, undefined)
-    if (Array.isArray(modules) && modules.length > 0) return true
-  }
-  return false
-}
-
 function newer(a: number | null, b: number | null): number | null {
   return a === null ? b : b === null ? a : Math.max(a, b)
 }

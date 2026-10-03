@@ -56,7 +56,6 @@ import {
   mergeStored,
   readHome,
   runMeasure,
-  supersededByBundled,
   type DataIo,
   type GatherOptions,
 } from './data.ts'
@@ -82,8 +81,8 @@ function tonesFor(p: Palette): Tones {
 let enabled = true
 let animate = true
 let active = false
-/** True once this copy learns an installed Token Optimizer draws the band itself; null until checked. */
-let superseded: boolean | null = null
+/** Whether the TOKEN_OPTIMIZER_STATUS_BAR switches have been read in this environment. */
+let switchesRead = false
 let timers: { cancel: () => void }[] = []
 let statusTimer: { cancel: () => void } | null = null
 let poseLive: PoseState | null = null
@@ -1154,19 +1153,26 @@ function switchedOff(value: string | undefined): boolean {
   return /^(0|false|off|no)$/i.test((value ?? '').trim())
 }
 
+/** Reads the TOKEN_OPTIMIZER_STATUS_BAR switches once per environment. */
+async function readSwitches($: EngineInterface): Promise<void> {
+  if (switchesRead) return
+  switchesRead = true
+  if (switchedOff(await attempt(() => $.env.get('TOKEN_OPTIMIZER_STATUS_BAR'), undefined))) enabled = false
+  if (switchedOff(await attempt(() => $.env.get('TOKEN_OPTIMIZER_STATUS_BAR_ANIMATE'), undefined))) animate = false
+}
+
 /**
- * Whether the band stays hidden, checked once: switched off with
- * TOKEN_OPTIMIZER_STATUS_BAR, or this copy was installed on its own and an
- * installed Token Optimizer draws the band itself.
+ * Reads the switches after the band is live (a wait before that would drop a
+ * turn ending meanwhile) and, when switched off, stops it: no timers, no drawing.
  */
-async function standsDown($: EngineInterface): Promise<boolean> {
-  if (superseded === null) {
-    if (switchedOff(await attempt(() => $.env.get('TOKEN_OPTIMIZER_STATUS_BAR'), undefined))) enabled = false
-    if (switchedOff(await attempt(() => $.env.get('TOKEN_OPTIMIZER_STATUS_BAR_ANIMATE'), undefined))) animate = false
-    const io = dataIo($)
-    superseded = await attempt(async () => supersededByBundled(io, await readHome(io)), false)
-  }
-  return superseded || !enabled
+async function applySwitches($: EngineInterface): Promise<void> {
+  await readSwitches($)
+  if (enabled) return
+  active = false
+  for (const t of timers) t.cancel()
+  timers = []
+  statusTimer?.cancel()
+  statusTimer = null
 }
 
 // ---- hooks ----
@@ -1178,7 +1184,6 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     const result = await next(e)
     active = enabled && e.isInteractive && e.surface !== 'terminal' && e.surface !== 'vscode'
-    if (active && (await standsDown($))) active = false
     if (active) await start($)
     return result
   })
@@ -1367,17 +1372,16 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     // The terminal keeps its own status line; a survey holds the band.
-    if (!enabled || superseded === true || e.surface !== 'desktop' || e.props.hasSurvey) return next(e)
+    if (!enabled || e.surface !== 'desktop' || e.props.hasSurvey) return next(e)
+    // The off switch is read here, off the start path (a wait there would drop a turn ending meanwhile).
+    if (!switchesRead) {
+      await applySwitches($)
+      if (!enabled) return next(e)
+    }
     if (!active) {
       // A desktop band without a session.start of ours (a late enable): start now, outside the drawing.
       active = true
-      const unchecked = superseded === null
-      $.clock.after(0, () => void attempt(async () => {
-        if (await standsDown($)) active = false
-        else await start($)
-      }, undefined))
-      // Not drawn until the check says this copy is the one to draw it; start redraws.
-      if (unchecked) return next(e)
+      $.clock.after(0, () => void attempt(() => start($), undefined))
     }
 
     // Every read fails soft: a hiccup in one value draws the band without it, never no band.
