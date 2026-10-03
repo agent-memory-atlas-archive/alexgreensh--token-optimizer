@@ -82,6 +82,11 @@ export type Snapshot = {
   handoffPending: boolean
   /** Start fresh is armed and waiting for its second click. */
   freshArmed: boolean
+  /** When the session began (ms), from the engine: the row's session time before Token Optimizer reports one. */
+  startedAtMs?: number | null
+  /** Tool calls and compactions the band watched itself. */
+  toolCallsSeen?: number
+  compactionsSeen?: number
   /** When this session last saved a checkpoint, any trigger (epoch seconds). */
   checkpointEpoch?: number | null
   /** An earlier session's checkpoint on this work, when this session has none of its own (epoch seconds). */

@@ -250,9 +250,13 @@ export function row(s: Snapshot, _opts: FormatOptions = {}): Row {
   const facts: Fact[] = []
   // One line in the band: every fact in its shortest plain form.
   if (s.branch) facts.push({ icon: 'branch', runs: [strong(s.branch.length > BRANCH_MAX ? `${s.branch.slice(0, BRANCH_MAX - 1)}…` : s.branch)] })
-  if (q?.sessionStartEpoch != null) facts.push({ icon: 'clock', runs: [strong(duration(s.now / 1000 - q.sessionStartEpoch))] })
-  if (q?.toolCalls != null) facts.push({ icon: 'tool', runs: [strong(String(q.toolCalls)), plain(q.toolCalls === 1 ? ' tool' : ' tools')] })
-  if (q && q.compactions > 0) facts.push({ icon: 'compact', runs: [strong(`${q.compactions}×`), plain(' compacted')] })
+  // The band's own sightings fill in until Token Optimizer's quality file exists (a new session).
+  const startS = q?.sessionStartEpoch ?? (s.startedAtMs != null ? s.startedAtMs / 1000 : null)
+  if (startS != null) facts.push({ icon: 'clock', runs: [strong(duration(s.now / 1000 - startS))] })
+  const tools = Math.max(q?.toolCalls ?? 0, s.toolCallsSeen ?? 0)
+  if (q?.toolCalls != null || (s.toolCallsSeen ?? 0) > 0) facts.push({ icon: 'tool', runs: [strong(String(tools)), plain(tools === 1 ? ' tool' : ' tools')] })
+  const compacted = Math.max(q?.compactions ?? 0, s.compactionsSeen ?? 0)
+  if (compacted > 0) facts.push({ icon: 'compact', runs: [strong(`${compacted}×`), plain(' compacted')] })
   facts.push({
     icon: 'bookmark',
     runs: (s.checkpointEpoch ?? q?.checkpointEpoch) != null

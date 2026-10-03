@@ -321,6 +321,7 @@ export async function gather(
     earlierCheckpoint: base?.earlierCheckpoint ?? null,
     compactions: base?.compactions ?? null,
   }
+  const seen = { toolCallsSeen: base?.toolCallsSeen ?? 0, compactionsSeen: base?.compactionsSeen ?? 0 }
 
   const facts = notFound
     ? { ...kept, savings: null, savingsState: 'unavailable' as const, savingsReason: NOT_FOUND, checkpointEpoch: null }
@@ -357,6 +358,7 @@ export async function gather(
     ...facts,
     // The newer of the two: the quality cache knows quality saves the moment they land,
     // the status command also knows stop and compaction saves (checkpoint files).
+    ...seen,
     checkpointEpoch: notFound ? null : newer(quality?.checkpointEpoch ?? null, facts.checkpointEpoch),
     sheetOpen: base?.sheetOpen ?? false,
   }
@@ -378,5 +380,13 @@ export function mergeStored(
   const counted = sameSession ? Math.max(current.quality?.compactions ?? 0, fresh.quality?.compactions ?? 0) : null
   const quality = fresh.quality && counted !== null && counted > fresh.quality.compactions ? { ...fresh.quality, compactions: counted } : fresh.quality
 
-  return { ...fresh, quality, sheetOpen: sameSession ? current.sheetOpen : fresh.sheetOpen }
+  // The band's own counts only grow; a refresh that read them earlier cannot undo a later one.
+  const seen = sameSession
+    ? {
+        toolCallsSeen: Math.max(current.toolCallsSeen ?? 0, fresh.toolCallsSeen ?? 0),
+        compactionsSeen: Math.max(current.compactionsSeen ?? 0, fresh.compactionsSeen ?? 0),
+      }
+    : {}
+
+  return { ...fresh, ...seen, quality, sheetOpen: sameSession ? current.sheetOpen : fresh.sheetOpen }
 }

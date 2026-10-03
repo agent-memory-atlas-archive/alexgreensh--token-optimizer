@@ -56,6 +56,11 @@ export type TokenOptimizerDesktopSession = {
   /** When Token Optimizer last saved a checkpoint, epoch seconds. */
   checkpointEpoch: number | null
   /** The earlier session's checkpoint flagged as resumable for this one (epoch seconds). */
+  /** When the live session began (ms), from the engine. */
+  startedAtMs?: number | null
+  /** Main-thread tool calls and compactions the band watched itself: the row never waits on Token Optimizer's quality file. */
+  toolCallsSeen?: number
+  compactionsSeen?: number
   /** Compactions counted in the transcript by the status command. */
   compactions?: number | null
   earlierCheckpoint?: { epoch: number; about: string | null } | null

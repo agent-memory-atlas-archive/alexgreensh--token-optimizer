@@ -1006,7 +1006,8 @@ function drawBand(D: Desktop, m: Model, on: Handlers) {
               <Box key={`mark-${mark.id}`} position="relative" flexDirection="row" alignItems="center" columnGap={1}>
                 <Svg source={markSvg(mark, t)} alt={mark.alt} width={20} height={20} />
                 <Text bold>{mark.value}</Text>
-                {m.narrow ? '' : <Text>{mark.label}</Text>}
+                {/* Always labelled: without the word, nobody knows which number is which. */}
+                <Text>{mark.label}</Text>
                 {cardList[i] ? cardBox(D, cardList[i], i, t, on) : ''}
               </Box>
             ))}
@@ -1171,6 +1172,8 @@ export const register: Register = (on, options) => {
     await closeAsks($)
     await feedPose($, agentId === undefined ? { type: 'tool-call', tool } : { type: 'tool-call', tool, agentId })
     // The question dialog is open from the call until it answers.
+    // Counted by the band itself, so the row has it before Token Optimizer's first quality file.
+    if (agentId === undefined) await attempt(() => update($, sessionAtom, cur => (cur ? { ...cur, toolCallsSeen: (cur.toolCallsSeen ?? 0) + 1 } : cur)), undefined)
     const asking = tool === 'AskUserQuestion' && agentId === undefined
     if (asking) await feedPose($, { type: 'question-open' })
     try {
@@ -1202,7 +1205,16 @@ export const register: Register = (on, options) => {
       // marker to the transcript (it does so late) and before Token Optimizer re-reads.
       if (!('skip' in result && result.skip)) {
         await attempt(
-          () => update($, sessionAtom, cur => (cur?.quality ? { ...cur, quality: { ...cur.quality, compactions: cur.quality.compactions + 1 } } : cur)),
+          () =>
+            update($, sessionAtom, cur =>
+              cur
+                ? {
+                    ...cur,
+                    compactionsSeen: Math.max(cur.compactionsSeen ?? 0, cur.quality?.compactions ?? 0) + 1,
+                    quality: cur.quality ? { ...cur.quality, compactions: cur.quality.compactions + 1 } : cur.quality,
+                  }
+                : cur,
+            ),
           undefined,
         )
       }
@@ -1281,6 +1293,9 @@ export const register: Register = (on, options) => {
       freshArmed: isArmed(ui, now),
       earlierCheckpoint: s?.earlierCheckpoint ?? null,
       checkpointEpoch: s?.checkpointEpoch ?? null,
+      startedAtMs: s?.startedAtMs ?? null,
+      toolCallsSeen: s?.toolCallsSeen ?? 0,
+      compactionsSeen: s?.compactionsSeen ?? 0,
     }
     // Light pictures always; each follows the app's dark mode by itself (see DARK_STYLE).
     const palette = LIGHT

@@ -32,6 +32,8 @@ export type UsageView = {
   contextTokens: number | null
   contextWindow: number | null
   fiveHour: Limit | null
+  /** When the live session began (ms), from the engine itself. */
+  startedAtMs?: number | null
   week: Limit | null
 }
 
@@ -241,6 +243,10 @@ export function parseUsage(usage: unknown): UsageView {
     contextWindow: window !== null && window > 0 ? window : null,
     fiveHour: limit(all?.rateLimits, 'five_hour'),
     week: limit(all?.rateLimits, 'seven_day'),
+    startedAtMs: (() => {
+      const at = num(all?.startedAt)
+      return at !== null && at > 0 ? at : null
+    })(),
   }
 }
 

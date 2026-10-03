@@ -236,3 +236,27 @@ test('a refresh that comes back without the 5-hour limit keeps the mark', async 
   expect((await exactly(ui, '5 hours')).length).toBeGreaterThan(0)
   expect((await exactly(ui, '40%')).length).toBeGreaterThan(0)
 })
+
+
+test('a new session with no Token Optimizer quality file yet still shows its time and tool calls', async ($, on) => {
+  const w = stub(on)
+  const key = Object.keys(w.files).find(k => k.includes('quality-cache-sess-1'))!
+  delete w.files[key]
+  on('tool.call', () => ({ value: { content: 'ok' } }) as never)
+  await $.session.start(START)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await w.clock.settle()
+  for (let i = 0; i < 3; i++) {
+    try {
+      await $.tool.call({ tool: 'Read', input: { file_path: '/work/project/a.ts' } } as never)
+    } catch {
+      // The count is what is under test, not the tool.
+    }
+  }
+  await ui.press({ key: 'details' })
+  await w.clock.settle()
+  expect((await exactly(ui, '1h 0m')).length).toBeGreaterThan(0)
+  expect(await ui.find({ type: 'Text', text: /^3 tools$|3 tools/ })).toBeDefined()
+  // Every mark keeps its word, at any width.
+  for (const word of ['quality', 'context', 'cache', '5 hours', 'week']) expect((await exactly(ui, word)).length, word).toBeGreaterThan(0)
+})
