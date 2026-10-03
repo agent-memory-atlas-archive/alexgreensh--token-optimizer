@@ -55,6 +55,10 @@ export type World = {
   handoffWriteFails: number
   /** What `$.store` holds at the start. */
   store: Record<string, unknown>
+  /** The live session's project. */
+  cwd: string
+  /** How many of the next writes of the band's UI state hang (10 minutes on the mocked clock). */
+  uiWriteHangs: number
   runs: { argv: string[]; stdin?: string }[]
   toasts: string[]
   compacts: number
@@ -109,6 +113,8 @@ export function stub(on: On, patch: Partial<Omit<World, 'clock' | 'runs' | 'toas
     seed: {},
     handoffWriteFails: 0,
     store: {},
+    cwd: '/work/project',
+    uiWriteHangs: 0,
     runs: [],
     toasts: [],
     compacts: 0,
@@ -124,7 +130,8 @@ export function stub(on: On, patch: Partial<Omit<World, 'clock' | 'runs' | 'toas
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('classic.SessionStart', () => ({ additionalContext: ['Recovered notes', '[Token Optimizer] Cross-session checkpoint (abcd1234): /p.md. Not your session\'s work.'] }))
   on('session.id', () => ({ value: w.sessionId }))
-  on('session.cwd', () => ({ value: '/work/project' }))
+  on('session.end', (_, e) => ({ sessionId: e.sessionId }))
+  on('session.cwd', () => ({ value: w.cwd }))
   on('session.usage', () => ({
     value: {
       startedAt: 0,
@@ -140,7 +147,11 @@ export function stub(on: On, patch: Partial<Omit<World, 'clock' | 'runs' | 'toas
     const seeded = e.plugin === 'token-optimizer-desktop' ? w.seed[e.key] : undefined
     return held.value?.version === 0 && held.value.value === undefined && seeded !== undefined ? { value: { value: seeded, version: 0 } } : held
   })
-  on('state.set', (_, e, next) => {
+  on('state.set', async (_, e, next) => {
+    if (e.plugin === 'token-optimizer-desktop' && e.key === 'ui' && w.uiWriteHangs > 0) {
+      w.uiWriteHangs -= 1
+      await w.clock.sleep(10 * 60_000)
+    }
     if (e.plugin === 'token-optimizer-desktop' && e.key === 'handoff' && e.value !== null && w.handoffWriteFails > 0) {
       w.handoffWriteFails -= 1
       return { value: { isSet: false as const, version: 999 } }

@@ -35,17 +35,27 @@ export type UiState = {
   freshArmedAt: number | null
 }
 
-/** `cwd` is the project the hand-off was saved in: it joins a new session there only (TR-05). */
-export type Handoff = { fromSessionId: string; cwd: string; checkpointPath: string; text: string; createdAt: number }
+/**
+ * `cwd` is the project the hand-off was saved in (TR-05). `toSessionId` is the
+ * conversation Start fresh's own clear created, stamped when that clear lands;
+ * absent until then. Only that conversation takes the hand-off.
+ */
+export type Handoff = { fromSessionId: string; toSessionId?: string | null; cwd: string; checkpointPath: string; text: string; createdAt: number }
+
+export type HandoffFate = 'attach' | 'skip' | { drop: string }
 
 /**
- * Why a saved hand-off must not join a session in `cwd` at `now`, as the end
- * of a one-line note; null when it fits: same project, within HANDOFF_TTL_MS.
+ * What the session `at.sessionId` in `at.cwd` does with a held hand-off:
+ * attach it, leave it alone, or drop it (the reason ends a one-line note).
+ * Another project's hand-off is never this session's to touch (R1). One whose
+ * clear never landed (no stamp) is dropped once the busy timeout has passed,
+ * unless its clear is still queued in this process (`queuedHere`).
  */
-export function handoffMisfit(h: Handoff, at: { cwd: string; now: number }): string | null {
-  if (h.cwd !== at.cwd) return 'it was saved in another project'
-  if (at.now - h.createdAt > HANDOFF_TTL_MS) return 'it is more than 30 minutes old'
-  return null
+export function handoffFate(h: Handoff, at: { sessionId: string; cwd: string; now: number; queuedHere: boolean }): HandoffFate {
+  if (h.cwd !== at.cwd) return 'skip'
+  if (at.now - h.createdAt > HANDOFF_TTL_MS) return { drop: 'it is more than 30 minutes old' }
+  if (!h.toSessionId) return !at.queuedHere && at.now - h.createdAt > BUSY_TIMEOUT_MS ? { drop: 'its clear never ran' } : 'skip'
+  return at.sessionId !== '' && h.toSessionId === at.sessionId ? 'attach' : 'skip'
 }
 
 export function initialUi(): UiState {

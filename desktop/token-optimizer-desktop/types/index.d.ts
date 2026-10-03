@@ -62,6 +62,8 @@ export type TokenOptimizerDesktopState = TokenOptimizerDesktopSession | null
 /** Start fresh's hand-off, waiting for the new session's first prompt (KTD10). */
 export type TokenOptimizerDesktopHandoff = {
   fromSessionId: string
+  /** The conversation Start fresh's own clear created, stamped when it lands; absent until then. */
+  toSessionId?: string | null
   /** The project it was saved in; it joins a new session in that project only, within 30 minutes. */
   cwd: string
   checkpointPath: string

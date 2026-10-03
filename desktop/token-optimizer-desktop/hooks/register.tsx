@@ -21,7 +21,7 @@ import {
   WARM_PROMPT,
   attachesHandoff,
   busyNow,
-  handoffMisfit,
+  handoffFate,
   initialUi,
   isArmed,
   lifetimeFromUsage,
@@ -96,8 +96,20 @@ let warmInFlight = false
  * swapped in. Work begun under one generation drops its result in the next.
  */
 let sessionGen = 0
-/** A press is being claimed: a second press meanwhile is ignored (no double compaction). */
-let claiming = false
+/**
+ * A press is being claimed: a second press meanwhile is ignored (no double
+ * compaction). A claim older than the busy timeout is stale: a stuck press
+ * never holds the buttons past it (R3).
+ */
+let claim: { at: number } | null = null
+/**
+ * The clear Start fresh queued in this process, for the hand-off it carries;
+ * `ended` once `session.end` (reason clear) fired for the old session. The
+ * classic SessionStart that follows stamps the hand-off with the new id (R4).
+ */
+let clearFor: { fromSessionId: string; createdAt: number; ended: boolean } | null = null
+/** The live session a render last asked to re-read after finding another session's figures (TR-04). */
+let resyncFor = ''
 
 const attempt = async <T,>(work: () => Promise<T>, fallback: T): Promise<T> => {
   try {
@@ -266,6 +278,9 @@ function startCadence($: EngineInterface): void {
 /** Everything a desktop session needs once: theme, a pending hand-off from disk, figures, the cadence. */
 async function start($: EngineInterface): Promise<void> {
   sessionGen += 1
+  // A warm-up marked running with no fork in flight here was cut off by a reload (TR-10).
+  const clock = await attempt(() => read($, clockAtom), null)
+  if (clock?.warming && !warmInFlight) await feedClock($, { type: 'warm-failed' })
   await refreshTheme($)
   const stored = await attempt(() => $.store.get(HANDOFF_KEY), undefined)
   if (isHandoff(stored)) await attempt(() => update($, handoffAtom, cur => cur ?? stored), undefined)
@@ -280,20 +295,25 @@ async function start($: EngineInterface): Promise<void> {
 function isHandoff(v: unknown): v is Handoff {
   if (!v || typeof v !== 'object') return false
   const h = v as Record<string, unknown>
-  return typeof h.fromSessionId === 'string' && typeof h.cwd === 'string' && typeof h.text === 'string' && h.text !== '' && typeof h.checkpointPath === 'string' && typeof h.createdAt === 'number'
+  return typeof h.fromSessionId === 'string' && typeof h.cwd === 'string' && typeof h.text === 'string' && h.text !== '' && typeof h.checkpointPath === 'string' && typeof h.createdAt === 'number' && (h.toSessionId == null || typeof h.toSessionId === 'string')
 }
 
 /**
- * A held hand-off joins only a session in the project it was saved in, within
- * 30 minutes (TR-05). One that does not fit is dropped with a one-line note.
+ * The held hand-off when it joins this session: the conversation its own clear
+ * created, in its project, within 30 minutes (TR-05, R4). One this session
+ * owns that cannot join is dropped with a one-line note; anyone else's is left
+ * alone (R1).
  */
 async function handoffThatFits($: EngineInterface, h: Handoff): Promise<Handoff | null> {
+  const sessionId = cleanId(await attempt(() => $.session.id(), ''))
   const cwd = await attempt(() => $.session.cwd(), '')
   const now = await $.clock.now()
-  const misfit = handoffMisfit(h, { cwd, now })
-  if (misfit === null) return h
+  const queuedHere = clearFor !== null && clearFor.fromSessionId === h.fromSessionId && clearFor.createdAt === h.createdAt
+  const fate = handoffFate(h, { sessionId, cwd, now, queuedHere })
+  if (fate === 'attach') return h
+  if (fate === 'skip') return null
   await dropHandoff($)
-  const line = `Start fresh's saved hand-off was discarded: ${misfit}.`
+  const line = `Start fresh's saved hand-off was discarded: ${fate.drop}.`
   await setUi($, u => withNote(u, line, now))
   toast($, line)
   return null
@@ -347,6 +367,14 @@ async function expireBusy($: EngineInterface, busy: Exclude<Busy, null>, since: 
 async function dropHandoff($: EngineInterface): Promise<void> {
   await attempt(() => update($, handoffAtom, () => null), undefined)
   await attempt(() => $.store.delete(HANDOFF_KEY), undefined)
+}
+
+/** Start fresh's own clear landed: its hand-off now belongs to the conversation it created (R4). */
+async function stampHandoff($: EngineInterface, landed: { fromSessionId: string; createdAt: number }, sessionId: string): Promise<void> {
+  const mine = (h: Handoff | null): h is Handoff => h !== null && h.fromSessionId === landed.fromSessionId && h.createdAt === landed.createdAt
+  await attempt(() => update($, handoffAtom, cur => (mine(cur) ? { ...cur, toSessionId: sessionId } : cur)), undefined)
+  const held = await attempt(() => read($, handoffAtom), null)
+  if (mine(held) && held.toSessionId === sessionId) await attempt(() => $.store.set(HANDOFF_KEY, held), undefined)
 }
 
 async function isTurnRunning($: EngineInterface): Promise<boolean> {
@@ -526,14 +554,19 @@ async function runFresh($: EngineInterface, sid: string, since: number, gen: num
   }
   const cwd = await attempt(() => $.session.cwd(), '')
   const result = await prepareHandoff(port, { sessionId: sid, transcriptPath, cwd, now: since })
-  const ui = await attempt(() => read($, uiAtom), null)
-  // Timed out or cleared meanwhile: the person was told, or moved on; clear nothing.
-  if (!ui || ui.busy !== 'fresh-capture' || ui.busySince !== since) return
   const standDown = async (): Promise<void> => {
     const now = await $.clock.now()
     await setUi($, u => (u.busySince === since ? withBusy(u, null, now) : u))
   }
-  if (!(await stillSession($, sid, gen))) return standDown()
+  // The session changed under it (a typed /clear, a resume): clear nothing, and say so (R2).
+  const changed = async (): Promise<void> => {
+    await standDown()
+    toast($, 'Start fresh stopped: the session changed.')
+  }
+  if (!(await stillSession($, sid, gen))) return changed()
+  const ui = await attempt(() => read($, uiAtom), null)
+  // Timed out meanwhile: the person was told; clear nothing.
+  if (!ui || ui.busy !== 'fresh-capture' || ui.busySince !== since) return
   if (!result.ok) return stop(result.reason)
   // A turn started during the capture: a queued clear would wipe it (TR-02).
   if (await isTurnRunning($)) {
@@ -556,11 +589,12 @@ async function runFresh($: EngineInterface, sid: string, since: number, gen: num
   }
   if (!(await stillSession($, sid, gen))) {
     await dropHandoff($)
-    return standDown()
+    return changed()
   }
   const now = await $.clock.now()
   await setUi($, u => withBusy(u, 'fresh-clear', now))
   armBusyTimeout($, 'fresh-clear', now)
+  clearFor = { fromSessionId: sid, createdAt: result.handoff.createdAt, ended: false }
   $.clock.after(0, () => void runClear($, now, result.handoff))
 }
 
@@ -573,6 +607,7 @@ async function runClear($: EngineInterface, since: number, handoff: Handoff): Pr
     const ui = await attempt(() => read($, uiAtom), null)
     const waiting = ui !== null && ui.busy === 'fresh-clear' && ui.busySince === since
     // Still ours to report: the step is on show, or the hand-off still waits for this clear (TR-06).
+    if (clearFor?.fromSessionId === handoff.fromSessionId && clearFor.createdAt === handoff.createdAt) clearFor = null
     if (!ours && !waiting) return
     if (ours) await dropHandoff($)
     const now = await $.clock.now()
@@ -594,8 +629,10 @@ async function toggleDetails($: EngineInterface): Promise<void> {
 
 async function act($: EngineInterface, id: ActionId): Promise<void> {
   // Guards read, then write, across awaits: one press at a time (TR-02).
-  if (claiming) return
-  claiming = true
+  const now = await attempt(() => $.clock.now(), 0)
+  if (claim !== null && now - claim.at < BUSY_TIMEOUT_MS) return
+  const mine = { at: now }
+  claim = mine
   try {
     if (id === 'clean' || id === 'clean-first') await cleanUp($)
     else if (id === 'fresh') await startFresh($)
@@ -603,7 +640,7 @@ async function act($: EngineInterface, id: ActionId): Promise<void> {
   } catch {
     toast($, 'That did not work. Try again in a moment.')
   } finally {
-    claiming = false
+    if (claim === mine) claim = null
   }
 }
 
@@ -827,6 +864,12 @@ export const register: Register = (on, options) => {
     return result
   })
 
+  // Start fresh's own clear ends the old session first (R4).
+  on('session.end', async ($, e, next) => {
+    if (clearFor && e.reason === 'clear' && cleanId(e.sessionId) === clearFor.fromSessionId) clearFor = { ...clearFor, ended: true }
+    return next(e)
+  })
+
   // A clear: no session.start follows; this start carries the new id (KTD12, R15).
   on('classic.SessionStart', async ($, e, next) => {
     const result = await next(e)
@@ -835,16 +878,20 @@ export const register: Register = (on, options) => {
     sessionGen += 1
     if (e.transcript_path) transcriptPath = e.transcript_path
     const sid = cleanId(e.session_id)
+    // Only the clear Start fresh queued hands its hand-off to this conversation (R4).
+    const landed = clearFor?.ended ? clearFor : null
+    clearFor = null
+    if (landed) await stampHandoff($, landed, sid)
     await feedClock($, { type: 'clear' })
     lastCold = false
     await feedPose($, { type: 'session-start' })
     // Every step, note and Start fresh arm belonged to the old session (TR-01, TR-07).
     await setUi($, () => initialUi())
     const held = await attempt(() => read($, handoffAtom), null)
-    const handoff = held && held.fromSessionId !== sid ? await handoffThatFits($, held) : held
+    const handoff = held ? await handoffThatFits($, held) : null
     await attempt(() => refresh($, { sessionId: e.session_id, reset: true, savings: true, transcript: e.transcript_path || undefined }), undefined)
     // The held hand-off replaces Token Optimizer's cross-session pointer (KTD10).
-    if (handoff && handoff.fromSessionId !== sid && result.additionalContext) {
+    if (handoff && result.additionalContext) {
       return { ...result, additionalContext: stripCrossSessionPointer(result.additionalContext) ?? [] }
     }
     return result
@@ -855,8 +902,6 @@ export const register: Register = (on, options) => {
     if (!active) return next(e)
     const held = await attempt(() => read($, handoffAtom), null)
     if (!held || !attachesHandoff(e.origin?.kind)) return next(e)
-    const sid = cleanId(await attempt(() => $.session.id(), ''))
-    if (!sid || sid === held.fromSessionId) return next(e)
     const handoff = await handoffThatFits($, held)
     if (!handoff) return next(e)
     await dropHandoff($)
@@ -988,9 +1033,16 @@ export const register: Register = (on, options) => {
     const theme = await read($, themeAtom)
     const handoff = await read($, handoffAtom)
     const liveSid = cleanId(await attempt(() => $.session.id(), ''))
-    // A stored figure of another session never shows (R15).
-    const s = stored && (!liveSid || stored.sessionId === liveSid) ? stored : null
+    // A stored figure of another session never shows (R15), nor its clock: a
+    // resume with no session.start reads its own figures now (TR-04).
+    const otherSession = stored !== null && liveSid !== '' && stored.sessionId !== liveSid
+    const s = otherSession ? null : stored
+    if (otherSession && resyncFor !== liveSid) {
+      resyncFor = liveSid
+      $.clock.after(0, () => void attempt(() => refresh($, { savings: true }), undefined))
+    }
     const working = e.props.isWorking
+    const shownClock = otherSession ? initialClock() : clock
 
     const snap: Snapshot = {
       now,
@@ -1001,13 +1053,13 @@ export const register: Register = (on, options) => {
       contextWindow: s?.contextWindow ?? null,
       fiveHour: s?.fiveHour ?? null,
       week: s?.week ?? null,
-      cache: view({ ...clock, working }, now, planDefault(s)),
+      cache: view({ ...shownClock, working }, now, planDefault(s)),
       branch: s?.branch ?? null,
       savings: s?.savings ?? null,
       savingsLoading: s?.savingsState === 'loading',
-      busy: busyNow(ui, now) ?? (clock.warming ? 'warming' : null),
+      busy: busyNow(ui, now) ?? (shownClock.warming ? 'warming' : null),
       note: noteNow(ui, now),
-      handoffPending: handoff !== null && handoff.fromSessionId !== liveSid,
+      handoffPending: handoff !== null && liveSid !== '' && handoff.toSessionId === liveSid,
       freshArmed: isArmed(ui, now),
     }
     const palette = theme === 'dark' ? DARK : LIGHT
@@ -1022,7 +1074,7 @@ export const register: Register = (on, options) => {
         sheetOpen: s?.sheetOpen ?? false,
         savingsReason: s?.savingsReason ?? null,
         narrow: e.props.bodyColumns < 90,
-        canWarm: canKeepWarm({ ...clock, working }, now),
+        canWarm: canKeepWarm({ ...shownClock, working }, now),
       },
       {
         act: id => void act($, id),

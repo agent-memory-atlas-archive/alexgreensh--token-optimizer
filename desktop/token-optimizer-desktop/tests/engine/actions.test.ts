@@ -11,6 +11,14 @@ const has = async (ui: Parameters<typeof sentenceOf>[0], text: string) => (await
 
 const COMPOSER = { kind: 'composer' } as const
 
+let lastStart: unknown
+/** A clear lands: the old session ends with reason clear, then the classic SessionStart carries the new id. */
+const clearLands = async ($: Engine, w: { sessionId: string }, from: string, to: string) => {
+  await $.session.end({ reason: 'clear', sessionId: from, resume: {} } as never)
+  w.sessionId = to
+  lastStart = await $.classic.SessionStart({ source: 'clear', session_id: to } as never)
+}
+
 test('Clean up while a turn runs: no compaction and a one-line note', async ($, on) => {
   const w = stub(on)
   await $.session.start(START)
@@ -144,8 +152,8 @@ test('Start fresh confirmed: capture, clear, then the held text joins the first 
   expect(w.commands).toEqual(['clear'])
   expect(await has(ui, 'Clearing.')).toBe(true)
 
-  w.sessionId = 'sess-2'
-  const started = await $.classic.SessionStart({ source: 'clear', session_id: 'sess-2' } as never)
+  await clearLands($, w, 'sess-1', 'sess-2')
+  const started = lastStart
   const context = (started as { additionalContext?: string[] }).additionalContext ?? []
   expect(context.join('\n').includes('Cross-session checkpoint')).toBe(false)
   expect(context.includes('Recovered notes')).toBe(true)
@@ -175,8 +183,8 @@ test('a failed capture, a stub checkpoint, or an empty resume queues no clear', 
   }
 })
 
-test('a pending hand-off on disk survives a restart and joins the first prompt', async ($, on) => {
-  const handoff = { fromSessionId: 'sess-0', cwd: '/work/project', checkpointPath: '/cp.md', text: 'HELD FROM BEFORE', createdAt: NOW_MS - 1000 }
+test('a pending hand-off on disk survives a restart and joins the first prompt of the session its clear created', async ($, on) => {
+  const handoff = { fromSessionId: 'sess-0', toSessionId: 'sess-1', cwd: '/work/project', checkpointPath: '/cp.md', text: 'HELD FROM BEFORE', createdAt: NOW_MS - 1000 }
   const w = stub(on, { store: { handoff } })
   await $.session.start(START)
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
@@ -251,7 +259,6 @@ test('a /clear disarms Start fresh: one press in the new session arms again, nev
 })
 
 for (const [why, held] of [
-  ['saved in another project', { fromSessionId: 'sess-0', cwd: '/work/other', checkpointPath: '/cp.md', text: 'OTHER PROJECT', createdAt: NOW_MS - 1000 }],
   ['saved more than 30 minutes ago', { fromSessionId: 'sess-0', cwd: '/work/project', checkpointPath: '/cp.md', text: 'TOO OLD', createdAt: NOW_MS - 31 * 60_000 }],
 ] as const) {
   test(`a hand-off ${why} is discarded with a one-line note, never joined (TR-05)`, async ($, on) => {
@@ -278,14 +285,13 @@ test('a clear still queued after 120 s keeps the hand-off and says when it will 
   expect(w.toasts.at(-1)).toBe('Start fresh clears when the current turn ends.')
   expect(await has(ui, 'Clearing.')).toBe(false)
 
-  w.sessionId = 'sess-2'
-  await $.classic.SessionStart({ source: 'clear', session_id: 'sess-2' } as never)
+  await clearLands($, w, 'sess-1', 'sess-2')
   const first = await $.prompt.submit({ text: 'continue', wait: false, origin: COMPOSER })
   expect(first.context).toEqual(['LEAN HANDOFF TEXT'])
 })
 
 test('a prompt rejected beneath the band keeps the hand-off for the next one (TR-08)', async ($, on) => {
-  const handoff = { fromSessionId: 'sess-0', cwd: '/work/project', checkpointPath: '/cp.md', text: 'LEAN HANDOFF TEXT', createdAt: NOW_MS - 1000 }
+  const handoff = { fromSessionId: 'sess-0', toSessionId: 'sess-1', cwd: '/work/project', checkpointPath: '/cp.md', text: 'LEAN HANDOFF TEXT', createdAt: NOW_MS - 1000 }
   const w = stub(on, { store: { handoff }, submitFails: 1 })
   await $.session.start(START)
   await expect($.prompt.submit({ text: 'go on', wait: false, origin: COMPOSER })).rejects.toBeDefined()
@@ -419,4 +425,117 @@ test('a refresh that started before a clear never brings the old clock into the 
   await w.clock.settle()
   const ui = await mountBand($)
   expect(await cacheAlt(ui)).toBe('Cache clock starts after the first reply')
+})
+
+test('a hand-off from another project is left for its owner: not joined, not deleted, no note (R1)', async ($, on) => {
+  const handoff = { fromSessionId: 'sess-a1', toSessionId: 'sess-a2', cwd: '/work/other', checkpointPath: '/cp.md', text: 'PROJECT A WORK', createdAt: NOW_MS - 1000 }
+  const w = stub(on, { store: { handoff } })
+  await $.session.start(START)
+  const first = await $.prompt.submit({ text: 'project b', wait: false, origin: COMPOSER })
+  expect(first.context ?? []).toEqual([])
+  expect(w.toasts).toEqual([])
+  // Project A's session still finds it.
+  w.sessionId = 'sess-a2'
+  w.cwd = '/work/other'
+  await $.session.start({ ...START, cwd: '/work/other' })
+  const own = await $.prompt.submit({ text: 'project a', wait: false, origin: COMPOSER })
+  expect(own.context).toEqual(['PROJECT A WORK'])
+})
+
+test('a hand-off on disk whose clear never landed does not join a plain start (TR-05)', async ($, on) => {
+  const handoff = { fromSessionId: 'sess-0', cwd: '/work/project', checkpointPath: '/cp.md', text: 'NO CLEAR BEHIND IT', createdAt: NOW_MS - 1000 }
+  const w = stub(on, { store: { handoff } })
+  await $.session.start(START)
+  const ui = await mountBand($)
+  expect(await has(ui, 'Checkpoint ready')).toBe(false)
+  const first = await $.prompt.submit({ text: 'go on', wait: false, origin: COMPOSER })
+  expect(first.context ?? []).toEqual([])
+  expect(w.toasts).toEqual([])
+})
+
+test('a hand-off whose clear never landed is dropped with a note at the next start after the busy timeout (TR-05)', async ($, on) => {
+  const handoff = { fromSessionId: 'sess-0', cwd: '/work/project', checkpointPath: '/cp.md', text: 'NO CLEAR BEHIND IT', createdAt: NOW_MS - 121_000 }
+  const w = stub(on, { store: { handoff } })
+  await $.session.start(START)
+  expect(w.toasts.length).toBe(1)
+  expect(w.toasts[0]).toMatch(/^Start fresh's saved hand-off was discarded: .*\.$/)
+  const first = await $.prompt.submit({ text: 'go on', wait: false, origin: COMPOSER })
+  expect(first.context ?? []).toEqual([])
+})
+
+test('a later manual /clear does not pick up the hand-off Start fresh made for another conversation (R4)', async ($, on) => {
+  const w = stub(on)
+  await $.session.start(START)
+  const ui = await mountBand($)
+  await confirmFresh(ui)
+  await w.clock.settle()
+  expect(w.commands).toEqual(['clear'])
+  await clearLands($, w, 'sess-1', 'sess-2')
+  // The person types /clear before sending anything.
+  await clearLands($, w, 'sess-2', 'sess-3')
+  const first = await $.prompt.submit({ text: 'unrelated', wait: false, origin: COMPOSER })
+  expect(first.context ?? []).toEqual([])
+})
+
+test('a manual /clear with an unlanded hand-off on disk never joins it (R4)', async ($, on) => {
+  const handoff = { fromSessionId: 'sess-0', cwd: '/work/project', checkpointPath: '/cp.md', text: 'NO CLEAR BEHIND IT', createdAt: NOW_MS - 1000 }
+  const w = stub(on, { store: { handoff } })
+  await $.session.start(START)
+  await clearLands($, w, 'sess-1', 'sess-2')
+  const first = await $.prompt.submit({ text: 'fresh', wait: false, origin: COMPOSER })
+  expect(first.context ?? []).toEqual([])
+})
+
+test('a Start fresh that stands down because the session changed says so (R2)', async ($, on) => {
+  const w = stub(on, { captureDelayMs: 1000 })
+  await $.session.start(START)
+  const ui = await mountBand($)
+  await confirmFresh(ui)
+  await w.clock.settle()
+  w.sessionId = 'sess-2'
+  await $.classic.SessionStart({ source: 'clear', session_id: 'sess-2' } as never)
+  await w.clock.advance(1000)
+  await w.clock.settle()
+  expect(w.commands).toEqual([])
+  expect(w.toasts).toEqual(['Start fresh stopped: the session changed.'])
+})
+
+test('a press that hangs frees the buttons once the busy timeout passes (R3)', async ($, on) => {
+  const w = stub(on, { uiWriteHangs: 1 })
+  await $.session.start(START)
+  const ui = await mountBand($)
+  await ui.press({ key: 'card-quality-clean' })
+  await w.clock.settle()
+  expect(w.compacts).toBe(0)
+  await w.clock.advance(120_001)
+  await ui.press({ key: 'card-quality-clean' })
+  await w.clock.settle()
+  expect(w.compacts).toBe(1)
+})
+
+test('a resume with no session.start shows no old clock and offers no Keep warm, then reads its own (TR-04)', async ($, on) => {
+  const w = stub(on)
+  w.status = { ...w.status, requestAgoS: 3400 }
+  await $.session.start(START)
+  const ui = await mountBand($)
+  expect((await ui.find({ key: 'action' }))?.props.label).toBe('Keep warm')
+  // The person resumes an older session: the id changes, no session.start fires.
+  w.sessionId = 'sess-old'
+  w.status = { ...w.status, requestAgoS: 2 * 3600 }
+  const resumed = await mountBand($)
+  expect(await cacheAlt(resumed)).toBe('Cache clock starts after the first reply')
+  expect((await resumed.findAll({ type: 'Button' })).some(b => b.props.label === 'Keep warm')).toBe(false)
+  await w.clock.settle()
+  expect((await cacheAlt(resumed))?.startsWith('Cache cold')).toBe(true)
+})
+
+test('a warm-up left marked running by a reload is cleared, and Keep warm can run (TR-10)', async ($, on) => {
+  const w = stub(on, { seed: { clock: { anchor: NOW_MS - 3400_000, lifetime: '1h', contextTokens: 620_000, working: false, warming: true, lapsed: false } } })
+  w.status = { ...w.status, requestAgoS: 3400 }
+  await $.session.start(START)
+  const ui = await mountBand($)
+  expect(await has(ui, 'Keeping the cache warm.')).toBe(false)
+  await ui.press({ key: 'action' })
+  await w.clock.settle()
+  expect(w.forks).toBe(1)
 })
