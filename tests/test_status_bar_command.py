@@ -529,7 +529,7 @@ def test_recent_compact_boundary_reads_the_tail(sb, tmp_path):
 def test_compactions_count_resumes_where_it_stopped_and_finds_split_markers(sb, tmp_path):
     f = tmp_path / "t.jsonl"
     mark = '{"type":"system","subtype":"compact_boundary"}\n'
-    f.write_text("x" * 100 + mark, encoding="utf-8")
+    f.write_text('{"type":"user"}\n' + mark, encoding="utf-8")
     assert sb._status_bar_compactions(f, "sess-inc") == 1
     # The next row arrives in two writes, the marker split between them.
     half = len('{"type":"system","subtype":"compac')
@@ -541,13 +541,16 @@ def test_compactions_count_resumes_where_it_stopped_and_finds_split_markers(sb, 
     assert sb._status_bar_compactions(f, "sess-inc") == 3
     # A full re-read agrees.
     assert sb._status_bar_compactions(f) == 3
-    # Across the 1 MB chunk edge.
+    # A real row after a long line, around the 1 MB mark.
     big = tmp_path / "big.jsonl"
-    m = b'"subtype":"compact_boundary"'
-    for off in range(-len(m), 2):
-        data = b"x" * ((1 << 20) + off) + m + b"\n"
-        big.write_bytes(data)
+    row = b'{"type":"system","subtype":"compact_boundary"}\n'
+    for off in (-40, -1, 0, 1):
+        big.write_bytes(b'{"type":"user","x":"' + b"x" * ((1 << 20) + off) + b'"}\n' + row)
         assert sb._status_bar_compactions(big) == 1, off
+    # The same key inside a structured tool result is not a compaction.
+    tool = tmp_path / "tool.jsonl"
+    tool.write_text(json.dumps({"type": "user", "toolUseResult": {"type": "system", "subtype": "compact_boundary"}}) + "\n", encoding="utf-8")
+    assert sb._status_bar_compactions(tool) == 0
 
 
 def test_dashboard_headline_is_zero_when_nothing_was_measured(sb):

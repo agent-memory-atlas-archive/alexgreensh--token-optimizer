@@ -1,5 +1,5 @@
-// Token Optimizer's files and the engine's usage, read into the band's shapes
-//. Pure and forgiving: a half-written or foreign file reads as nothing
+// Token Optimizer's files and the engine's usage, read into the band's shapes.
+// Pure and forgiving: a half-written or foreign file reads as nothing
 // rather than throwing, so one bad read never blanks the band.
 import type { Limit, Quality, Savings } from './contracts.ts'
 

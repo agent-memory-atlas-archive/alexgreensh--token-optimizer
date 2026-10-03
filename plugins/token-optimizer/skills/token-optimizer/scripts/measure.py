@@ -18896,8 +18896,9 @@ def _session_model_reprice(conn, cutoff, session_uuid=None, by_day=False):
         where = "WHERE e.timestamp >= ? "
         params = [cutoff]
         if session_uuid is not None:
-            where += "AND e.session_uuid = ? "
-            params.append(session_uuid)
+            # Same match as the savings buckets: non-UUID ids live in session_id.
+            where += "AND (e.session_uuid = ? OR (e.session_uuid IS NULL AND e.session_id = ?)) "
+            params.extend([session_uuid, session_uuid])
         rows = conn.execute(
             "SELECT " + day_col + ", e.event_type, SUM(e.tokens_saved), SUM(e.cost_saved_usd), "
             + mu + ", " + amu + " "
@@ -46297,7 +46298,7 @@ def _dashboard_saved_tokens(summary):
     return (measured + estimated if measured > 0 else 0), measured
 
 
-def _status_bar_savings_or_reason(session_id):
+def _status_bar_savings_or_reason(session_id, _retried=False):
     """Compute the savings object. Returns (savings_dict, None) or (None, reason)."""
     if not Path(TRENDS_DB).exists():
         return None, "no savings recorded yet"
@@ -46316,8 +46317,20 @@ def _status_bar_savings_or_reason(session_id):
         finally:
             conn.close()
     except sqlite3.OperationalError as e:
-        if "locked" in str(e).lower() or "busy" in str(e).lower():
+        msg = str(e).lower()
+        if "locked" in msg or "busy" in msg:
             return None, "savings database busy"
+        if "no such column" in msg or "no such table" in msg:
+            # A database from before these columns: the normal writer migrates it once.
+            try:
+                migrated = _init_trends_db()
+                if migrated is not None:
+                    migrated.close()
+            except Exception:
+                return None, "savings database unreadable"
+            if _retried:
+                return None, "savings database unreadable"
+            return _status_bar_savings_or_reason(session_id, _retried=True)
         return None, "savings database unreadable"
     except (sqlite3.Error, OSError, ValueError):
         return None, "savings database unreadable"
@@ -46329,6 +46342,10 @@ def _status_bar_savings_or_reason(session_id):
                       "usd": float(b.get("usd", 0.0))})
     headline = _get_merged_savings(days=_STATUS_BAR_DAYS)
     shown, measured = _dashboard_saved_tokens(headline)
+    # The headline pass fails open to zeros; when the day buckets show savings
+    # but the headline is zero, it failed: say so rather than cache a false 0.
+    if measured == 0 and any(int(b.get("tokens", 0)) > 0 for b in days.values()):
+        return None, "savings database busy"
     return {
         "unit": "tokens",
         "session_tokens": int(sess.get("tokens", 0)),
@@ -46346,6 +46363,11 @@ def _status_bar_write_cache(session_id, savings, reason):
     d = _status_bar_dir()
     d.mkdir(parents=True, exist_ok=True)
     path = _status_bar_cache_path(session_id)
+    if savings is None:
+        # A failed refresh keeps the last good figures (they read as stale), never null them.
+        prior = _status_bar_read_cache(session_id)
+        if prior is not None and prior.get("savings") is not None:
+            return
     tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     tmp.write_text(json.dumps({
         "schema": _STATUS_BAR_SCHEMA,
@@ -46362,7 +46384,7 @@ def _status_bar_write_cache(session_id, savings, reason):
             try:
                 name = f.name
                 # Temp files and set-aside locks left by a crash go after a day.
-                orphan = name.endswith(".tmp") or name.endswith(".stale")
+                orphan = name.endswith((".tmp", ".stale", ".release"))
                 if (orphan and f.stat().st_mtime < orphan_cutoff) or (
                         name.endswith(".json") and f.stat().st_mtime < cutoff):
                     f.unlink()
@@ -46534,10 +46556,11 @@ _COMPACT_MARK = b'"subtype":"compact_boundary"'
 def _status_bar_compactions(path, session_id=None):
     """How many times this transcript was compacted (compact_boundary rows), or None.
 
-    A plain byte count in 1 MB chunks: the quality cache's own count can lag a
-    compaction, and the band shows this number right after one. The transcript
-    only grows, so with a session id the count resumes from where the last call
-    stopped (kept beside the status cache) instead of re-reading the whole file.
+    Counts rows whose parsed JSON is a system compact_boundary (the same key can
+    sit inside a structured tool result). The quality cache's own count can lag
+    a compaction, and the band shows this number right after one. The transcript
+    only grows, so with a session id the count resumes after the last whole line
+    the previous call read (kept beside the status cache).
     """
     memo = None
     if session_id:
@@ -46558,24 +46581,21 @@ def _status_bar_compactions(path, session_id=None):
         except (OSError, ValueError, TypeError, KeyError):
             start, count = 0, 0
     try:
-        overlap = len(_COMPACT_MARK) - 1
-        tail = b""
+        end = start
         with open(path, "rb") as fh:
-            if start:
-                # Re-read the last few bytes so a marker split across the old end is found once.
-                fh.seek(max(0, start - overlap))
-                tail = fh.read(min(overlap, start))
-            while True:
-                chunk = fh.read(1 << 20)
-                if not chunk:
-                    break
-                buf = tail + chunk
-                count += buf.count(_COMPACT_MARK)
-                # A marker straddling two chunks is found once: the kept bytes are too short to hold one.
-                tail = buf[-overlap:]
-            # Where this read really ended: rows appended while it ran are counted, so the
-            # memo resumes after them (the size taken before the read would count them twice).
-            end = fh.tell()
+            fh.seek(start)
+            for line in fh:
+                if not line.endswith(b"\n"):
+                    break  # a row still being written: the next call reads it whole
+                end += len(line)
+                if _COMPACT_MARK not in line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except (ValueError, UnicodeDecodeError):
+                    continue
+                if isinstance(row, dict) and row.get("type") == "system" and row.get("subtype") == "compact_boundary":
+                    count += 1
         if memo is not None:
             try:
                 # Never written backwards: a slower reader that ended earlier leaves a newer memo alone.

@@ -179,7 +179,11 @@ export async function findTokenOptimizerRoot(io: DataIo, home: string): Promise<
 
   // Only scripts inside the Claude folder run (or beside this plugin in a checkout): a
   // tampered or stale registry entry pointing elsewhere is skipped, never executed.
-  const inside = (p: string) => claude !== '' && (p === claude || p.startsWith(`${claude}/`) || p.startsWith(`${claude}\\`))
+  // Compared with one separator and one case of drive letter, so a Windows home
+  // (C:\\Users\\me) and a registry path (C:\\Users\\me\\.claude\\...) agree.
+  const norm = (p: string) => p.replace(/\\/g, '/').replace(/^([a-zA-Z]):/, (_m: string, d: string) => `${d.toLowerCase()}:`)
+  const base = norm(claude)
+  const inside = (p: string) => base !== '' && (norm(p) === base || norm(p).startsWith(`${base}/`))
   const listed = resolveTokenOptimizerRoot(registry, claude).filter(r => inside(r.scriptsDir))
   for (const root of [...sibling, ...listed]) {
     if (!(await attempt(() => io.stat(`${root.scriptsDir}/measure.py`), null))) {

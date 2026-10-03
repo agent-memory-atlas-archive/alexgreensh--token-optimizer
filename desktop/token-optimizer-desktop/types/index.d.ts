@@ -82,6 +82,8 @@ export type TokenOptimizerDesktopHandoff = {
   text: string
   /** `$.clock.now()` when it was recorded (ms). */
   createdAt: number
+  /** While the save is being stamped: the press time (createdAt is a far-future placeholder). */
+  pendingSince?: number
 } | null
 
 /** The cache clock's reducer state (src/clock.ts ClockState). */

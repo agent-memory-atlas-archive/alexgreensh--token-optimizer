@@ -36,13 +36,24 @@ export type UiState = {
 }
 
 /** Start fresh's saved hand-off: who saved it, where, when (`$.clock.now()` ms), and the text it carries. */
-export type Handoff = { fromSessionId: string; cwd: string; checkpointPath: string; text: string; createdAt: number }
+export type Handoff = {
+  fromSessionId: string
+  cwd: string
+  checkpointPath: string
+  text: string
+  createdAt: number
+  /** While the save is being stamped: createdAt is the far-future placeholder, this the press time. */
+  pendingSince?: number
+}
+
+/** A hand-off still being stamped this long after its press was cut off by a crash. */
+const PENDING_MAX_MS = 60_000
 
 export type HandoffFate = 'attach' | 'skip' | { drop: string }
 
 /**
- * What the session `at.sessionId` in `at.cwd` does with a held hand-off
- *. It joins a different session than the one that saved it, in the
+ * What the session `at.sessionId` in `at.cwd` does with a held hand-off.
+ * It joins a different session than the one that saved it, in the
  * same project, that started at or after it was saved (`startedAt`, null when
  * unknown), within 10 minutes of the save. No marker ties it to one clear, so
  * a typed /clear, a reload or a lost start event cannot strand or steal it.
@@ -51,6 +62,10 @@ export type HandoffFate = 'attach' | 'skip' | { drop: string }
  */
 export function handoffFate(h: Handoff, at: { sessionId: string; cwd: string; startedAt: number | null; now: number }): HandoffFate {
   if (h.cwd !== at.cwd) return 'skip'
+  if (h.pendingSince !== undefined) {
+    // Being stamped right now; one a crash left half-saved is dropped after a minute.
+    return at.now - h.pendingSince > PENDING_MAX_MS ? { drop: 'its save never finished' } : 'skip'
+  }
   if (at.now - h.createdAt > HANDOFF_TTL_MS) return { drop: 'it is more than 10 minutes old' }
   if (at.sessionId === '' || at.sessionId === h.fromSessionId) return 'skip'
   return at.startedAt !== null && at.startedAt >= h.createdAt ? 'attach' : 'skip'
@@ -90,15 +105,21 @@ export function checkpointPathFrom(stdout: string): string | null {
 
 /** compact_capture writes this note when it found no transcript to read. */
 export function isStubCheckpoint(contents: string): boolean {
-  return contents.includes('No transcript data available')
+  if (!contents.includes('No transcript data available')) return false
+  // Empty means the phrase with almost nothing else; a real checkpoint that quotes it is not.
+  const rest = contents.replace('No transcript data available', '').replace(/^#.*$/gm, '').replace(/\s+/g, '')
+  return rest.length < STUB_MAX_CHARS
 }
+
+/** A checkpoint with less than this much besides its headings and the empty notice saved nothing. */
+const STUB_MAX_CHARS = 200
 
 const POINTER = /^.*Cross-session checkpoint.*$/
 
 /**
  * Removes Token Optimizer's "Cross-session checkpoint" pointer lines from a
- * SessionStart's context: after Start fresh the held hand-off replaces it
- *. Every other line stays; an entry left empty is dropped.
+ * SessionStart's context: after Start fresh the held hand-off replaces it.
+ * Every other line stays; an entry left empty is dropped.
  */
 export function stripCrossSessionPointer(entries: readonly string[] | undefined): string[] | undefined {
   if (!entries) return undefined

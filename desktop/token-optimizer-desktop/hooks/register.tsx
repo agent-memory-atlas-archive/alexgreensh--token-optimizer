@@ -536,7 +536,7 @@ async function cleanUp($: EngineInterface): Promise<void> {
   }
   await setUi($, u => withBusy(u, 'clean', now))
   armBusyTimeout($, 'clean', now)
-  $.clock.after(0, () => void runCompact($, now))
+  $.clock.after(0, () => void attempt(() => runCompact($, now), undefined))
 }
 
 async function runCompact($: EngineInterface, since: number): Promise<void> {
@@ -604,7 +604,7 @@ async function keepWarm($: EngineInterface): Promise<void> {
   warmInFlight = true
   const gen = sessionGen
   await feedClock($, { type: 'warm-start' }, now)
-  $.clock.after(0, () => void runWarm($, clock.contextTokens, gen))
+  $.clock.after(0, () => void attempt(() => runWarm($, clock.contextTokens, gen), undefined))
 }
 
 type ForkReply = Awaited<ReturnType<EngineInterface['model']['fork']>>
@@ -698,7 +698,7 @@ async function startFresh($: EngineInterface): Promise<void> {
   const gen = sessionGen
   await setUi($, u => withBusy(u, 'fresh-capture', now))
   armBusyTimeout($, 'fresh-capture', now)
-  $.clock.after(0, () => void runFresh($, sid, now, gen))
+  $.clock.after(0, () => void attempt(() => runFresh($, sid, now, gen), undefined))
 }
 
 /** Still the session Start fresh was pressed in: a typed /clear meanwhile means stand down. */
@@ -760,7 +760,7 @@ async function runFresh($: EngineInterface, sid: string, since: number, gen: num
   try {
     // First kept with a stamp in the far future, so no session can count as "started
     // since the save" until the real stamp below lands.
-    await $.store.set(HANDOFF_KEY, { ...result.handoff, createdAt: Number.MAX_SAFE_INTEGER })
+    await $.store.set(HANDOFF_KEY, { ...result.handoff, createdAt: Number.MAX_SAFE_INTEGER, pendingSince: since })
   } catch {
     return stop('the hand-off could not be kept on disk')
   }
@@ -785,7 +785,7 @@ async function runFresh($: EngineInterface, sid: string, since: number, gen: num
   const now = await $.clock.now()
   await setUi($, u => withBusy(u, 'fresh-clear', now))
   armBusyTimeout($, 'fresh-clear', now)
-  $.clock.after(0, () => void runClear($, now, handoff, sid, gen))
+  $.clock.after(0, () => void attempt(() => runClear($, now, handoff, sid, gen), undefined))
 }
 
 async function runClear($: EngineInterface, since: number, handoff: Handoff, sid: string, gen: number): Promise<void> {
@@ -874,7 +874,7 @@ const ring = (p: number, color: string, track: string, cold: boolean): string =>
 
 /**
  * The desktop gives the band no light/dark signal (the config's theme is the
- * terminal's), so each picture follows the app's own appearance through its
+ * terminal's), so the marks and icons follow the app's own appearance through their
  * colour-scheme query; the drawn colours are the light ones, the fallback.
  * Classes: k = ink stroke, kf = ink fill, t = track stroke, tf = track fill.
  */
@@ -1341,7 +1341,7 @@ export const register: Register = (on, options) => {
     if (!active) {
       // A desktop band without a session.start of ours (a late enable): start now, outside the drawing.
       active = true
-      $.clock.after(0, () => void start($))
+      $.clock.after(0, () => void attempt(() => start($), undefined))
     }
 
     // Every read fails soft: a hiccup in one value draws the band without it, never no band.
@@ -1389,7 +1389,8 @@ export const register: Register = (on, options) => {
       toolCallsSeen: s?.toolCallsSeen ?? 0,
       compactionsSeen: s?.compactionsSeen ?? 0,
     }
-    // Light pictures always; each follows the app's dark mode by itself (see DARK_STYLE).
+    // Light pictures: the marks and icons follow the app's dark mode themselves (DARK_STYLE);
+    // Clawd keeps his light palette, which reads on both.
     const palette = LIGHT
     const poseNow = pose?.pose ?? 'idle'
     const mood = moodOf(snap)

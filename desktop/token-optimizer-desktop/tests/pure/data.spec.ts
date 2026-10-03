@@ -6,6 +6,7 @@ import assert from 'node:assert/strict'
 
 import {
   NOT_FOUND,
+  findTokenOptimizerRoot,
   STATUS_TIMEOUT_MS,
   gather,
   mergeStored,
@@ -334,4 +335,16 @@ test('a kept limit is dropped once its own renewal has passed, never pinned', as
   assert.equal(next.fiveHour, null)
   const garbled = { ...first, fiveHour: { percentUsed: 80, resetsAt: 'not a time' } }
   assert.equal((await gather({ ...io, usage: async () => ({ rateLimits: [] }) }, garbled, {})).fiveHour, null)
+})
+
+
+test('on Windows a registry install under the Claude folder is found, whatever the separators', async () => {
+  const win = 'C:\\Users\\me'
+  const root = `${win}\\.claude\\plugins\\cache\\alexgreensh-token-optimizer\\token-optimizer\\5.13.29`
+  const w = world()
+  w.files[`${win}/.claude/plugins/installed_plugins.json`] = [1, JSON.stringify({ version: 2, plugins: { 'token-optimizer@x': [{ scope: 'user', installPath: root }] } })]
+  w.files[`${root}/skills/token-optimizer/scripts/measure.py`] = [1, '#']
+  const io = { ...fakeIo(w), envHome: async () => undefined, envUserProfile: async () => win }
+  const found = await findTokenOptimizerRoot(io, win)
+  assert.equal(found?.scriptsDir, `${root}/skills/token-optimizer/scripts`)
 })

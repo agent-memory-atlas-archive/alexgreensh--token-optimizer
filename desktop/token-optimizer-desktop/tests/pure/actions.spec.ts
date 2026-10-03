@@ -12,6 +12,7 @@ import {
   HANDOFF_TTL_MS,
   attachesHandoff,
   handoffFate,
+  isStubCheckpoint,
   busyNow,
   checkpointPathFrom,
   initialUi,
@@ -178,4 +179,19 @@ test('a hand-off joins another session in its project that started since the sav
   assert.deepEqual(handoffFate(h, { ...at, now: T + HANDOFF_TTL_MS + 1 }), { drop: 'it is more than 10 minutes old' })
   assert.deepEqual(handoffFate(h, { ...at, sessionId: 'old-1', now: T + HANDOFF_TTL_MS + 1 }), { drop: 'it is more than 10 minutes old' })
   assert.equal(HANDOFF_TTL_MS, 10 * 60_000)
+})
+
+
+test('a checkpoint is empty only when it says so and holds almost nothing else', () => {
+  assert.equal(isStubCheckpoint('# Checkpoint\n\nNo transcript data available\n'), true)
+  const real = '# Checkpoint\n\n' + 'We discussed why "No transcript data available" shows up. '.repeat(1) + 'Edited src/a.ts, src/b.ts; tests pass; next: wire the export path and review the cache logic in detail.'.repeat(3)
+  assert.equal(isStubCheckpoint(real), false)
+})
+
+test('a hand-off still being stamped is held; one a crash left half-saved is dropped after a minute', () => {
+  const h = { fromSessionId: 'old-session-1', cwd: '/w', checkpointPath: '/c.md', text: 't', createdAt: Number.MAX_SAFE_INTEGER, pendingSince: 1_000_000 }
+  const at = { sessionId: 'new-session-2', cwd: '/w', startedAt: 1_000_500 }
+  assert.equal(handoffFate(h, { ...at, now: 1_000_600 }), 'skip')
+  const late = handoffFate(h, { ...at, now: 1_000_000 + 61_000 })
+  assert.equal(typeof late === 'object' && 'drop' in late, true)
 })
