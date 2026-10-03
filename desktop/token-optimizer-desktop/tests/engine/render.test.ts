@@ -200,14 +200,15 @@ test('a new pose fades in over the old one, which stays beneath until the fade i
   expect((await clawds()).length).toBe(1)
 })
 
-test('watching, Clawd has a hidden look for each part of the band, shown while the pointer is over it', async ($, on) => {
+test('watching, Clawd has a hidden look toward the band, shown while the pointer is anywhere on it', async ($, on) => {
   const w = stub(on)
   await $.session.start(START)
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   await w.clock.advance(5000) // past the wake-up
   await w.clock.settle()
   const looks = (await ui.findAll({ type: 'Svg' })).filter(s => s.props.alt === 'Clawd: watching your pointer')
-  expect(looks.length).toBe(4)
+  // One look: the desktop reveals within the band's keyed Box, not across separate hover groups.
+  expect(looks.length).toBe(1)
   expect(looks.every(s => !String(s.props.source).includes('attributeName="opacity"'))).toBe(true)
 })
 
@@ -259,4 +260,62 @@ test('a new session with no Token Optimizer quality file yet still shows its tim
   expect(await ui.find({ type: 'Text', text: /^3 tools$|3 tools/ })).toBeDefined()
   // Every mark keeps its word, at any width.
   for (const word of ['quality', 'context', 'cache', '5 hours', 'week']) expect((await exactly(ui, word)).length, word).toBeGreaterThan(0)
+})
+
+const turnEnd = { turnId: 't1', answer: '', durationMs: 1000, isAborted: false, reason: 'answer' } as never
+
+test('tool calls are counted without a redraw per call; the count lands when the turn ends', async ($, on) => {
+  const w = stub(on)
+  const key = Object.keys(w.files).find(k => k.includes('quality-cache-sess-1'))!
+  delete w.files[key]
+  on('tool.call', () => ({ value: { content: 'ok' } }) as never)
+  await $.session.start(START)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await ui.press({ key: 'details' })
+  await w.clock.settle()
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  for (let i = 0; i < 4; i++) {
+    try {
+      await $.tool.call({ tool: 'Read', input: { file_path: '/work/project/a.ts' } } as never)
+    } catch {
+      // The count is under test, not the tool.
+    }
+  }
+  // Mid-turn: nothing written yet (a write per call would restart Clawd each time).
+  expect(await ui.find({ type: 'Text', text: /4 tools/ })).toBeUndefined()
+  await $.turn.complete(turnEnd)
+  await w.clock.settle()
+  expect(await ui.find({ type: 'Text', text: /4 tools/ })).toBeDefined()
+})
+
+test("a compaction Token Optimizer has already counted is not counted again by the band", async ($, on) => {
+  const w = stub(on)
+  await $.session.start(START)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await w.clock.settle()
+  // Token Optimizer's PostCompact refresh records it, and the band re-reads it, while the compaction is still settling.
+  const key = Object.keys(w.files).find(k => k.includes('quality-cache-sess-1'))!
+  w.duringCompact = async () => {
+    w.files[key] = [2, quality(88, 1)]
+    await w.clock.advance(61_000)
+    await w.clock.settle()
+  }
+  await $.session.compact({ trigger: 'manual', messages: [{ role: 'user', text: 'Earlier work.', toolUses: [], handle: 'm-1' }] } as never)
+  await w.clock.advance(6000)
+  await w.clock.settle()
+  await ui.press({ key: 'details' })
+  await w.clock.settle()
+  expect(await ui.find({ type: 'Text', text: /1×/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /2×/ })).toBeUndefined()
+})
+
+test('while savings are first measured the row says so, never "Saved -- tokens"', async ($, on) => {
+  const w = stub(on)
+  w.status = { ...w.status, savings: null, savings_state: 'loading', savings_reason: null }
+  await $.session.start(START)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await ui.press({ key: 'details' })
+  await w.clock.settle()
+  expect(await ui.find({ type: 'Text', text: /^Saved / })).toBeUndefined()
+  expect((await exactly(ui, 'Measuring savings…')).length).toBeGreaterThan(0)
 })

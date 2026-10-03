@@ -294,9 +294,11 @@ export async function gather(
   // after a compact, say) keeps the last known value; once that window has renewed, 0%.
   const keep = (fresh: Limit | null, last: Limit | null | undefined): Limit | null => {
     if (fresh) return fresh
-    if (!last) return null
+    // Kept only while its renewal is known: one with none could otherwise stay for good.
+    if (!last || last.resetsAt === null) return null
     const renewed = last.resetsAt !== null && Date.parse(last.resetsAt) <= now
-    return renewed ? { percentUsed: 0, resetsAt: null } : last
+    // Renewed: 0% used, still keyed to that renewal so it stays kept until usage reports again.
+    return renewed ? { percentUsed: 0, resetsAt: last.resetsAt } : last
   }
   const usage = { ...reported, fiveHour: keep(reported.fiveHour, base?.fiveHour), week: keep(reported.week, base?.week) }
   const branch = await readBranch(io, cwd)
@@ -373,6 +375,7 @@ export function mergeStored(
   current: TokenOptimizerDesktopSession | null,
   fresh: TokenOptimizerDesktopSession,
   reset = false,
+  savingsRead = true,
 ): TokenOptimizerDesktopSession {
   const sameSession = !reset && current !== null && current.sessionId === fresh.sessionId
 
@@ -388,5 +391,22 @@ export function mergeStored(
       }
     : {}
 
-  return { ...fresh, ...seen, quality, sheetOpen: sameSession ? current.sheetOpen : fresh.sheetOpen }
+  // A refresh that did not run the status command only carried its older copy of what that
+  // command reports: a slower savings refresh that landed meanwhile keeps its figures.
+  const statusFacts =
+    sameSession && !savingsRead
+      ? {
+          savings: current.savings,
+          savingsState: current.savingsState,
+          savingsReason: current.savingsReason,
+          earlierCheckpoint: current.earlierCheckpoint,
+          cacheLifetime: current.cacheLifetime ?? fresh.cacheLifetime,
+          lastRequestEpoch: newer(current.lastRequestEpoch, fresh.lastRequestEpoch),
+          checkpointEpoch: newer(current.checkpointEpoch, fresh.checkpointEpoch),
+          compactions:
+            current.compactions == null ? fresh.compactions : fresh.compactions == null ? current.compactions : Math.max(current.compactions, fresh.compactions),
+        }
+      : {}
+
+  return { ...fresh, ...statusFacts, ...seen, quality, sheetOpen: sameSession ? current.sheetOpen : fresh.sheetOpen }
 }

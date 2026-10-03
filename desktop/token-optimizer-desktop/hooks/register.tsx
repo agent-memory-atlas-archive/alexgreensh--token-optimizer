@@ -159,13 +159,32 @@ async function refresh($: EngineInterface, options: GatherOptions = {}): Promise
   if (!options.reset && current !== null && fresh.sessionId !== '' && current.sessionId !== fresh.sessionId) {
     // Another session (a new one, or a resume): nothing of the last one carries over (R15, KTD12).
     sessionGen += 1
+    toolsPending = 0
     await feedClock($, { type: 'clear' })
     await setUi($, () => initialUi())
     lastCold = null
     await feedPose($, { type: 'session-start' })
   }
-  await update($, sessionAtom, cur => mergeStored(cur, fresh, options.reset))
+  const latest = await attempt(() => read($, sessionAtom), null)
+  const merged = mergeStored(latest, fresh, options.reset, options.savings === true)
+  // Nothing shown changed (gatheredAt always does): no write, so no redraw.
+  if (latest !== null && sameShown(latest, merged)) return void (await syncClock($, fresh))
+  await update($, sessionAtom, cur => mergeStored(cur, fresh, options.reset, options.savings === true))
   await syncClock($, fresh)
+}
+
+function sameShown(a: TokenOptimizerDesktopSession, b: TokenOptimizerDesktopSession): boolean {
+  return JSON.stringify({ ...a, gatheredAt: 0 }) === JSON.stringify({ ...b, gatheredAt: 0 })
+}
+
+/** Tool calls the band counted since the last write: written alongside a redraw that happens anyway. */
+let toolsPending = 0
+
+async function flushTools($: EngineInterface): Promise<void> {
+  if (toolsPending === 0) return
+  const n = toolsPending
+  toolsPending = 0
+  await attempt(() => update($, sessionAtom, cur => (cur ? { ...cur, toolCallsSeen: (cur.toolCallsSeen ?? 0) + n } : cur)), undefined)
 }
 
 /** The status command's anchor and measured lifetime feed the clock when they are newer than what it holds. */
@@ -260,8 +279,10 @@ async function tick($: EngineInterface): Promise<void> {
     }
     // Only a change the band shows redraws it, at most once a minute: the desktop restarts
     // Clawd's picture on every redraw, so a per-second countdown made him blink each second.
-    const shown = v.secondsLeft != null ? Math.ceil(v.secondsLeft / 60) : ''
-    const text = [v.state, shown, Math.floor(now / TICK_IDLE_MS), busyNow(ui, now), noteNow(ui, now), isArmed(ui, now)].join('|')
+    // One minute clock: the cache countdown's when it runs, else the wall clock's (for "27m ago").
+    const minute = v.secondsLeft != null ? `c${Math.ceil(v.secondsLeft / 60)}` : `w${Math.floor(now / TICK_IDLE_MS)}`
+    const text = [v.state, minute, busyNow(ui, now), noteNow(ui, now), isArmed(ui, now)].join('|')
+    if (text !== frameText) await flushTools($)
     if (text !== frameText) {
       frameText = text
       await update($, frameAtom, n => (n ?? 0) + 1)
@@ -761,6 +782,7 @@ async function runClear($: EngineInterface, since: number, handoff: Handoff, sid
 
 async function toggleDetails($: EngineInterface): Promise<void> {
   await disarm($)
+  await flushTools($)
   const current = await attempt(() => read($, sessionAtom), null)
   if (!current) return
   const opening = !current.sheetOpen
@@ -856,9 +878,6 @@ type Model = {
   gazes: (ClawdLayer & { gaze: Gaze })[]
 }
 
-/** The hover group that turns Clawd's eyes toward one part of the band. */
-const gazeScope = (g: Gaze): string => `token-optimizer-gaze-${g}`
-
 type ClawdLayer = { key: string; source: string; alt: string }
 
 /** How long the previous pose stays beneath a new one: the fade plus the picture's own load. */
@@ -937,11 +956,12 @@ function drawBand(D: Desktop, m: Model, on: Handlers) {
   // Said plainly: a bare "47M past 30 days" reads like tokens spent, and a 30-bar chart
   // ruled by one big day said nothing. The total is the dashboard's own.
   const sessionSaved = (detail.savings.sessionTokens ?? 0) >= SESSION_SAVED_MIN
+  // No figure yet: say why (or that it is being measured), never "Saved -- tokens".
   const savingsBlock =
-    detail.savings.state === 'unavailable' && detail.savings.last30Tokens == null ? (
+    detail.savings.last30Tokens == null ? (
       <Box flexDirection="row" alignItems="center" columnGap={1}>
         {icon(D, 'saved', t.ink)}
-        <Text>{m.savingsReason ?? detail.savings.reason ?? ''}</Text>
+        <Text>{detail.savings.state === 'loading' ? 'Measuring savings…' : (m.savingsReason ?? detail.savings.reason ?? 'Savings appear once Token Optimizer has measured some.')}</Text>
       </Box>
     ) : (
       <Box flexDirection="row" alignItems="center" columnGap={1}>
@@ -962,7 +982,9 @@ function drawBand(D: Desktop, m: Model, on: Handlers) {
   // The artifact's layout: Clawd and his arrow beside the sentence and the marks; the
   // unfolded row under all of it, from Clawd's left edge, savings on the right.
   return (
-    <Box flexDirection="column" paddingX={1} rowGap={1}>
+    // Keyed: the whole band is one hover zone (the desktop reveals within a keyed Box,
+    // not across separate hover groups), so a pointer anywhere on it wakes Clawd to look.
+    <Box key="band" flexDirection="column" paddingX={1} rowGap={1}>
       <Box flexDirection="row" alignItems="center" columnGap={2}>
         <Box flexDirection="row" alignItems="center" columnGap={1} flexShrink={0}>
           {/* Box sizes count text cells on desktop, so the bottom picture sizes the stack and the new one sits over it.
@@ -975,14 +997,15 @@ function drawBand(D: Desktop, m: Model, on: Handlers) {
                 <Svg source={c.source} alt={c.alt} width={72} height={57} />
               </Box>
             ))}
-            {/* Hover can reveal but not move: each look is its own picture, drawn hidden over him and shown by its part of the band. */}
+            {/* Hover can reveal but not move: his look toward the band is its own picture, drawn hidden over him. */}
             {m.gazes.map(g => (
-              <Box key={g.key} position="absolute" top={0} left={0} display="none" hover={{ scope: gazeScope(g.gaze), display: 'flex' }}>
+              // No key of its own: a keyed Box drawn hidden is a hover zone nobody can point at.
+              <Box position="absolute" top={0} left={0} display="none" hover={{ display: 'flex' }}>
                 <Svg source={g.source} alt={g.alt} width={72} height={57} />
               </Box>
             ))}
           </Box>
-          <Box hover={{ scope: gazeScope('down') }}>
+          <Box>
             {/* A native button, not a bare glyph: its frame says "press me". */}
             <Button
               key="details"
@@ -992,7 +1015,7 @@ function drawBand(D: Desktop, m: Model, on: Handlers) {
           </Box>
         </Box>
         <Box flexDirection="column" flexGrow={1} flexShrink={1} rowGap={1}>
-          <Box flexDirection="row" alignItems="center" justifyContent="space-between" columnGap={2} hover={{ scope: gazeScope('up-right') }}>
+          <Box flexDirection="row" alignItems="center" justifyContent="space-between" columnGap={2}>
             <Box flexDirection="row" alignItems="center" columnGap={1} flexShrink={1}>
               <Text bold>Token Optimizer</Text>
               {icon(D, say.icon, toneColor(say.tone, t))}
@@ -1001,7 +1024,7 @@ function drawBand(D: Desktop, m: Model, on: Handlers) {
             {say.action ? <Button key="action" variant="primary" label={say.action.label} onPress={() => on.act(say.action!.id)} /> : ''}
           </Box>
           {/* One line, never wrapped: a wrapped mark's card would open over the marks above it. */}
-          <Box flexDirection="row" flexWrap="nowrap" columnGap={3} hover={{ scope: gazeScope('right') }}>
+          <Box flexDirection="row" flexWrap="nowrap" columnGap={3}>
             {markList.map((mark, i) => (
               <Box key={`mark-${mark.id}`} position="relative" flexDirection="row" alignItems="center" columnGap={1}>
                 <Svg source={markSvg(mark, t)} alt={mark.alt} width={20} height={20} />
@@ -1015,7 +1038,7 @@ function drawBand(D: Desktop, m: Model, on: Handlers) {
         </Box>
       </Box>
       {m.sheetOpen ? (
-        <Box key="row" flexDirection="row" flexWrap="wrap" alignItems="center" justifyContent="space-between" columnGap={2} rowGap={1} hover={{ scope: gazeScope('down-right') }}>
+        <Box key="row" flexDirection="row" flexWrap="wrap" alignItems="center" justifyContent="space-between" columnGap={2} rowGap={1}>
           <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={2} rowGap={1}>
             {detail.facts.map(f => (
               <Box flexDirection="row" alignItems="center" columnGap={1}>
@@ -1050,6 +1073,7 @@ async function endTurn($: EngineInterface, reason: Extract<PoseEvent, { type: 't
       return
     }
     await closeAsks($)
+    await flushTools($)
     await feedClock($, { type: 'working-changed', working: false })
     await feedPose($, { type: 'turn-complete', reason })
     await feedPose($, { type: 'working-changed', working: false })
@@ -1173,7 +1197,8 @@ export const register: Register = (on, options) => {
     await feedPose($, agentId === undefined ? { type: 'tool-call', tool } : { type: 'tool-call', tool, agentId })
     // The question dialog is open from the call until it answers.
     // Counted by the band itself, so the row has it before Token Optimizer's first quality file.
-    if (agentId === undefined) await attempt(() => update($, sessionAtom, cur => (cur ? { ...cur, toolCallsSeen: (cur.toolCallsSeen ?? 0) + 1 } : cur)), undefined)
+    // Counted in memory: a write per call would redraw (and restart Clawd) several times a second.
+    if (agentId === undefined) toolsPending += 1
     const asking = tool === 'AskUserQuestion' && agentId === undefined
     if (asking) await feedPose($, { type: 'question-open' })
     try {
@@ -1199,6 +1224,10 @@ export const register: Register = (on, options) => {
   on('session.compact', async ($, e, next) => {
     if (!active || e.trigger === 'precompute' || e.agentId !== undefined) return next(e)
     await feedPose($, { type: 'compact-start' })
+    const before = await attempt(async () => {
+      const cur = await read($, sessionAtom)
+      return Math.max(cur?.compactionsSeen ?? 0, cur?.quality?.compactions ?? 0)
+    }, 0)
     try {
       const result = await next(e)
       // The band watched this one land: count it now, before Claude Code writes its
@@ -1210,8 +1239,8 @@ export const register: Register = (on, options) => {
               cur
                 ? {
                     ...cur,
-                    compactionsSeen: Math.max(cur.compactionsSeen ?? 0, cur.quality?.compactions ?? 0) + 1,
-                    quality: cur.quality ? { ...cur.quality, compactions: cur.quality.compactions + 1 } : cur.quality,
+                    // Counted from what was known BEFORE it ran: Token Optimizer's own +1 may already be in.
+                    compactionsSeen: Math.max(cur.compactionsSeen ?? 0, before + 1),
                   }
                 : cur,
             ),
@@ -1325,7 +1354,7 @@ export const register: Register = (on, options) => {
         gazes:
           // Watching or napping: pointing at the band wakes him to look at it.
           (poseNow === 'idle' || poseNow === 'sleep') && animate
-            ? (['up-right', 'right', 'down-right', 'down'] as const).map(gaze => {
+            ? (['right'] as const).map(gaze => {
                 const source = clawdSvg('idle', mood, { animate, palette, gaze, fadeIn: false })
                 return { key: `gaze-${gaze}-${mood}`, source, alt: 'Clawd: watching your pointer', gaze }
               })

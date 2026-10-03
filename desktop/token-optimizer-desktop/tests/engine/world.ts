@@ -59,6 +59,8 @@ export type World = {
   store: Record<string, unknown>
   /** The live session's project. */
   cwd: string
+  /** Runs inside a compaction, before it resolves (Token Optimizer's PostCompact landing mid-way). */
+  duringCompact?: () => Promise<void>
   /** The engine leaves the 5-hour limit out of its usage (as it can right after a compact). */
   dropFiveHour?: boolean
   /** When the live session began (`$.session.usage().startedAt`, mocked-clock ms); a clear sets it to its own moment; null when the engine cannot say. */
@@ -267,6 +269,7 @@ export function stub(on: On, patch: Partial<Omit<World, 'clock' | 'runs' | 'toas
     w.compacts += 1
     if (w.compact === 'hang') await w.clock.sleep(10 * 60_000)
     if (w.compact === 'skip') return { skip: 'nothing to compact' }
+    if (w.duringCompact) await w.duringCompact()
     // A compaction leaves at least its summary (the shape the engine hands hooks).
     return { messages: [{ role: 'user', text: 'Summary of the conversation so far.', toolUses: [], handle: 'summary-1' }] as never }
   })
