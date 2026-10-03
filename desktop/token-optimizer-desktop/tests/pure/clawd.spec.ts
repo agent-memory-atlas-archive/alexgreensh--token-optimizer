@@ -8,7 +8,7 @@ import type { Pose } from '../../src/contracts.ts'
 function balanced(svg: string): boolean {
   const stack: string[] = []
   for (const m of svg.matchAll(/<(\/?)([a-zA-Z]+)[^>]*?(\/?)>/g)) {
-    const [, closing, name, self] = m
+    const closing = m[1], name = m[2] ?? '', self = m[3]
     if (self) continue
     if (closing) { if (stack.pop() !== name) return false } else stack.push(name)
   }
