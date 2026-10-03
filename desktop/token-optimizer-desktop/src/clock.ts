@@ -9,6 +9,8 @@ export const KEEP_WARM_MARGIN_MS = 15_000
 const UNMEASURED_RULE_SECONDS = 300
 /** A warm-up that read less than this share of the context found the cache lapsed. */
 const LAPSED_READ_SHARE = 0.5
+/** Below this many tokens read, a warm-up of unknown context size found the cache gone. */
+const LAPSED_FLOOR_TOKENS = 1024
 
 export type Lifetime = '1h' | '5m'
 
@@ -62,7 +64,8 @@ export function reduceClock(state: ClockState, event: ClockEvent, now?: number):
       // No press time given: refuse rather than guess.
       return now !== undefined && canKeepWarm(state, now) ? { ...state, warming: true } : state
     case 'warm-done':
-      if (event.cacheReadTokens < LAPSED_READ_SHARE * event.contextTokens) {
+      // With no known context size, a warm-up that read (almost) nothing from the cache found it gone.
+      if (event.contextTokens > 0 ? event.cacheReadTokens < LAPSED_READ_SHARE * event.contextTokens : event.cacheReadTokens < LAPSED_FLOOR_TOKENS) {
         return { ...state, warming: false, lapsed: true, contextTokens: event.contextTokens }
       }
       return {

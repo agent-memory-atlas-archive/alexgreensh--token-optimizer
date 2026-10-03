@@ -19,7 +19,7 @@ const HOME = '/home/me'
 const NOW_MS = Date.parse('2026-10-03T10:00:00Z')
 const LEGACY_DIR = `${HOME}/.claude/token-optimizer`
 const DATA_DIR = `${HOME}/.claude/plugins/data/token-optimizer-alexgreensh-token-optimizer/token-optimizer`
-const TO_ROOT = '/c/to/5.13.26'
+const TO_ROOT = `${HOME}/.claude/plugins/cache/alexgreensh-token-optimizer/token-optimizer/5.13.26`
 const SCRIPTS = `${TO_ROOT}/skills/token-optimizer/scripts`
 const RUNNER = `${TO_ROOT}/hooks/module_runner.py`
 
@@ -41,7 +41,7 @@ type World = {
   files: Record<string, [mtimeMs: number, contents: string]>
   dataDirs: string[]
   git: 'branch' | 'no-repo' | 'missing'
-  status: 'ok' | 'timeout' | 'loading'
+  status: 'ok' | 'timeout' | 'loading' | 'noisy'
   runs: { argv: string[]; timeoutMs: number }[]
 }
 
@@ -107,6 +107,11 @@ function fakeIo(w: World): DataIo {
 
       if (w.status === 'timeout') {
         throw new Error('process.run: timed out')
+      }
+
+      if (w.status === 'noisy') {
+        // A stray line printed before the JSON (an interpreter warning, say).
+        return { exitCode: 0, stdout: `warning: something chatty\n${STATUS}` }
       }
 
       if (w.status === 'loading') {
@@ -297,4 +302,36 @@ test('a timed-out status command is not retried with another launcher', async ()
   const w = withTokenOptimizer(world({ status: 'timeout' }))
   await gather(fakeIo(w), null, { savings: true })
   assert.equal(w.runs.filter(r => r.argv.includes('status-bar')).length, 1)
+})
+
+
+test('a registry entry outside the Claude folder is never run', async () => {
+  const w = world()
+  w.files[`${HOME}/.claude/plugins/installed_plugins.json`] = [
+    1,
+    JSON.stringify({ version: 2, plugins: { 'token-optimizer@x': [{ scope: 'user', installPath: '/tmp/elsewhere/5.13.29' }] } }),
+  ]
+  w.files['/tmp/elsewhere/5.13.29/skills/token-optimizer/scripts/measure.py'] = [1, '#']
+  const s = await gather(fakeIo(w), null, { savings: true })
+  assert.equal(w.runs.some(r => r.argv.some(a => a.startsWith('/tmp/elsewhere'))), false)
+  assert.equal(s.savingsReason, NOT_FOUND)
+})
+
+test('a stray line before the JSON still reads the figures, not "update Token Optimizer"', async () => {
+  const w = withTokenOptimizer(world({ status: 'noisy' }))
+  const s = await gather(fakeIo(w), null, { savings: true })
+  assert.notEqual(s.savings, null)
+  assert.equal(s.savingsReason, null)
+})
+
+test('a kept limit is dropped once its own renewal has passed, never pinned', async () => {
+  const w = withTokenOptimizer(world())
+  const io = fakeIo(w)
+  const first = await gather(io, null, {})
+  // The last known 5-hour figure renewed an hour before now, and usage stops reporting it.
+  const stale = { ...first, fiveHour: { percentUsed: 80, resetsAt: new Date(NOW_MS - 3_600_000).toISOString() } }
+  const next = await gather({ ...io, usage: async () => ({ rateLimits: [] }) }, stale, {})
+  assert.equal(next.fiveHour, null)
+  const garbled = { ...first, fiveHour: { percentUsed: 80, resetsAt: 'not a time' } }
+  assert.equal((await gather({ ...io, usage: async () => ({ rateLimits: [] }) }, garbled, {})).fiveHour, null)
 })

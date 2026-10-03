@@ -36,6 +36,8 @@ export const GIT_TIMEOUT_MS = 1_000
 
 /** Shown as the savings reason when no Token Optimizer install is found (R6). */
 export const NOT_FOUND = 'Token Optimizer not found'
+/** No Python 3 launcher starts: Token Optimizer's scripts cannot run. */
+export const NO_PYTHON = 'Token Optimizer needs Python 3 to measure savings.'
 /** The installed Token Optimizer predates the status command this band reads. */
 export const OUTDATED = 'Update Token Optimizer to see savings.'
 
@@ -97,8 +99,10 @@ async function attempt<T>(work: () => Promise<T>, fallback: T): Promise<T> {
 }
 
 /** Session ids become file names; keep only what Token Optimizer's own sanitizer keeps. */
-function cleanId(id: string): string {
-  return id.replace(/[^a-zA-Z0-9_-]/g, '')
+export function cleanId(id: string): string {
+  const clean = id.replace(/[^a-zA-Z0-9_-]/g, '')
+  // Token Optimizer files an id shorter than 6 under "unknown": read nothing for it either.
+  return clean.length >= 6 ? clean : ''
 }
 
 /** True when the stored atom belongs to another session (or to none) and must be reset (KTD12). */
@@ -114,7 +118,10 @@ export async function readHome(io: DataIo): Promise<string> {
 /** The Claude folder: CLAUDE_CONFIG_DIR when set (as Token Optimizer's claude_home()), else ~/.claude. */
 export async function claudeDir(io: DataIo, home: string): Promise<string> {
   const set = io.envConfigDir ? await attempt(() => io.envConfigDir!(), undefined) : undefined
-  return set && set.trim() ? set.trim().replace(/[\\/]+$/, '') : home ? `${home}/.claude` : ''
+  const dir = set ? set.trim().replace(/[\\/]+$/, '') : ''
+  // Absolute only, as Token Optimizer requires: a relative one would point the band elsewhere.
+  const absolute = dir.startsWith('/') || /^[A-Za-z]:[\\/]/.test(dir)
+  return absolute ? dir : home ? `${home}/.claude` : ''
 }
 
 /**
@@ -168,7 +175,11 @@ export async function findTokenOptimizerRoot(io: DataIo, home: string): Promise<
   const own = io.pluginRoot ? trimTwo(await attempt(async () => io.pluginRoot!(), '')) : ''
   const sibling = own ? [{ scriptsDir: `${own}/skills/token-optimizer/scripts`, runner: `${own}/hooks/module_runner.py` }] : []
 
-  for (const root of [...sibling, ...resolveTokenOptimizerRoot(registry, claude)]) {
+  // Only scripts inside the Claude folder run (or beside this plugin in a checkout): a
+  // tampered or stale registry entry pointing elsewhere is skipped, never executed.
+  const inside = (p: string) => claude !== '' && (p === claude || p.startsWith(`${claude}/`) || p.startsWith(`${claude}\\`))
+  const listed = resolveTokenOptimizerRoot(registry, claude).filter(r => inside(r.scriptsDir))
+  for (const root of [...sibling, ...listed]) {
     if (!(await attempt(() => io.stat(`${root.scriptsDir}/measure.py`), null))) {
       continue
     }
@@ -205,7 +216,13 @@ export function statusBarArgv(root: TokenOptimizerRoot, sid: string, transcript?
 }
 
 function isTimeout(error: unknown): boolean {
-  return /timed? ?out/i.test(error instanceof Error ? error.message : String(error))
+  const name = error instanceof Error ? error.name : ''
+  return name === 'TimeoutError' || /timed? ?out|deadline/i.test(error instanceof Error ? error.message : String(error))
+}
+
+/** No Python launcher could start at all (every one was tried). */
+function noLauncher(error: unknown): boolean {
+  return /no python launcher|python launcher not found|ENOENT|not found/i.test(error instanceof Error ? error.message : String(error))
 }
 
 /**
@@ -254,13 +271,22 @@ export async function readStatusBar(
   root: TokenOptimizerRoot,
   sid: string,
   transcript?: string,
-): Promise<StatusBar | 'outdated' | null> {
+): Promise<StatusBar | 'outdated' | 'nopython' | null> {
   const args = ['status-bar', '--session', sid, '--json', ...(transcript ? ['--transcript', transcript] : [])]
-  const result = await attempt(() => runMeasure(io, root, args, { timeoutMs: STATUS_TIMEOUT_MS }), null)
+  let result: { exitCode: number; stdout: string } | 'nopython' | null = null
+  try {
+    result = await runMeasure(io, root, args, { timeoutMs: STATUS_TIMEOUT_MS })
+  } catch (error) {
+    result = noLauncher(error) ? 'nopython' : null
+  }
 
+  if (result === 'nopython') return 'nopython'
+  if (!result) return null
+  // The JSON is the last line that is one (a stray line printed before it is not a reason to fail).
+  const json = result.stdout.split(/\r?\n/).map(l => l.trim()).filter(l => l.startsWith('{')).pop()
   // An install without the command prints its usage instead of JSON (or exits 2).
-  if (result && (result.exitCode === 2 || result.exitCode === 0) && !result.stdout.trimStart().startsWith('{')) return 'outdated'
-  return result && result.exitCode === 0 ? parseStatusBar(result.stdout) : null
+  if (!json) return result.exitCode === 0 || result.exitCode === 2 ? 'outdated' : null
+  return result.exitCode === 0 ? parseStatusBar(json) : null
 }
 
 /** The current git branch; null outside a repository, on a detached HEAD, or without git. */
@@ -304,17 +330,17 @@ export async function gather(
   // after a compact, say) keeps the last known value; once that window has renewed, 0%.
   const keep = (fresh: Limit | null, last: Limit | null | undefined): Limit | null => {
     if (fresh) return fresh
-    // Kept only while its renewal is known: one with none could otherwise stay for good.
+    // Kept only until its own renewal: after that the old figure is wrong, and an unreadable
+    // renewal time is no renewal time (either could otherwise stay on screen for good).
     if (!last || last.resetsAt === null) return null
-    const renewed = last.resetsAt !== null && Date.parse(last.resetsAt) <= now
-    // Renewed: 0% used, still keyed to that renewal so it stays kept until usage reports again.
-    return renewed ? { percentUsed: 0, resetsAt: last.resetsAt } : last
+    const renews = Date.parse(last.resetsAt)
+    return Number.isFinite(renews) && renews > now ? last : null
   }
   const usage = { ...reported, fiveHour: keep(reported.fiveHour, base?.fiveHour), week: keep(reported.week, base?.week) }
   const branch = await readBranch(io, cwd)
   const quality = await readQuality(io, home, sid)
 
-  let status: StatusBar | 'outdated' | null = null
+  let status: StatusBar | 'outdated' | 'nopython' | null = null
   let notFound = false
 
   if (options.savings && sid) {
@@ -339,6 +365,8 @@ export async function gather(
     ? { ...kept, savings: null, savingsState: 'unavailable' as const, savingsReason: NOT_FOUND, checkpointEpoch: null }
     : status === 'outdated'
       ? { ...kept, savings: null, savingsState: 'unavailable' as const, savingsReason: OUTDATED }
+    : status === 'nopython'
+      ? { ...kept, savings: null, savingsState: 'unavailable' as const, savingsReason: NO_PYTHON }
     : status
       ? {
           // While savings load, the last known figures stay on show (R6).

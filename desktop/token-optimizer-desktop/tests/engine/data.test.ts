@@ -6,13 +6,13 @@
 // as a session would answer. tests/pure/data.spec.ts covers the same
 // gatherer under Node.
 import type { On } from 'claude-code'
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 
 const HOME = '/home/me'
 const NOW_MS = Date.parse('2026-10-03T10:00:00Z')
 const LEGACY_DIR = `${HOME}/.claude/token-optimizer`
 const DATA_DIR = `${HOME}/.claude/plugins/data/token-optimizer-alexgreensh-token-optimizer/token-optimizer`
-const TO_ROOT = '/c/to/5.13.26'
+const TO_ROOT = '/home/me/.claude/plugins/cache/alexgreensh-token-optimizer/token-optimizer/5.13.26'
 const SCRIPTS = `${TO_ROOT}/skills/token-optimizer/scripts`
 const RUNNER = `${TO_ROOT}/hooks/module_runner.py`
 
@@ -86,7 +86,8 @@ function stub(on: On, w: World) {
 
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('classic.SessionStart', () => ({}))
-  on('clock.now', () => ({ value: NOW_MS }))
+  // A mocked clock: the status read runs just after a start, on the clock.
+  const clock = mock.clock(on, { now: NOW_MS })
   on('session.id', () => ({ value: w.sessionId }))
   on('session.cwd', () => ({ value: '/work/project' }))
   on('env.get', (_, e) => ({ value: e.name === 'HOME' ? HOME : undefined }))
@@ -151,6 +152,7 @@ function stub(on: On, w: World) {
 
     return { value: { isSet: true as const, version } }
   })
+  return clock
 }
 
 const START = { cwd: '/work/project', surface: 'desktop', isInteractive: true } as const
@@ -159,9 +161,10 @@ test('the newer quality cache wins across the two storage directories', async ($
   const w = world({ dataDirs: ['token-optimizer-alexgreensh-token-optimizer', 'unrelated-plugin'] })
   w.files[`${LEGACY_DIR}/quality-cache-sess-1.json`] = [2000, quality(40, 0)]
   w.files[`${DATA_DIR}/quality-cache-sess-1.json`] = [5000, quality(81, 3)]
-  stub(on, w)
+  const clock = stub(on, w)
 
   await $.session.start(START)
+  await clock.settle()
   expect(stored(w)?.quality?.score).toBe(81)
   expect(stored(w)?.quality?.compactions).toBe(3)
 })
@@ -169,9 +172,10 @@ test('the newer quality cache wins across the two storage directories', async ($
 test('a clear re-keys the atom: the new session starts with nothing of the old one', async ($, on) => {
   const w = withTokenOptimizer(world())
   w.files[`${LEGACY_DIR}/quality-cache-sess-1.json`] = [1, quality(77, 2)]
-  stub(on, w)
+  const clock = stub(on, w)
 
   await $.session.start(START)
+  await clock.settle()
   expect(stored(w)?.sessionId).toBe('sess-1')
   expect(stored(w)?.quality?.compactions).toBe(2)
   expect(stored(w)?.cacheLifetime).toBe('1h')
@@ -180,6 +184,7 @@ test('a clear re-keys the atom: the new session starts with nothing of the old o
   w.sessionId = 'sess-2'
   w.status = 'timeout'
   await $.classic.SessionStart({ source: 'clear', session_id: 'sess-2' } as never)
+  await clock.settle()
 
   const fresh = stored(w)
   expect(fresh?.sessionId).toBe('sess-2')
@@ -193,9 +198,10 @@ test('a clear re-keys the atom: the new session starts with nothing of the old o
 
 test('a status command that times out keeps the last savings and does not throw', async ($, on) => {
   const w = withTokenOptimizer(world())
-  stub(on, w)
+  const clock = stub(on, w)
 
   await $.session.start(START)
+  await clock.settle()
   const first = stored(w)
   expect(first?.savings?.sessionTokens).toBe(41_000)
   expect(first?.savings?.daily.length).toBe(30)
@@ -205,6 +211,7 @@ test('a status command that times out keeps the last savings and does not throw'
 
   w.status = 'timeout'
   await $.session.start(START)
+  await clock.settle()
   expect(stored(w)?.savings).toEqual(first?.savings)
   expect(stored(w)?.cacheLifetime).toBe('1h')
   expect(stored(w)?.contextPercent).toBe(62)
@@ -212,17 +219,19 @@ test('a status command that times out keeps the last savings and does not throw'
 
 test('outside a git repository the branch is empty', async ($, on) => {
   const w = world({ git: 'no-repo' })
-  stub(on, w)
+  const clock = stub(on, w)
 
   await $.session.start(START)
+  await clock.settle()
   expect(stored(w)?.branch).toBeNull()
 })
 
 test('without Token Optimizer savings and checkpoint are null and everything else fills', async ($, on) => {
   const w = world()
-  stub(on, w)
+  const clock = stub(on, w)
 
   await $.session.start(START)
+  await clock.settle()
   const s = stored(w)
   expect(s?.savings).toBeNull()
   expect(s?.savingsState).toBe('unavailable')

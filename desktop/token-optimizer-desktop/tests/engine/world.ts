@@ -6,7 +6,7 @@ import { mock } from 'claude-code/testing'
 export const HOME = '/home/me'
 export const NOW_MS = Date.parse('2026-10-03T10:00:00Z')
 export const LEGACY_DIR = `${HOME}/.claude/token-optimizer`
-export const TO_ROOT = '/c/to/5.13.26'
+export const TO_ROOT = '/home/me/.claude/plugins/cache/alexgreensh-token-optimizer/token-optimizer/5.13.26'
 export const SCRIPTS = `${TO_ROOT}/skills/token-optimizer/scripts`
 export const RUNNER = `${TO_ROOT}/hooks/module_runner.py`
 

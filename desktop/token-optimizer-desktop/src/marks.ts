@@ -3,7 +3,10 @@
 import type { CacheView, Limit, Snapshot } from './contracts.ts'
 import type { IconName } from './icons.ts'
 import { ago, clock, duration, minutes, gradeOf, relative, renewal, tokens, type FormatOptions } from './format.ts'
+import { KEEP_WARM_MARGIN_MS } from './clock.ts'
 import { LIMIT_WARN, QUALITY_FLOOR, loseRun, type Action, type Run, type Tone } from './ladder.ts'
+
+const KEEP_WARM_MARGIN_S = KEEP_WARM_MARGIN_MS / 1000
 
 export type MarkId = 'quality' | 'context' | 'cache' | 'fiveHour' | 'week'
 /** 'none' means no data: the drawing layer shows the mark uncoloured. */
@@ -135,7 +138,8 @@ export function marks(s: Snapshot, opts: FormatOptions = {}): Mark[] {
 
 function cacheCard(c: CacheView): Card {
   const est = ` The clock is ${estimateNote(c)}.`
-  const warm: Action[] = c.measured ? [{ id: 'warm', label: 'Keep warm' }] : []
+  // Offered only while a press can still run: not in the last seconds before the cache drops.
+  const warm: Action[] = c.measured && (c.secondsLeft ?? 0) > KEEP_WARM_MARGIN_S ? [{ id: 'warm', label: 'Keep warm' }] : []
   const stake = c.tokensAtStake
   switch (c.state) {
     case 'warm':

@@ -30,8 +30,9 @@ async function passesOn(mounting: Promise<unknown>): Promise<boolean> {
 }
 
 test('desktop draws Clawd, "Token Optimizer", the sentence and five marks', async ($, on) => {
-  stub(on)
+  const w = stub(on)
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
 
   const svgs = await ui.findAll({ type: 'Svg' })
@@ -58,26 +59,29 @@ test('desktop draws Clawd, "Token Optimizer", the sentence and five marks', asyn
 })
 
 test('the terminal draws nothing: its own status line is there', async ($, on) => {
-  stub(on)
+  const w = stub(on)
   await $.session.start({ ...START, surface: 'terminal' })
   expect(await passesOn($.ui.mount({ ...BAND, surface: 'terminal' }))).toBe(true)
 })
 
 test('a survey holds the band', async ($, on) => {
-  stub(on)
+  const w = stub(on)
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   expect(await passesOn($.ui.mount({ ...BAND, props: { ...BAND.props, hasSurvey: true }, surface: 'desktop' }))).toBe(true)
 })
 
 test('switched off, nothing is drawn on desktop', { options: { enabled: false } }, async ($, on) => {
-  stub(on)
+  const w = stub(on)
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   expect(await passesOn($.ui.mount({ ...BAND, surface: 'desktop' }))).toBe(true)
 })
 
 test("the arrow under Clawd unfolds the row, points up while open, and folds it again", async ($, on) => {
-  stub(on)
+  const w = stub(on)
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const arrow = async () => (await ui.find({ key: 'details' }))?.props
 
@@ -100,6 +104,7 @@ test('a cold cache draws the token count bold red, and Keep warm nowhere', async
   const w = stub(on)
   w.status = { ...w.status, requestAgoS: 2 * 3600 }
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
 
   const lose = (await exactly(ui, '620k tokens'))[0]
@@ -115,6 +120,7 @@ test('without savings the row shows "--" totals and the reason, and every other 
   const w = stub(on)
   w.status = { ...w.status, savings: null, savings_state: 'unavailable', savings_reason: 'Savings database not found.' }
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   await ui.press({ key: 'details' })
 
@@ -129,8 +135,9 @@ test('without savings the row shows "--" totals and the reason, and every other 
 })
 
 test("the terminal's dark theme does not darken the desktop: pictures draw light and carry their own dark-mode rule", async ($, on) => {
-  stub(on, { theme: 'dark-daltonized' })
+  const w = stub(on, { theme: 'dark-daltonized' })
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const svgs = await ui.findAll({ type: 'Svg' })
   const clawd = svgs.find(s => String(s.props.alt).startsWith('Clawd: '))
@@ -140,8 +147,9 @@ test("the terminal's dark theme does not darken the desktop: pictures draw light
 })
 
 test('a healthy session offers no row buttons: nothing is called for', async ($, on) => {
-  stub(on)
+  const w = stub(on)
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   await ui.press({ key: 'details' })
   for (const id of ['clean', 'fresh', 'warm']) expect(await ui.find({ key: `row-${id}` }), id).toBeUndefined()
@@ -152,6 +160,7 @@ test('the unfolded row carries every card action that can run now, with no point
   sag(w)
   w.status = { ...w.status, requestAgoS: 3600 - 120 } // two minutes of cache left
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   expect(await ui.find({ key: 'row-fresh' })).toBeUndefined()
   await ui.press({ key: 'details' })
@@ -177,6 +186,7 @@ test('the row offers Keep warm only while it can run: never on a cold cache', as
   sag(w)
   w.status = { ...w.status, requestAgoS: 2 * 3600 }
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   await ui.press({ key: 'details' })
   expect(await ui.find({ key: 'row-fresh' })).toBeDefined()
@@ -186,6 +196,7 @@ test('the row offers Keep warm only while it can run: never on a cold cache', as
 test('a new pose fades in over the old one, which stays beneath until the fade is done', async ($, on) => {
   const w = stub(on)
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const clawds = async () => (await ui.findAll({ type: 'Svg' })).filter(s => String(s.props.alt).startsWith('Clawd: '))
   expect((await clawds()).length).toBe(1)
@@ -203,6 +214,7 @@ test('a new pose fades in over the old one, which stays beneath until the fade i
 test('watching, Clawd has a hidden look toward the band, shown while the pointer is anywhere on it', async ($, on) => {
   const w = stub(on)
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   await w.clock.advance(5000) // past the wake-up
   await w.clock.settle()
@@ -215,6 +227,7 @@ test('watching, Clawd has a hidden look toward the band, shown while the pointer
 test('a compaction the band watched counts at once, before the transcript or Token Optimizer catch up', async ($, on) => {
   const w = stub(on)
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   await w.clock.settle()
   await $.session.compact({
@@ -228,6 +241,7 @@ test('a compaction the band watched counts at once, before the transcript or Tok
 test('a refresh that comes back without the 5-hour limit keeps the mark', async ($, on) => {
   const w = stub(on)
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   await w.clock.settle()
   expect((await exactly(ui, '5 hours')).length).toBeGreaterThan(0)
@@ -245,6 +259,7 @@ test('a new session with no Token Optimizer quality file yet still shows its tim
   delete w.files[key]
   on('tool.call', () => ({ value: { content: 'ok' } }) as never)
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   await w.clock.settle()
   for (let i = 0; i < 3; i++) {
@@ -270,6 +285,7 @@ test('tool calls are counted without a redraw per call; the count lands when the
   delete w.files[key]
   on('tool.call', () => ({ value: { content: 'ok' } }) as never)
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   await ui.press({ key: 'details' })
   await w.clock.settle()
@@ -291,6 +307,7 @@ test('tool calls are counted without a redraw per call; the count lands when the
 test("a compaction Token Optimizer has already counted is not counted again by the band", async ($, on) => {
   const w = stub(on)
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   await w.clock.settle()
   // Token Optimizer's PostCompact refresh records it, and the band re-reads it, while the compaction is still settling.
@@ -313,6 +330,7 @@ test('while savings are first measured the row says so, never "Saved -- tokens"'
   const w = stub(on)
   w.status = { ...w.status, savings: null, savings_state: 'loading', savings_reason: null }
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   await ui.press({ key: 'details' })
   await w.clock.settle()

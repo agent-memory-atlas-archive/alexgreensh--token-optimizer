@@ -41,6 +41,7 @@ const ourClearStarts = async ($: Engine, to: string) => {
 test('Clean up while a turn runs: no compaction and a one-line note', async ($, on) => {
   const w = stub(on)
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   await $.turn.start({ text: 'go', turnId: 't1' })
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
 
@@ -55,6 +56,7 @@ test('Clean up while a turn runs: no compaction and a one-line note', async ($, 
 test('a skipped compaction returns the sentence to its rule and names the skip', async ($, on) => {
   const w = stub(on, { compact: 'skip' })
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
 
   await ui.press({ key: 'card-quality-clean' })
@@ -70,6 +72,7 @@ test('a skipped compaction returns the sentence to its rule and names the skip',
 test('a compaction that hangs past the timeout no longer says "Cleaning up."', async ($, on) => {
   const w = stub(on, { compact: 'hang' })
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
 
   await ui.press({ key: 'card-quality-clean' })
@@ -88,6 +91,7 @@ test('Keep warm 10 s before the deadline is refused', async ($, on) => {
   const w = stub(on)
   w.status = { ...w.status, requestAgoS: 3590 }
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
 
   expect((await ui.find({ key: 'action' }))?.props.label).toBe('Keep warm')
@@ -101,6 +105,7 @@ test('Keep warm 200 s before the deadline forks once, however often it is presse
   const w = stub(on, { forkDelayMs: 2000 })
   w.status = { ...w.status, requestAgoS: 3400 }
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
 
   await ui.press({ key: 'action' })
@@ -123,6 +128,7 @@ test('a warm-up that reads almost nothing finds the cache lapsed: cold, and the 
   const w = stub(on, { fork: { read: 10 } })
   w.status = { ...w.status, requestAgoS: 3400 }
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
 
   await ui.press({ key: 'action' })
@@ -135,6 +141,7 @@ test('a warm-up that reads almost nothing finds the cache lapsed: cold, and the 
 test('Start fresh arms on the first press; after 5 s the next press arms again without acting', async ($, on) => {
   const w = stub(on)
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
 
   await ui.press({ key: 'card-quality-fresh' })
@@ -152,6 +159,7 @@ test('Start fresh arms on the first press; after 5 s the next press arms again w
 test('Start fresh confirmed: capture, clear, then the held text joins the first prompt once, with no cross-session pointer', async ($, on) => {
   const w = stub(on, { captureDelayMs: 1000 })
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   await $.classic.UserPromptSubmit({ prompt: 'hi', transcript_path: '/t/sess-1.jsonl', session_id: 'sess-1' } as never).catch(() => undefined)
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   ourClearEnds($, w, 'sess-1', 'sess-2')
@@ -191,6 +199,7 @@ test('Start fresh confirmed: capture, clear, then the held text joins the first 
 test('a failed capture, a stub checkpoint, or an empty resume queues no clear', async ($, on) => {
   const w = stub(on)
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
 
   for (const patch of [{ capture: 'fail' as const }, { capture: 'stub' as const }, { capture: 'ok' as const, lean: '' }]) {
@@ -209,6 +218,7 @@ test('a pending hand-off on disk survives a restart and joins the first prompt o
   const handoff = { fromSessionId: 'sess-0', cwd: '/work/project', checkpointPath: '/cp.md', text: 'HELD FROM BEFORE', createdAt: NOW_MS - 1000 }
   const w = stub(on, { store: { handoff }, startedAt: NOW_MS - 500 })
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   expect(await has(ui, 'Checkpoint ready, it joins your first message.')).toBe(true)
 
@@ -231,6 +241,7 @@ const confirmFresh = async (ui: Mount) => {
 test('a /clear typed while Start fresh saves its checkpoint queues no second clear (TR-01)', async ($, on) => {
   const w = stub(on, { captureDelayMs: 1000 })
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await mountBand($)
   await confirmFresh(ui)
   await w.clock.settle()
@@ -248,6 +259,7 @@ test('a /clear typed while Start fresh saves its checkpoint queues no second cle
 test('a turn started while Start fresh saves its checkpoint stops it before the clear (TR-02)', async ($, on) => {
   const w = stub(on, { captureDelayMs: 1000 })
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await mountBand($)
   await confirmFresh(ui)
   await w.clock.settle()
@@ -261,6 +273,7 @@ test('a turn started while Start fresh saves its checkpoint stops it before the 
 test('two presses of Clean up at once start one compaction (TR-02)', async ($, on) => {
   const w = stub(on)
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await mountBand($)
   await Promise.all([ui.press({ key: 'card-quality-clean' }), ui.press({ key: 'card-quality-clean' })])
   await w.clock.settle()
@@ -270,6 +283,7 @@ test('two presses of Clean up at once start one compaction (TR-02)', async ($, o
 test('a /clear disarms Start fresh: one press in the new session arms again, never clears (TR-07)', async ($, on) => {
   const w = stub(on)
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await mountBand($)
   await ui.press({ key: 'card-quality-fresh' })
   w.sessionId = 'sess-2'
@@ -287,6 +301,7 @@ for (const [why, held] of [
     // A session that started since the save: only the age rules it out.
     const w = stub(on, { store: { handoff: held }, startedAt: NOW_MS - 1 })
     await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
     const ui = await mountBand($)
     expect(await has(ui, 'Checkpoint ready')).toBe(false)
     const first = await $.prompt.submit({ text: 'go on', wait: false, origin: COMPOSER })
@@ -296,6 +311,7 @@ for (const [why, held] of [
     // Deleted: the next start finds nothing to drop.
     w.sessionId = 'sess-2'
     await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
     expect(w.toasts.length).toBe(1)
   })
 }
@@ -303,6 +319,7 @@ for (const [why, held] of [
 test('a clear still queued after 120 s keeps the hand-off and says when it will clear (TR-06)', async ($, on) => {
   const w = stub(on)
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await mountBand($)
   ourClearEnds($, w, 'sess-1', 'sess-2', 125_000)
   await confirmFresh(ui)
@@ -325,6 +342,7 @@ test('a prompt rejected beneath the band keeps the hand-off for the next one (TR
   const handoff = { fromSessionId: 'sess-0', cwd: '/work/project', checkpointPath: '/cp.md', text: 'LEAN HANDOFF TEXT', createdAt: NOW_MS - 1000 }
   const w = stub(on, { store: { handoff }, submitFails: 1, startedAt: NOW_MS - 500 })
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   await expect($.prompt.submit({ text: 'go on', wait: false, origin: COMPOSER })).rejects.toBeDefined()
   const retry = await $.prompt.submit({ text: 'go on', wait: false, origin: COMPOSER })
   expect(retry.context).toEqual(['LEAN HANDOFF TEXT'])
@@ -334,6 +352,7 @@ test('a Keep warm that lands after a clear leaves the new session\'s clock alone
   const w = stub(on, { forkDelayMs: 2000 })
   w.status = { ...w.status, requestAgoS: 3400 }
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await mountBand($)
   await ui.press({ key: 'action' })
   await w.clock.settle()
@@ -352,6 +371,7 @@ test('a Keep warm fork that never answers gives up after 120 s and can be presse
   const w = stub(on, { forkDelayMs: 10 * 60_000 })
   w.status = { ...w.status, requestAgoS: 3400 }
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await mountBand($)
   await ui.press({ key: 'action' })
   await w.clock.settle()
@@ -366,6 +386,7 @@ test('a Keep warm fork that never answers gives up after 120 s and can be presse
 test('a hand-off the band cannot hold stops Start fresh before the clear (TR-11)', async ($, on) => {
   const w = stub(on, { handoffWriteFails: 100 })
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await mountBand($)
   await confirmFresh(ui)
   await w.clock.settle()
@@ -375,6 +396,7 @@ test('a hand-off the band cannot hold stops Start fresh before the clear (TR-11)
   // Nothing was left on disk for a later session to pick up.
   w.sessionId = 'sess-3'
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const first = await $.prompt.submit({ text: 'go', wait: false, origin: COMPOSER })
   expect(first.context ?? []).toEqual([])
 })
@@ -382,6 +404,7 @@ test('a hand-off the band cannot hold stops Start fresh before the clear (TR-11)
 test('a turn that fails beneath the band still ends the turn on the band (TR-18)', async ($, on) => {
   const w = stub(on, { completeFails: 1 })
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   await $.turn.start({ text: 'go', turnId: 't1' })
   await expect($.turn.complete(turnEnd('error'))).rejects.toBeDefined()
   await w.clock.settle()
@@ -411,6 +434,7 @@ test('Keep warm with no recorded context size names the session\'s own size when
   const w = stub(on, { fork: { read: 0 }, seed: { clock: { anchor: NOW_MS - 3400_000, lifetime: '1h', contextTokens: 0, working: false, warming: false, lapsed: false } } })
   w.status = { ...w.status, requestAgoS: 3400 }
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await mountBand($)
   await ui.press({ key: 'action' })
   await w.clock.settle()
@@ -421,9 +445,11 @@ test('Keep warm with no recorded context size names the session\'s own size when
 test('a new session starts with its own clock, not the last one\'s (TR-04)', async ($, on) => {
   const w = stub(on)
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   w.sessionId = 'sess-9'
   w.status = { ...w.status, requestAgoS: null, cache_lifetime: null }
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await mountBand($)
   expect(await cacheAlt(ui)).toBe('Cache clock starts after the first reply')
   const labels = (await ui.findAll({ type: 'Button' })).map(b => b.props.label)
@@ -433,9 +459,11 @@ test('a new session starts with its own clock, not the last one\'s (TR-04)', asy
 test('resuming an older session shows that session\'s own cache clock (TR-04)', async ($, on) => {
   const w = stub(on)
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   w.sessionId = 'sess-old'
   w.status = { ...w.status, requestAgoS: 2 * 3600 }
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await mountBand($)
   expect((await cacheAlt(ui))?.startsWith('Cache cold')).toBe(true)
 })
@@ -443,6 +471,7 @@ test('resuming an older session shows that session\'s own cache clock (TR-04)', 
 test('a refresh that started before a clear never brings the old clock into the new session (TR-03)', async ($, on) => {
   const w = stub(on)
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   // The savings refresh a few seconds after a turn is still waiting on the status command when /clear lands.
   w.statusDelayMs = 5000
   await $.turn.start({ text: 'go', turnId: 't1' })
@@ -463,6 +492,7 @@ test('a hand-off from another project is left for its owner: not joined, not del
   // Project B's session started after the save: only the project rules it out.
   const w = stub(on, { store: { handoff }, startedAt: NOW_MS - 500 })
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await mountBand($)
   expect(await has(ui, 'Checkpoint ready')).toBe(false)
   const first = await $.prompt.submit({ text: 'project b', wait: false, origin: COMPOSER })
@@ -480,10 +510,12 @@ test('an expired hand-off from another project is still left for its owner, who 
   const handoff = { fromSessionId: 'sess-a1', cwd: '/work/other', checkpointPath: '/cp.md', text: 'PROJECT A WORK', createdAt: NOW_MS - 1000 }
   const w = stub(on, { store: { handoff }, startedAt: NOW_MS - 500 })
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   await w.clock.advance(10 * 60_000)
   const later = await $.prompt.submit({ text: 'project b later', wait: false, origin: COMPOSER })
   expect(later.context ?? []).toEqual([])
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   expect(w.toasts).toEqual([])
   w.sessionId = 'sess-a2'
   w.cwd = '/work/other'
@@ -495,6 +527,7 @@ test('a session that began before the hand-off was saved never takes it, and say
   const handoff = { fromSessionId: 'sess-0', cwd: '/work/project', checkpointPath: '/cp.md', text: 'NOT FOR AN OLDER SESSION', createdAt: NOW_MS - 1000 }
   const w = stub(on, { store: { handoff } })
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await mountBand($)
   expect(await has(ui, 'Checkpoint ready')).toBe(false)
   const first = await $.prompt.submit({ text: 'go on', wait: false, origin: COMPOSER })
@@ -506,6 +539,7 @@ test('a session that began before the hand-off was saved never takes it, and say
 test('a /clear typed right after Start fresh: the fresh conversation still gets the hand-off, once (KTD10)', async ($, on) => {
   const w = stub(on)
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await mountBand($)
   ourClearEnds($, w, 'sess-1', 'sess-2')
   await confirmFresh(ui)
@@ -531,6 +565,7 @@ test('a /clear typed right after Start fresh: the fresh conversation still gets 
 test('a reload between Start fresh\'s clear and the first prompt still delivers the hand-off (KTD10)', async ($, on) => {
   const w = stub(on)
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await mountBand($)
   ourClearEnds($, w, 'sess-1', 'sess-2')
   await confirmFresh(ui)
@@ -538,8 +573,10 @@ test('a reload between Start fresh\'s clear and the first prompt still delivers 
   expect(w.commands).toEqual(['clear'])
   // The mod reloads before the new conversation announces itself: the band starts over.
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   await ourClearStarts($, 'sess-2')
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const first = await $.prompt.submit({ text: 'continue', wait: false, origin: COMPOSER })
   expect(first.context).toEqual(['LEAN HANDOFF TEXT'])
 })
@@ -547,6 +584,7 @@ test('a reload between Start fresh\'s clear and the first prompt still delivers 
 test('a lost classic SessionStart still delivers the hand-off on the first prompt (KTD10)', async ($, on) => {
   const w = stub(on)
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await mountBand($)
   ourClearEnds($, w, 'sess-1', 'sess-2')
   await confirmFresh(ui)
@@ -563,6 +601,7 @@ test('a lost classic SessionStart still delivers the hand-off on the first promp
 test('the session that pressed Start fresh never takes its own hand-off while the clear waits (KTD10)', async ($, on) => {
   const w = stub(on)
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await mountBand($)
   ourClearEnds($, w, 'sess-1', 'sess-2', 60_000)
   await confirmFresh(ui)
@@ -580,6 +619,7 @@ test('the session that pressed Start fresh never takes its own hand-off while th
 test('a Start fresh that stands down because the session changed says so (R2)', async ($, on) => {
   const w = stub(on, { captureDelayMs: 1000 })
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await mountBand($)
   await confirmFresh(ui)
   await w.clock.settle()
@@ -594,6 +634,7 @@ test('a Start fresh that stands down because the session changed says so (R2)', 
 test('a press that hangs frees the buttons once the busy timeout passes (R3)', async ($, on) => {
   const w = stub(on, { uiWriteHangs: 1 })
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await mountBand($)
   await ui.press({ key: 'card-quality-clean' })
   await w.clock.settle()
@@ -608,6 +649,7 @@ test('a resume with no session.start shows no old clock and offers no Keep warm,
   const w = stub(on)
   w.status = { ...w.status, requestAgoS: 3400 }
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await mountBand($)
   expect((await ui.find({ key: 'action' }))?.props.label).toBe('Keep warm')
   // The person resumes an older session: the id changes, no session.start fires.
@@ -624,6 +666,7 @@ test('a warm-up left marked running by a reload is cleared, and Keep warm can ru
   const w = stub(on, { seed: { clock: { anchor: NOW_MS - 3400_000, lifetime: '1h', contextTokens: 620_000, working: false, warming: true, lapsed: false } } })
   w.status = { ...w.status, requestAgoS: 3400 }
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await mountBand($)
   expect(await has(ui, 'Keeping the cache warm.')).toBe(false)
   await ui.press({ key: 'action' })
@@ -634,6 +677,7 @@ test('a warm-up left marked running by a reload is cleared, and Keep warm can ru
 test('a /clear typed while Start fresh\'s clear waits: the hand-off joins the conversation its own clear creates (R4)', async ($, on) => {
   const w = stub(on)
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await mountBand($)
   // The person's /clear runs first; ours then clears the conversation it made.
   w.clearBeneath = async () => {
@@ -652,6 +696,7 @@ test('a /clear typed while Start fresh\'s clear waits: the hand-off joins the co
 test('Clean up while the last compaction still runs past the busy timeout starts no second one', async ($, on) => {
   const w = stub(on, { compact: 'hang' })
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await mountBand($)
   await ui.press({ key: 'card-quality-clean' })
   await w.clock.settle()
@@ -667,6 +712,7 @@ test('Clean up while the last compaction still runs past the busy timeout starts
 test('Start fresh while its last clear is still queued past the busy timeout queues no second clear', async ($, on) => {
   const w = stub(on)
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await mountBand($)
   ourClearEnds($, w, 'sess-1', 'sess-2', 10 * 60_000)
   await confirmFresh(ui)
@@ -683,6 +729,7 @@ test('Start fresh while its last clear is still queued past the busy timeout que
 test('a compaction timed out but still running refuses Start fresh: no capture, no clear (one engine call)', async ($, on) => {
   const w = stub(on, { compact: 'hang' })
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await mountBand($)
   await ui.press({ key: 'card-quality-clean' })
   await w.clock.settle()
@@ -699,6 +746,7 @@ test('a compaction timed out but still running refuses Start fresh: no capture, 
 test('Start fresh\'s clear timed out but still running refuses Clean up: no compaction (one engine call)', async ($, on) => {
   const w = stub(on)
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await mountBand($)
   ourClearEnds($, w, 'sess-1', 'sess-2', 10 * 60_000)
   await confirmFresh(ui)
@@ -715,6 +763,7 @@ test('Start fresh\'s clear timed out but still running refuses Clean up: no comp
 test('two quick presses start one engine call', async ($, on) => {
   const w = stub(on)
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await mountBand($)
   await ui.press({ key: 'card-quality-fresh' })
   await Promise.all([ui.press({ key: 'action' }), ui.press({ key: 'card-quality-clean' })])
@@ -737,6 +786,7 @@ for (const kind of ['compact', 'clear'] as const) {
     // The band reloaded while its engine call was in flight: only the persisted record is left.
     const w = stub(on, { seed: { engineCall: { kind, startedAt: NOW_MS - 60_000 } } })
     await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
     const ui = await mountBand($)
     await ui.press({ key: 'card-quality-clean' })
     await w.clock.settle()
@@ -754,6 +804,7 @@ for (const kind of ['compact', 'clear'] as const) {
 test('a persisted engine call older than 10 minutes is cleared and blocks nothing', async ($, on) => {
   const w = stub(on, { seed: { engineCall: { kind: 'compact', startedAt: NOW_MS - 10 * 60_000 - 1 } } })
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await mountBand($)
   await ui.press({ key: 'card-quality-clean' })
   await w.clock.settle()
@@ -764,6 +815,7 @@ test('a persisted engine call older than 10 minutes is cleared and blocks nothin
 test('our engine call is recorded before it runs and cleared when it settles', async ($, on) => {
   const w = stub(on)
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await mountBand($)
   await ui.press({ key: 'card-quality-clean' })
   await w.clock.settle()
@@ -775,6 +827,7 @@ test('a store that cannot be read attaches nothing, even with a hand-off mirrore
   const handoff = { fromSessionId: 'sess-0', cwd: '/work/project', checkpointPath: '/cp.md', text: 'MIRROR ONLY', createdAt: NOW_MS - 1000 }
   const w = stub(on, { store: { handoff }, seed: { handoff }, startedAt: NOW_MS - 500, storeGetFails: 1 })
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   w.storeGetFails = 1
   const first = await $.prompt.submit({ text: 'go on', wait: false, origin: COMPOSER })
   expect(first.context ?? []).toEqual([])
@@ -784,6 +837,7 @@ test('a hand-off whose delete fails is not attached and stays held', async ($, o
   const handoff = { fromSessionId: 'sess-0', cwd: '/work/project', checkpointPath: '/cp.md', text: 'HELD', createdAt: NOW_MS - 1000 }
   const w = stub(on, { store: { handoff }, startedAt: NOW_MS - 500 })
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   w.storeDeleteFails = 1
   const first = await $.prompt.submit({ text: 'go on', wait: false, origin: COMPOSER })
   expect(first.context ?? []).toEqual([])
@@ -796,6 +850,7 @@ test('a hand-off whose delete fails is not attached and stays held', async ($, o
 test('the hand-off is stamped when its save lands: a session started during the save never takes it', async ($, on) => {
   const w = stub(on, { storeSetDelayMs: 2000 })
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await mountBand($)
   w.clearBeneath = async () => {
     await $.session.end({ reason: 'clear', sessionId: 'sess-1', resume: {} } as never)
@@ -822,6 +877,7 @@ test('the hand-off is stamped when its save lands: a session started during the 
 test('a clear whose new session cannot say when it started shows no "Checkpoint ready", keeps the pointer, attaches nothing', async ($, on) => {
   const w = stub(on)
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await mountBand($)
   w.clearBeneath = async () => {
     await $.session.end({ reason: 'clear', sessionId: 'sess-1', resume: {} } as never)
@@ -845,6 +901,7 @@ test('a clear whose new session cannot say when it started shows no "Checkpoint 
 test('a clear uses the new session\'s own start time, not when the event arrived', async ($, on) => {
   const w = stub(on)
   await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
   const ui = await mountBand($)
   w.clearBeneath = async () => {
     await $.session.end({ reason: 'clear', sessionId: 'sess-1', resume: {} } as never)
