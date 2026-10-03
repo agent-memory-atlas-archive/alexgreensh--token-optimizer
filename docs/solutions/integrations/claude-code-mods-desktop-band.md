@@ -24,6 +24,8 @@ The mod API declarations leave several behaviours the status bar depends on unst
 - **`$.command.run({ command: 'clear' })` is allowed for a plugin** when run outside the calling hook. It fires `session.end` with reason `clear`, then the classic `SessionStart` with source `clear`, whose `additionalContext` carries Token Optimizer's "Cross-session checkpoint" pointer. No `session.start` fires afterwards.
 - **`$.session.usage()`** returns `{ startedAt, context: { tokens, window, percent }, rateLimits: [{ kind: 'five_hour' | 'seven_day', percentUsed, resetsAt }], cost }`.
 - **Validator rule:** `$` may be passed only to functions declared at the top of the module (a function declaration or a const bound to one). Helpers defined inside `register` that take `$` fail `claude plugin validate`.
+- **One hooks module per plugin, and `$` never crosses an import.** A two-entry `modules` list is refused. `$.env.get` takes only literal variable names, and `atom()` needs a literal `{ plugin, key }` in the hooks module itself. Shared logic therefore takes a small adapter built from `$` inside the hooks module, which also makes it testable under plain Node.
+- **`PluginState` is keyed by plugin, then by atom key** (`PluginState['token-optimizer-desktop'].session`).
 - **Plugin tests:** `claude plugin test` runs every `*.test.ts(x)` inside the engine, where `node:test` cannot be imported. Pure Node tests therefore use `*.spec.ts`.
 - **Rollout switch:** a stale "switched off" state cached by an earlier session blocks `claude plugin test` until any `claude` run refreshes it with network access.
 
