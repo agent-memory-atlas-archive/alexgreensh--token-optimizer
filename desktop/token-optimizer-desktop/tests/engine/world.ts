@@ -59,6 +59,8 @@ export type World = {
   cwd: string
   /** How many of the next writes of the band's UI state hang (10 minutes on the mocked clock). */
   uiWriteHangs: number
+  /** What a plugin-run `/clear` does beneath the band before its call resolves (the engine ends the old session inside it). */
+  clearBeneath: (() => Promise<void>) | null
   runs: { argv: string[]; stdin?: string }[]
   toasts: string[]
   compacts: number
@@ -115,6 +117,7 @@ export function stub(on: On, patch: Partial<Omit<World, 'clock' | 'runs' | 'toas
     store: {},
     cwd: '/work/project',
     uiWriteHangs: 0,
+    clearBeneath: null,
     runs: [],
     toasts: [],
     compacts: 0,
@@ -239,8 +242,9 @@ export function stub(on: On, patch: Partial<Omit<World, 'clock' | 'runs' | 'toas
       },
     }
   })
-  on('command.run', (_, e) => {
+  on('command.run', async (_, e) => {
     w.commands.push(e.command)
+    if (e.command === 'clear' && w.clearBeneath) await w.clearBeneath()
     return { text: '' }
   })
 

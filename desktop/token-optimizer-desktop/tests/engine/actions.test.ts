@@ -18,6 +18,21 @@ const clearLands = async ($: Engine, w: { sessionId: string }, from: string, to:
   w.sessionId = to
   lastStart = await $.classic.SessionStart({ source: 'clear', session_id: to } as never)
 }
+/**
+ * Start fresh's own clear as the engine runs it: the old session ends inside
+ * the band's `command.run` call, the call resolves, then the classic
+ * SessionStart arrives on its own (as observed on Claude Code).
+ */
+const ourClearEnds = ($: Engine, w: { sessionId: string; clearBeneath: (() => Promise<void>) | null; clock: { sleep: (ms: number) => Promise<void> } }, from: string, to: string, afterMs = 0) => {
+  w.clearBeneath = async () => {
+    if (afterMs) await w.clock.sleep(afterMs)
+    await $.session.end({ reason: 'clear', sessionId: from, resume: {} } as never)
+    w.sessionId = to
+  }
+}
+const ourClearStarts = async ($: Engine, to: string) => {
+  lastStart = await $.classic.SessionStart({ source: 'clear', session_id: to } as never)
+}
 
 test('Clean up while a turn runs: no compaction and a one-line note', async ($, on) => {
   const w = stub(on)
@@ -132,6 +147,7 @@ test('Start fresh confirmed: capture, clear, then the held text joins the first 
   await $.session.start(START)
   await $.classic.UserPromptSubmit({ prompt: 'hi', transcript_path: '/t/sess-1.jsonl', session_id: 'sess-1' } as never).catch(() => undefined)
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  ourClearEnds($, w, 'sess-1', 'sess-2')
 
   await ui.press({ key: 'card-quality-fresh' })
   await ui.press({ key: 'action' })
@@ -150,9 +166,8 @@ test('Start fresh confirmed: capture, clear, then the held text joins the first 
   expect(JSON.parse(capture?.stdin ?? '{}').session_id).toBe('sess-1')
   expect(w.runs.find(r => r.argv.includes('resume-lean'))?.argv.slice(-3)).toEqual(['resume-lean', 'sess-1', '--print'])
   expect(w.commands).toEqual(['clear'])
-  expect(await has(ui, 'Clearing.')).toBe(true)
 
-  await clearLands($, w, 'sess-1', 'sess-2')
+  await ourClearStarts($, 'sess-2')
   const started = lastStart
   const context = (started as { additionalContext?: string[] }).additionalContext ?? []
   expect(context.join('\n').includes('Cross-session checkpoint')).toBe(false)
@@ -277,15 +292,19 @@ test('a clear still queued after 120 s keeps the hand-off and says when it will 
   const w = stub(on)
   await $.session.start(START)
   const ui = await mountBand($)
+  ourClearEnds($, w, 'sess-1', 'sess-2', 125_000)
   await confirmFresh(ui)
   await w.clock.settle()
   expect(w.commands).toEqual(['clear'])
+  expect(await has(ui, 'Clearing.')).toBe(true)
 
   await w.clock.advance(120_000)
   expect(w.toasts.at(-1)).toBe('Start fresh clears when the current turn ends.')
   expect(await has(ui, 'Clearing.')).toBe(false)
 
-  await clearLands($, w, 'sess-1', 'sess-2')
+  await w.clock.advance(5_000)
+  await w.clock.settle()
+  await ourClearStarts($, 'sess-2')
   const first = await $.prompt.submit({ text: 'continue', wait: false, origin: COMPOSER })
   expect(first.context).toEqual(['LEAN HANDOFF TEXT'])
 })
@@ -467,10 +486,11 @@ test('a later manual /clear does not pick up the hand-off Start fresh made for a
   const w = stub(on)
   await $.session.start(START)
   const ui = await mountBand($)
+  ourClearEnds($, w, 'sess-1', 'sess-2')
   await confirmFresh(ui)
   await w.clock.settle()
   expect(w.commands).toEqual(['clear'])
-  await clearLands($, w, 'sess-1', 'sess-2')
+  await ourClearStarts($, 'sess-2')
   // The person types /clear before sending anything.
   await clearLands($, w, 'sess-2', 'sess-3')
   const first = await $.prompt.submit({ text: 'unrelated', wait: false, origin: COMPOSER })
@@ -538,4 +558,72 @@ test('a warm-up left marked running by a reload is cleared, and Keep warm can ru
   await ui.press({ key: 'action' })
   await w.clock.settle()
   expect(w.forks).toBe(1)
+})
+
+test('a /clear typed while Start fresh\'s clear waits: the hand-off joins the conversation its own clear creates (R4)', async ($, on) => {
+  const w = stub(on)
+  await $.session.start(START)
+  const ui = await mountBand($)
+  // The person's /clear runs first; ours then clears the conversation it made.
+  w.clearBeneath = async () => {
+    await clearLands($, w, 'sess-1', 'sess-u')
+    await $.session.end({ reason: 'clear', sessionId: 'sess-u', resume: {} } as never)
+    w.sessionId = 'sess-2'
+  }
+  await confirmFresh(ui)
+  await w.clock.settle()
+  expect(w.commands).toEqual(['clear'])
+  await ourClearStarts($, 'sess-2')
+  const first = await $.prompt.submit({ text: 'continue', wait: false, origin: COMPOSER })
+  expect(first.context).toEqual(['LEAN HANDOFF TEXT'])
+})
+
+for (const [why, between] of [
+  ['a new session starts', async ($: Engine) => void (await $.session.start(START))],
+  ['nothing else happens', async () => undefined],
+] as const) {
+  test(`Start fresh's clear whose new conversation never announced itself: after ${why}, a later /clear never claims the hand-off (R4)`, async ($, on) => {
+    const w = stub(on)
+    await $.session.start(START)
+    const ui = await mountBand($)
+    ourClearEnds($, w, 'sess-1', 'sess-2')
+    await confirmFresh(ui)
+    await w.clock.settle()
+    expect(w.commands).toEqual(['clear'])
+    await between($)
+    await clearLands($, w, 'sess-2', 'sess-3')
+    const first = await $.prompt.submit({ text: 'unrelated', wait: false, origin: COMPOSER })
+    expect(first.context ?? []).toEqual([])
+  })
+}
+
+test('Clean up while the last compaction still runs past the busy timeout starts no second one', async ($, on) => {
+  const w = stub(on, { compact: 'hang' })
+  await $.session.start(START)
+  const ui = await mountBand($)
+  await ui.press({ key: 'card-quality-clean' })
+  await w.clock.settle()
+  expect(w.compacts).toBe(1)
+  await w.clock.advance(120_001)
+  w.toasts = []
+  await ui.press({ key: 'card-quality-clean' })
+  await w.clock.settle()
+  expect(w.compacts).toBe(1)
+  expect(w.toasts).toEqual(['Still finishing the last clean-up.'])
+})
+
+test('Start fresh while its last clear is still queued past the busy timeout queues no second clear', async ($, on) => {
+  const w = stub(on)
+  await $.session.start(START)
+  const ui = await mountBand($)
+  ourClearEnds($, w, 'sess-1', 'sess-2', 10 * 60_000)
+  await confirmFresh(ui)
+  await w.clock.settle()
+  expect(w.commands).toEqual(['clear'])
+  await w.clock.advance(120_001)
+  w.toasts = []
+  await confirmFresh(ui)
+  await w.clock.settle()
+  expect(w.commands).toEqual(['clear'])
+  expect(w.toasts).toEqual(['Still clearing.'])
 })

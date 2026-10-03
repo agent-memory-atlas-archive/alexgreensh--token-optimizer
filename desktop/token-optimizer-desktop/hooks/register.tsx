@@ -103,11 +103,17 @@ let sessionGen = 0
  */
 let claim: { at: number } | null = null
 /**
- * The clear Start fresh queued in this process, for the hand-off it carries;
- * `ended` once `session.end` (reason clear) fired for the old session. The
- * classic SessionStart that follows stamps the hand-off with the new id (R4).
+ * Start fresh's own clear, for the hand-off it carries (R4). While our
+ * `$.command.run` is unsettled, `endedId` is the session the last clear ended
+ * (our call runs ours, so the last one is ours) and `startedId` a conversation
+ * that followed it. Settled with a clear behind it, the marker waits for the
+ * next classic start only; any other end, a session.start, or a call that ran
+ * no clear retires it, so a later clear can never claim it.
  */
-let clearFor: { fromSessionId: string; createdAt: number; ended: boolean } | null = null
+let clearFor: { fromSessionId: string; createdAt: number; inFlight: boolean; endedId: string | null; startedId: string | null } | null = null
+/** An engine compaction or clear the band started and has not settled yet, whatever the busy timeout says. */
+let compactRunning = false
+let clearRunning = false
 /** The live session a render last asked to re-read after finding another session's figures (TR-04). */
 let resyncFor = ''
 
@@ -388,6 +394,10 @@ async function cleanUp($: EngineInterface): Promise<void> {
   const ui = (await attempt(() => read($, uiAtom), null)) ?? initialUi()
   if (busyNow(ui, now) !== null) return
   await disarm($)
+  if (compactRunning) {
+    toast($, 'Still finishing the last clean-up.')
+    return
+  }
   if (await isTurnRunning($)) {
     toast($, 'Clean up waits until the turn finishes.')
     return
@@ -408,11 +418,14 @@ async function runCompact($: EngineInterface, since: number): Promise<void> {
     return
   }
   let skip: string | null = null
+  compactRunning = true
   try {
     const result = await $.session.compact()
     if (result.skip) skip = result.skip
   } catch (error) {
     skip = error instanceof Error && error.message ? error.message.split('\n')[0] ?? 'it failed' : 'it failed'
+  } finally {
+    compactRunning = false
   }
   const ui = await attempt(() => read($, uiAtom), null)
   // Timed out meanwhile, or another step took over: nothing to report here.
@@ -509,6 +522,11 @@ async function startFresh($: EngineInterface): Promise<void> {
     await setUi($, u => ({ ...u, freshArmedAt: now }))
     return
   }
+  if (clearRunning) {
+    await disarm($)
+    toast($, 'Still clearing.')
+    return
+  }
   if (await isTurnRunning($)) {
     await disarm($)
     toast($, 'Start fresh waits until the turn finishes.')
@@ -568,6 +586,8 @@ async function runFresh($: EngineInterface, sid: string, since: number, gen: num
   // Timed out meanwhile: the person was told; clear nothing.
   if (!ui || ui.busy !== 'fresh-capture' || ui.busySince !== since) return
   if (!result.ok) return stop(result.reason)
+  // A clear of ours still running: a second would wipe the conversation it made.
+  if (clearRunning) return stop('the last clear is still running')
   // A turn started during the capture: a queued clear would wipe it (TR-02).
   if (await isTurnRunning($)) {
     await standDown()
@@ -594,20 +614,31 @@ async function runFresh($: EngineInterface, sid: string, since: number, gen: num
   const now = await $.clock.now()
   await setUi($, u => withBusy(u, 'fresh-clear', now))
   armBusyTimeout($, 'fresh-clear', now)
-  clearFor = { fromSessionId: sid, createdAt: result.handoff.createdAt, ended: false }
+  clearFor = { fromSessionId: sid, createdAt: result.handoff.createdAt, inFlight: true, endedId: null, startedId: null }
+  clearRunning = true
   $.clock.after(0, () => void runClear($, now, result.handoff))
 }
 
 async function runClear($: EngineInterface, since: number, handoff: Handoff): Promise<void> {
+  const mine = () => (clearFor?.fromSessionId === handoff.fromSessionId && clearFor.createdAt === handoff.createdAt ? clearFor : null)
   try {
     await $.command.run({ command: 'clear' })
+    clearRunning = false
+    const m = mine()
+    if (!m) return
+    // A conversation already followed our clear (start before settle): it is ours.
+    if (m.startedId) {
+      clearFor = null
+      await stampHandoff($, m, m.startedId)
+    } else clearFor = m.endedId ? { ...m, inFlight: false } : null
   } catch {
+    clearRunning = false
     const held = await attempt(() => read($, handoffAtom), null)
     const ours = held !== null && held.fromSessionId === handoff.fromSessionId && held.createdAt === handoff.createdAt
     const ui = await attempt(() => read($, uiAtom), null)
     const waiting = ui !== null && ui.busy === 'fresh-clear' && ui.busySince === since
     // Still ours to report: the step is on show, or the hand-off still waits for this clear (TR-06).
-    if (clearFor?.fromSessionId === handoff.fromSessionId && clearFor.createdAt === handoff.createdAt) clearFor = null
+    if (mine()) clearFor = null
     if (!ours && !waiting) return
     if (ours) await dropHandoff($)
     const now = await $.clock.now()
@@ -859,14 +890,18 @@ export const register: Register = (on, options) => {
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)
+    // A start is no clear of ours: a marker still waiting is stale (R4).
+    clearFor = null
     active = enabled && e.isInteractive && e.surface !== 'terminal' && e.surface !== 'vscode'
     if (active) await start($)
     return result
   })
 
-  // Start fresh's own clear ends the old session first (R4).
+  // Start fresh's own clear ends the old session inside our call (R4): the last clear to end then is ours.
   on('session.end', async ($, e, next) => {
-    if (clearFor && e.reason === 'clear' && cleanId(e.sessionId) === clearFor.fromSessionId) clearFor = { ...clearFor, ended: true }
+    if (clearFor?.inFlight) {
+      if (e.reason === 'clear') clearFor = { ...clearFor, endedId: cleanId(e.sessionId), startedId: null }
+    } else clearFor = null
     return next(e)
   })
 
@@ -878,9 +913,11 @@ export const register: Register = (on, options) => {
     sessionGen += 1
     if (e.transcript_path) transcriptPath = e.transcript_path
     const sid = cleanId(e.session_id)
-    // Only the clear Start fresh queued hands its hand-off to this conversation (R4).
-    const landed = clearFor?.ended ? clearFor : null
-    clearFor = null
+    // Only Start fresh's own clear hands its hand-off to this conversation (R4).
+    // Mid-call, a start after the last end is noted; the call's settling decides.
+    const landed = clearFor && !clearFor.inFlight ? clearFor : null
+    if (landed) clearFor = null
+    else if (clearFor?.inFlight && clearFor.endedId !== null) clearFor = { ...clearFor, startedId: sid }
     if (landed) await stampHandoff($, landed, sid)
     await feedClock($, { type: 'clear' })
     lastCold = false
