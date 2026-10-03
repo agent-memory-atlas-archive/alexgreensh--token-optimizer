@@ -46114,6 +46114,7 @@ _STATUS_BAR_LOCK_STALE_S = 120
 # The detached refresh child reads its lock's owner token from this variable.
 _STATUS_BAR_LOCK_TOKEN_ENV = "TO_STATUS_BAR_LOCK_TOKEN"
 _STATUS_BAR_CACHE_RETENTION_S = 30 * 86400
+_STATUS_BAR_CHILD_BUDGET_S = 90
 _STATUS_BAR_TAIL_CHUNK = 1 << 20
 _STATUS_BAR_TAIL_MAX_BYTES = 16 << 20
 
@@ -46306,9 +46307,12 @@ def _status_bar_savings_or_reason(session_id):
     try:
         conn = _open_trends_db_readonly()
         try:
+            # One read transaction: every query below sees the same committed rows.
+            conn.execute("BEGIN")
             days = _realized_savings_buckets(conn, cutoff, by_day=True)
             sess = _realized_savings_buckets(conn, "", session_uuid=session_id).get(
                 "", {"tokens": 0, "usd": 0.0})
+            conn.execute("COMMIT")
         finally:
             conn.close()
     except sqlite3.OperationalError as e:
@@ -46842,6 +46846,8 @@ def _status_bar_cli(args):
         token = _status_bar_acquire_lock(sid) if sid != "unknown" else None
         if token is None:
             sync = False
+    # The background child gets a hard wall-clock budget: a hung read never lingers.
+    budget = _install_hook_budget(_STATUS_BAR_CHILD_BUDGET_S) if child else None
     try:
         payload = status_bar_payload(session, transcript=_opt("--transcript"), sync=sync)
     except Exception:
@@ -46850,6 +46856,11 @@ def _status_bar_cli(args):
     finally:
         if token:
             _status_bar_release_lock(sid, token)
+        if budget is not None:
+            try:
+                budget.cancel()
+            except Exception:
+                pass
     # Always one JSON object, exit 0: JSON has no Infinity or NaN, so those read as null.
     print(json.dumps(_status_bar_finite(payload), allow_nan=False))
     sys.exit(0)

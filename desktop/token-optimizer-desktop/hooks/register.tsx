@@ -199,6 +199,9 @@ async function later($: EngineInterface, work: () => Promise<void>): Promise<voi
   }
 }
 
+/** A prompt is taking the hand-off: a second prompt in the same moment does not. */
+let takingHandoff = false
+
 /** Tool calls the band counted since the last write: written alongside a redraw that happens anyway. */
 let toolsPending = 0
 
@@ -750,7 +753,9 @@ async function runFresh($: EngineInterface, sid: string, since: number, gen: num
   // 10-minute window and "started since the save" both count from there.
   let handoff: Handoff
   try {
-    await $.store.set(HANDOFF_KEY, result.handoff)
+    // First kept with a stamp in the far future, so no session can count as "started
+    // since the save" until the real stamp below lands.
+    await $.store.set(HANDOFF_KEY, { ...result.handoff, createdAt: Number.MAX_SAFE_INTEGER })
   } catch {
     return stop('the hand-off could not be kept on disk')
   }
@@ -1172,13 +1177,19 @@ export const register: Register = (on, options) => {
 
   // The hand-off joins the first prompt the person sends, once.
   on('prompt.submit', async ($, e, next) => {
-    if (!active || !attachesHandoff(e.origin?.kind)) return next(e)
-    const held = await heldHandoff($)
-    if (!held) return next(e)
-    const handoff = await handoffThatFits($, held)
+    if (!active || !attachesHandoff(e.origin?.kind) || takingHandoff) return next(e)
+    // One prompt at a time takes it here, even if two are submitted at once.
+    takingHandoff = true
+    let handoff: Handoff | null = null
+    try {
+      const held = await heldHandoff($)
+      handoff = held ? await handoffThatFits($, held) : null
+      // Taken only once it is deleted: a failed delete attaches nothing.
+      if (handoff && !(await dropHandoff($))) handoff = null
+    } finally {
+      takingHandoff = false
+    }
     if (!handoff) return next(e)
-    // Taken only once it is deleted: a failed delete attaches nothing.
-    if (!(await dropHandoff($))) return next(e)
     try {
       return await next({ ...e, context: [...(e.context ?? []), handoff.text] })
     } catch (error) {
