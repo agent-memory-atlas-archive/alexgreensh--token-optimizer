@@ -39166,6 +39166,37 @@ _LOOP_LAST_MESSAGES = 4
 # here — a sibling key silently missing from this set is exactly what broke the
 # nudge follow-through credit (A6).
 _COMPACT_BUMP_WINDOW_S = 60
+_COMPACT_BOUNDARY_FRESH_S = 120
+_COMPACT_TAIL_BYTES = 4 << 20
+
+
+def _recent_compact_boundary(path, within_s=_COMPACT_BOUNDARY_FRESH_S, now=None):
+    """True when the transcript's newest compact_boundary row is under `within_s` old.
+
+    Then the compaction the PostCompact hook is reporting is already in the parse,
+    and counting it again would double it. Reads only the tail of the file.
+    """
+    try:
+        with open(path, "rb") as fh:
+            size = fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, size - _COMPACT_TAIL_BYTES))
+            tail = fh.read()
+    except (OSError, TypeError, ValueError):
+        return False
+    i = tail.rfind(b'"compact_boundary"')
+    if i < 0:
+        return False
+    start = tail.rfind(b"\n", 0, i) + 1
+    end = tail.find(b"\n", i)
+    try:
+        row = json.loads(tail[start:end if end >= 0 else len(tail)])
+        ts = _keepwarm_iso_to_epoch(row.get("timestamp"))
+    except Exception:
+        return False
+    if ts is None:
+        return False
+    now = time.time() if now is None else now
+    return 0 <= now - ts <= within_s
 
 
 def _settled_compactions(parsed, prev_result, post_compact, now=None):
@@ -39176,7 +39207,10 @@ def _settled_compactions(parsed, prev_result, post_compact, now=None):
     does not show the compaction yet. That refresh therefore counts one more
     than before when the parse has not caught up, once per compaction (a
     second PostCompact within a minute is the same one). A later parse that
-    sees the boundary agrees with that count rather than adding to it.
+    sees the boundary agrees with that count rather than adding to it. The
+    caller passes post_compact=False when the boundary is already in the
+    transcript. Two real compactions inside one minute read as one until the
+    next parse sees both boundaries, which then corrects the count.
     """
     try:
         prev = max(0, int((prev_result or {}).get("compactions", 0) or 0))
@@ -39736,7 +39770,13 @@ def quality_cache(throttle_seconds=120, warn_threshold=70, quiet=False, session_
         # Run quality analysis
         quality_data = _parse_jsonl_for_quality(filepath)
         if not quality_data:
-            # New/empty session - write a clean score to cache so stale score doesn't persist
+            # New/empty session - write a clean score to cache so stale score doesn't persist.
+            # A transcript the parser gives up on (very large) is not a new session: keep the
+            # compaction count it already had, so "never decreases" holds there too.
+            try:
+                _prev_empty = _read_quality_cache(cache_path) if cache_path.exists() else {}
+            except Exception:
+                _prev_empty = {}
             result = {
                 "score": 100,
                 "grade": "S",
@@ -39744,12 +39784,22 @@ def quality_cache(throttle_seconds=120, warn_threshold=70, quiet=False, session_
                 "breakdown": {},
                 "total_messages": 0,
                 "decisions_found": 0,
-                "compactions": 0,
+                "compactions": _settled_compactions(
+                    0, _prev_empty or {}, post_compact and not _recent_compact_boundary(filepath)),
                 "turns": 0,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "session_file": Path(filepath).name,
                 "model_context_window": detect_context_window()[0],
             }
+            # Same bump bookkeeping as the full path: one count per compaction.
+            if (_prev_empty or {}).get("_compact_bumped_at"):
+                result["_compact_bumped_at"] = _prev_empty["_compact_bumped_at"]
+            try:
+                _prev_n = int((_prev_empty or {}).get("compactions", 0) or 0)
+            except (TypeError, ValueError):
+                _prev_n = 0
+            if post_compact and result["compactions"] > _prev_n:
+                result["_compact_bumped_at"] = time.time()
             _write_quality_cache(cache_path, result)
             return 100
 
@@ -39778,7 +39828,9 @@ def quality_cache(throttle_seconds=120, warn_threshold=70, quiet=False, session_
         # accurate. Routing the statusline through the same dedup would add
         # latency to every prompt for a number the user glances at.
         result["decisions_found"] = len(quality_data["decisions"])
-        result["compactions"] = _settled_compactions(quality_data["compactions"], prev_result, post_compact)
+        result["compactions"] = _settled_compactions(
+            quality_data["compactions"], prev_result,
+            post_compact and not _recent_compact_boundary(filepath))
         try:
             _prev_compactions = int(prev_result.get("compactions", 0) or 0)
         except (TypeError, ValueError):
@@ -46198,18 +46250,25 @@ def _dashboard_saved_tokens(summary):
     """
     s = summary or {}
 
+    def num(v):
+        try:
+            return max(0, int(float(v or 0)))
+        except (TypeError, ValueError):
+            return 0
+
     def tok(obj):
         try:
-            return max(0, int((obj or {}).get("tokens_saved", 0) or 0))
-        except (TypeError, ValueError, AttributeError):
+            return num((obj or {}).get("tokens_saved", 0))
+        except AttributeError:
             return 0
 
     estimated = (tok(s.get("mcp_cap_estimated"))
                  + tok(s.get("hint_followed") or s.get("hint_followed_estimated"))
                  + tok(s.get("verbosity_steer") or s.get("verbosity_steer_estimated"))
                  + tok(s.get("resume_lean_estimated")))
-    measured = max(0, int(s.get("total_tokens", 0) or 0))
-    return measured + estimated, measured
+    measured = num(s.get("total_tokens", 0))
+    # The dashboard draws no Tokens Saved card at all when nothing was measured.
+    return (measured + estimated if measured > 0 else 0), measured
 
 
 def _status_bar_savings_or_reason(session_id):
@@ -46380,25 +46439,56 @@ def _status_bar_release_lock(session_id, token):
 _COMPACT_MARK = b'"subtype":"compact_boundary"'
 
 
-def _status_bar_compactions(path):
+def _status_bar_compactions(path, session_id=None):
     """How many times this transcript was compacted (compact_boundary rows), or None.
 
     A plain byte count in 1 MB chunks: the quality cache's own count can lag a
-    compaction, and the band shows this number right after one.
+    compaction, and the band shows this number right after one. The transcript
+    only grows, so with a session id the count resumes from where the last call
+    stopped (kept beside the status cache) instead of re-reading the whole file.
     """
+    memo = None
+    if session_id:
+        try:
+            memo = _status_bar_dir() / f"compactions-{sanitize_session_id(session_id)}.json"
+        except Exception:
+            memo = None
+    start, count = 0, 0
     try:
-        count = 0
+        size = os.path.getsize(path)
+    except OSError:
+        return None
+    if memo is not None:
+        try:
+            m = json.loads(memo.read_text(encoding="utf-8"))
+            if m.get("path") == str(path) and 0 <= int(m.get("size", -1)) <= size:
+                start, count = int(m["size"]), int(m["count"])
+        except (OSError, ValueError, TypeError, KeyError):
+            start, count = 0, 0
+    try:
+        overlap = len(_COMPACT_MARK) - 1
         tail = b""
         with open(path, "rb") as fh:
+            if start:
+                # Re-read the last few bytes so a marker split across the old end is found once.
+                fh.seek(max(0, start - overlap))
+                tail = fh.read(min(overlap, start))
             while True:
                 chunk = fh.read(1 << 20)
                 if not chunk:
                     break
                 buf = tail + chunk
                 count += buf.count(_COMPACT_MARK)
-                # Keep a boundary-straddling prefix, minus anything already counted.
-                keep = buf[-(len(_COMPACT_MARK) - 1):]
-                tail = keep if _COMPACT_MARK not in keep else b""
+                # A marker straddling two chunks is found once: the kept bytes are too short to hold one.
+                tail = buf[-overlap:]
+        if memo is not None:
+            try:
+                memo.parent.mkdir(parents=True, exist_ok=True)
+                tmp = memo.with_name(f".{memo.name}.{os.getpid()}.tmp")
+                tmp.write_text(json.dumps({"path": str(path), "size": size, "count": count}), encoding="utf-8")
+                os.replace(tmp, memo)
+            except OSError:
+                pass
         return count
     except OSError:
         return None
@@ -46590,7 +46680,7 @@ def status_bar_payload(session_id, transcript=None, sync=False):
         path = Path(transcript) if transcript else _find_session_jsonl_by_id(sid)
         if path is not None:
             out["last_request_epoch"], out["cache_lifetime"] = _status_bar_transcript_state(path)
-            out["compactions"] = _status_bar_compactions(path)
+            out["compactions"] = _status_bar_compactions(path, sid)
     except Exception:
         pass
     try:

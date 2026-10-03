@@ -510,3 +510,75 @@ def test_post_compact_counts_a_compaction_the_transcript_does_not_show_yet(sb):
     # Never lower than what was known; a parse that sees more wins.
     assert sb._settled_compactions(0, {"compactions": 3}, post_compact=False) == 3
     assert sb._settled_compactions(4, {"compactions": 3}, post_compact=True, now=9000) == 4
+
+
+def test_recent_compact_boundary_reads_the_tail(sb, tmp_path):
+    f = tmp_path / "t.jsonl"
+    now = 1_800_000_000
+    def iso(t):
+        return datetime.utcfromtimestamp(t).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    f.write_text('{"type":"user"}\n{"type":"system","subtype":"compact_boundary","timestamp":"%s"}\n{"type":"assistant"}\n' % iso(now - 30), encoding="utf-8")
+    assert sb._recent_compact_boundary(f, now=now) is True
+    assert sb._recent_compact_boundary(f, now=now + 600) is False
+    g = tmp_path / "none.jsonl"
+    g.write_text('{"type":"user"}\n', encoding="utf-8")
+    assert sb._recent_compact_boundary(g, now=now) is False
+    assert sb._recent_compact_boundary(tmp_path / "missing.jsonl", now=now) is False
+
+
+def test_compactions_count_resumes_where_it_stopped_and_finds_split_markers(sb, tmp_path):
+    f = tmp_path / "t.jsonl"
+    mark = '{"type":"system","subtype":"compact_boundary"}\n'
+    f.write_text("x" * 100 + mark, encoding="utf-8")
+    assert sb._status_bar_compactions(f, "sess-inc") == 1
+    # The next row arrives in two writes, the marker split between them.
+    half = len('{"type":"system","subtype":"compac')
+    with open(f, "a", encoding="utf-8") as fh:
+        fh.write(mark[:half])
+    assert sb._status_bar_compactions(f, "sess-inc") == 1
+    with open(f, "a", encoding="utf-8") as fh:
+        fh.write(mark[half:] + mark)
+    assert sb._status_bar_compactions(f, "sess-inc") == 3
+    # A full re-read agrees.
+    assert sb._status_bar_compactions(f) == 3
+    # Across the 1 MB chunk edge.
+    big = tmp_path / "big.jsonl"
+    m = b'"subtype":"compact_boundary"'
+    for off in range(-len(m), 2):
+        data = b"x" * ((1 << 20) + off) + m + b"\n"
+        big.write_bytes(data)
+        assert sb._status_bar_compactions(big) == 1, off
+
+
+def test_dashboard_headline_is_zero_when_nothing_was_measured(sb):
+    assert sb._dashboard_saved_tokens({"total_tokens": 0, "hint_followed": {"tokens_saved": 500}}) == (0, 0)
+    assert sb._dashboard_saved_tokens({"total_tokens": "1e3", "mcp_cap_estimated": {"tokens_saved": "12.5"}}) == (1012, 1000)
+
+
+def test_post_compact_refresh_end_to_end_counts_once(sb, tmp_path):
+    # The real refresh path: lease, parse, carry-forward, write.
+    sid = "e2e00000-0000-4000-8000-000000000001"
+    tr = tmp_path / f"{sid}.jsonl"
+    rows = [
+        {"type": "user", "message": {"role": "user", "content": "hi"}, "timestamp": "2026-10-03T10:00:00.000Z"},
+        {"type": "assistant", "message": {"role": "assistant", "model": "claude-x", "content": [{"type": "text", "text": "ok"}],
+                                          "usage": {"input_tokens": 10, "output_tokens": 2}}, "timestamp": "2026-10-03T10:00:01.000Z"},
+    ]
+    tr.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+    cache = sb.QUALITY_CACHE_DIR / f"quality-cache-{sid}.json"
+
+    def run(post_compact):
+        sb.quality_cache(quiet=True, session_jsonl=str(tr), force=True, session_id=sid, post_compact=post_compact)
+        return json.loads(cache.read_text(encoding="utf-8"))["compactions"]
+
+    assert run(False) == 0
+    # PostCompact: Claude Code has not written the boundary yet.
+    assert run(True) == 1
+    # Another refresh before the boundary lands: still 1.
+    assert run(False) == 1
+    # The boundary lands (fresh): a parse sees it and agrees; a second PostCompact does not add.
+    now_iso = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    with open(tr, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"type": "system", "subtype": "compact_boundary", "timestamp": now_iso}) + "\n")
+    assert run(False) == 1
+    assert run(True) == 1
