@@ -1,6 +1,5 @@
 {
   "name": "token-optimizer",
-  "version": "0.1.0",
   "description": "The Token Optimizer status bar on its own, for its tests. It ships inside the token-optimizer plugin.",
   "author": {
     "name": "Alex Greenshpun",
