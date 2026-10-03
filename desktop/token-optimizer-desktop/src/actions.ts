@@ -16,8 +16,8 @@ export const HANDOFF_KEY = 'handoff'
 export const CAPTURE_TIMEOUT_MS = 30_000
 /** The budget compact-capture is given (`--budget-seconds`), under CAPTURE_TIMEOUT_MS so it answers first. */
 export const CAPTURE_BUDGET_SECONDS = 25
-/** A saved hand-off joins a new session only this soon after it was saved (Token Optimizer's resumable window). */
-export const HANDOFF_TTL_MS = 30 * 60_000
+/** A saved hand-off joins a new session only this soon after it was saved; older ones are dropped. */
+export const HANDOFF_TTL_MS = 10 * 60_000
 /** resume-lean is a token-free read of checkpoints and the session log. */
 export const RESUME_TIMEOUT_MS = 20_000
 
@@ -35,27 +35,25 @@ export type UiState = {
   freshArmedAt: number | null
 }
 
-/**
- * `cwd` is the project the hand-off was saved in (TR-05). `toSessionId` is the
- * conversation Start fresh's own clear created, stamped when that clear lands;
- * absent until then. Only that conversation takes the hand-off.
- */
-export type Handoff = { fromSessionId: string; toSessionId?: string | null; cwd: string; checkpointPath: string; text: string; createdAt: number }
+/** Start fresh's saved hand-off: who saved it, where, when (`$.clock.now()` ms), and the text it carries. */
+export type Handoff = { fromSessionId: string; cwd: string; checkpointPath: string; text: string; createdAt: number }
 
 export type HandoffFate = 'attach' | 'skip' | { drop: string }
 
 /**
- * What the session `at.sessionId` in `at.cwd` does with a held hand-off:
- * attach it, leave it alone, or drop it (the reason ends a one-line note).
- * Another project's hand-off is never this session's to touch (R1). One whose
- * clear never landed (no stamp) is dropped once the busy timeout has passed,
- * unless its clear is still queued in this process (`queuedHere`).
+ * What the session `at.sessionId` in `at.cwd` does with a held hand-off
+ * (KTD10). It joins a different session than the one that saved it, in the
+ * same project, that started at or after it was saved (`startedAt`, null when
+ * unknown), within 10 minutes of the save. No marker ties it to one clear, so
+ * a typed /clear, a reload or a lost start event cannot strand or steal it.
+ * Another project's hand-off is never this session's to touch (R1); an
+ * expired one in this project is dropped (the reason ends a one-line note).
  */
-export function handoffFate(h: Handoff, at: { sessionId: string; cwd: string; now: number; queuedHere: boolean }): HandoffFate {
+export function handoffFate(h: Handoff, at: { sessionId: string; cwd: string; startedAt: number | null; now: number }): HandoffFate {
   if (h.cwd !== at.cwd) return 'skip'
-  if (at.now - h.createdAt > HANDOFF_TTL_MS) return { drop: 'it is more than 30 minutes old' }
-  if (!h.toSessionId) return !at.queuedHere && at.now - h.createdAt > BUSY_TIMEOUT_MS ? { drop: 'its clear never ran' } : 'skip'
-  return at.sessionId !== '' && h.toSessionId === at.sessionId ? 'attach' : 'skip'
+  if (at.now - h.createdAt > HANDOFF_TTL_MS) return { drop: 'it is more than 10 minutes old' }
+  if (at.sessionId === '' || at.sessionId === h.fromSessionId) return 'skip'
+  return at.startedAt !== null && at.startedAt >= h.createdAt ? 'attach' : 'skip'
 }
 
 export function initialUi(): UiState {

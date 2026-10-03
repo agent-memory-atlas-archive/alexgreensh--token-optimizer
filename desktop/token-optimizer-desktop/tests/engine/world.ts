@@ -57,6 +57,8 @@ export type World = {
   store: Record<string, unknown>
   /** The live session's project. */
   cwd: string
+  /** When the live session began (`$.session.usage().startedAt`, mocked-clock ms); a clear sets it to its own moment. */
+  startedAt: number
   /** How many of the next writes of the band's UI state hang (10 minutes on the mocked clock). */
   uiWriteHangs: number
   /** What a plugin-run `/clear` does beneath the band before its call resolves (the engine ends the old session inside it). */
@@ -116,6 +118,7 @@ export function stub(on: On, patch: Partial<Omit<World, 'clock' | 'runs' | 'toas
     handoffWriteFails: 0,
     store: {},
     cwd: '/work/project',
+    startedAt: NOW_MS - 3_600_000,
     uiWriteHangs: 0,
     clearBeneath: null,
     runs: [],
@@ -137,7 +140,7 @@ export function stub(on: On, patch: Partial<Omit<World, 'clock' | 'runs' | 'toas
   on('session.cwd', () => ({ value: w.cwd }))
   on('session.usage', () => ({
     value: {
-      startedAt: 0,
+      startedAt: w.startedAt,
       context: { window: 1_000_000, tokens: 620_000, percent: 62 },
       rateLimits: [
         { kind: 'five_hour', percentUsed: 40, resetsAt: '2026-10-03T12:00:00Z' },

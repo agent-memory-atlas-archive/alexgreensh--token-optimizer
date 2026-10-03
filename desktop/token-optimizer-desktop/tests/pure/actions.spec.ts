@@ -154,18 +154,24 @@ test('the capture budget it asks for stays under the time Start fresh waits for 
   assert.ok(budget * 1000 < CAPTURE_TIMEOUT_MS)
 })
 
-test('a hand-off joins only the conversation its clear created, in its project, within 30 minutes (TR-05, R1, R4)', () => {
-  const h = { fromSessionId: 'old-1', toSessionId: 'new-1', cwd: '/work/a', checkpointPath: '/cp/a.md', text: 'LEAN', createdAt: T }
-  const at = { sessionId: 'new-1', cwd: '/work/a', now: T + 1000, queuedHere: false }
+test('a hand-off joins another session in its project that started since the save, within 10 minutes (KTD10, TR-05, R1)', () => {
+  const h = { fromSessionId: 'old-1', cwd: '/work/a', checkpointPath: '/cp/a.md', text: 'LEAN', createdAt: T }
+  const at = { sessionId: 'new-1', cwd: '/work/a', startedAt: T + 500, now: T + 1000 }
+  assert.equal(handoffFate(h, at), 'attach')
+  // Any fresh conversation qualifies: Start fresh's own clear, a typed /clear after it, a new window.
+  assert.equal(handoffFate(h, { ...at, sessionId: 'typed-clear-2', startedAt: T + 900 }), 'attach')
+  assert.equal(handoffFate(h, { ...at, startedAt: T }), 'attach')
   assert.equal(handoffFate(h, { ...at, now: T + HANDOFF_TTL_MS }), 'attach')
-  assert.equal(handoffFate(h, { ...at, sessionId: 'other' }), 'skip')
+  // Never the session that saved it, one that began before the save, or one whose start is unknown.
+  assert.equal(handoffFate(h, { ...at, sessionId: 'old-1' }), 'skip')
+  assert.equal(handoffFate(h, { ...at, startedAt: T - 1 }), 'skip')
+  assert.equal(handoffFate(h, { ...at, startedAt: null }), 'skip')
+  assert.equal(handoffFate(h, { ...at, sessionId: '' }), 'skip')
+  // Another project's is skipped, never dropped, even when old.
   assert.equal(handoffFate(h, { ...at, cwd: '/work/b' }), 'skip')
   assert.equal(handoffFate(h, { ...at, cwd: '/work/b', now: T + HANDOFF_TTL_MS + 1 }), 'skip')
-  assert.deepEqual(handoffFate(h, { ...at, now: T + HANDOFF_TTL_MS + 1 }), { drop: 'it is more than 30 minutes old' })
-  const unlanded = { ...h, toSessionId: null }
-  assert.equal(handoffFate(unlanded, at), 'skip')
-  assert.equal(handoffFate(unlanded, { ...at, sessionId: 'old-1' }), 'skip')
-  assert.deepEqual(handoffFate(unlanded, { ...at, now: T + BUSY_TIMEOUT_MS + 1 }), { drop: 'its clear never ran' })
-  assert.equal(handoffFate(unlanded, { ...at, now: T + BUSY_TIMEOUT_MS + 1, queuedHere: true }), 'skip')
-  assert.equal(HANDOFF_TTL_MS, 30 * 60_000)
+  // An expired one in this project is dropped, whoever looks.
+  assert.deepEqual(handoffFate(h, { ...at, now: T + HANDOFF_TTL_MS + 1 }), { drop: 'it is more than 10 minutes old' })
+  assert.deepEqual(handoffFate(h, { ...at, sessionId: 'old-1', now: T + HANDOFF_TTL_MS + 1 }), { drop: 'it is more than 10 minutes old' })
+  assert.equal(HANDOFF_TTL_MS, 10 * 60_000)
 })
