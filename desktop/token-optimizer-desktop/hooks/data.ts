@@ -172,6 +172,10 @@ export async function findTokenOptimizerRoot(io: DataIo, home: string): Promise<
   return null
 }
 
+function newer(a: number | null, b: number | null): number | null {
+  return a === null ? b : b === null ? a : Math.max(a, b)
+}
+
 /** A path two folders up, or '' when it has fewer. */
 function trimTwo(path: string): string {
   const parts = path.replace(/[\\/]+$/, '').split(/[\\/]/)
@@ -332,8 +336,9 @@ export async function gather(
     ...usage,
     branch,
     ...facts,
-    // Between status runs the quality cache is the fresher checkpoint source.
-    checkpointEpoch: notFound ? null : (quality?.checkpointEpoch ?? facts.checkpointEpoch),
+    // The newer of the two: the quality cache knows quality saves the moment they land,
+    // the status command also knows stop and compaction saves (checkpoint files).
+    checkpointEpoch: notFound ? null : newer(quality?.checkpointEpoch ?? null, facts.checkpointEpoch),
     sheetOpen: base?.sheetOpen ?? false,
   }
 }

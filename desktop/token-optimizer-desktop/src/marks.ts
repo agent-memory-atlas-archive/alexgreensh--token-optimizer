@@ -251,8 +251,8 @@ export function row(s: Snapshot, _opts: FormatOptions = {}): Row {
   if (q && q.compactions > 0) facts.push({ icon: 'compact', runs: [plain('Compacted '), strong(`${q.compactions}×`)] })
   facts.push({
     icon: 'bookmark',
-    runs: q?.checkpointEpoch != null
-      ? [plain(`Checkpoint saved ${ago(q.checkpointEpoch * 1000, s.now)}`)]
+    runs: (s.checkpointEpoch ?? q?.checkpointEpoch) != null
+      ? [plain(`Checkpoint saved ${ago((s.checkpointEpoch ?? q!.checkpointEpoch!) * 1000, s.now)}`)]
       : s.earlierCheckpoint
         ? [plain(`Earlier checkpoint ${ago(s.earlierCheckpoint.epoch * 1000, s.now)}`), ...(s.earlierCheckpoint.about ? [plain(' · '), strong(s.earlierCheckpoint.about)] : [])]
         : [plain('No checkpoint yet')],

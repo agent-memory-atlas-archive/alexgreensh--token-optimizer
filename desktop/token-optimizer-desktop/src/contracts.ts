@@ -80,6 +80,8 @@ export type Snapshot = {
   handoffPending: boolean
   /** Start fresh is armed and waiting for its second click. */
   freshArmed: boolean
+  /** When this session last saved a checkpoint, any trigger (epoch seconds). */
+  checkpointEpoch?: number | null
   /** An earlier session's checkpoint on this work, when this session has none of its own (epoch seconds). */
   earlierCheckpoint?: { epoch: number; about: string | null } | null
 }

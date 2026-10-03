@@ -1259,6 +1259,7 @@ export const register: Register = (on, options) => {
       handoffPending: ready,
       freshArmed: isArmed(ui, now),
       earlierCheckpoint: s?.earlierCheckpoint ?? null,
+      checkpointEpoch: s?.checkpointEpoch ?? null,
     }
     // Light pictures always; each follows the app's dark mode by itself (see DARK_STYLE).
     const palette = LIGHT

@@ -130,7 +130,8 @@ def test_three_days_two_sessions(sb):
     assert all(d["tokens"] == 0 and d["usd"] == 0 for d in zero_days)
     headline = sb._get_merged_savings(days=30)
     assert sav["total_30d_usd"] == headline["total_cost_usd"]
-    assert sav["total_30d_tokens"] == headline["total_tokens"]
+    assert sav["total_30d_measured_tokens"] == headline["total_tokens"]
+    assert sav["total_30d_tokens"] == sb._dashboard_saved_tokens(headline)[0]
 
 
 def test_rows_older_than_30_days_excluded(sb):
@@ -139,8 +140,8 @@ def test_rows_older_than_30_days_excluded(sb):
     assert sum(d["tokens"] for d in sav["daily"]) == 11500
     assert _day(40).date().isoformat() not in _by_date(sav["daily"])
     # The 70,000-token row 40 days back is outside the 30-day headline too.
-    assert sav["total_30d_tokens"] < 70000
-    assert sav["total_30d_tokens"] == sb._get_merged_savings(days=30)["total_tokens"]
+    assert sav["total_30d_measured_tokens"] < 70000
+    assert sav["total_30d_measured_tokens"] == sb._get_merged_savings(days=30)["total_tokens"]
 
 
 def test_total_equals_merged_savings_headline(sb):
@@ -251,6 +252,17 @@ def test_checkpoint_epoch_from_freshest_quality_cache(sb):
     (plugin_dir / f"quality-cache-{SID_A}.json").write_text(
         json.dumps({"last_checkpoint_epoch": 2000}), encoding="utf-8")
     assert sb._status_bar_checkpoint_epoch(SID_A) == 2000
+
+
+def test_checkpoint_epoch_counts_stop_checkpoint_files(sb):
+    # A stop checkpoint never touches the quality cache; its file still counts.
+    (sb._sb_claude / "token-optimizer" / f"quality-cache-{SID_A}.json").write_text(
+        json.dumps({"last_checkpoint_epoch": 1000}), encoding="utf-8")
+    cp = sb._sb_claude / "token-optimizer" / "checkpoints" / f"{SID_A}-20261003-124125-stop.md"
+    cp.parent.mkdir(parents=True, exist_ok=True)
+    cp.write_text("# stop", encoding="utf-8")
+    os.utime(cp, (5000, 5000))
+    assert sb._status_bar_checkpoint_epoch(SID_A) == 5000
 
 
 def test_earlier_checkpoint_from_resumable_flag(sb):
@@ -445,3 +457,29 @@ def test_child_releases_its_own_lock(sb):
     _stale_lock(sb, content="a" * 32, age_s=0)
     lock = _run_release(sb, "a" * 32)
     assert not lock.exists()
+
+
+def test_dashboard_saved_tokens_is_measured_plus_estimated(sb):
+    summary = {
+        "total_tokens": 1000,
+        "mcp_cap_estimated": {"tokens_saved": 10},
+        "hint_followed": {"tokens_saved": 20},
+        "verbosity_steer_estimated": {"tokens_saved": 30},  # fallback key, as the dashboard reads it
+        "resume_lean_estimated": {"tokens_saved": 40},
+        "reread_avoided": {"reread_tokens": 999999},  # not in the headline
+    }
+    assert sb._dashboard_saved_tokens(summary) == (1100, 1000)
+    assert sb._dashboard_saved_tokens({}) == (0, 0)
+
+
+def test_dashboard_headline_formula_matches_the_dashboard_source():
+    # Drift guard: if the dashboard's Tokens Saved card changes its fields,
+    # _dashboard_saved_tokens must change with it.
+    html = (Path(__file__).resolve().parent.parent / "skills" / "token-optimizer" / "assets" / "dashboard.html").read_text(encoding="utf-8")
+    card = html[html.index("function tokensSavedCardHtml"):]
+    card = card[:card.index("var tsFullSaved")]
+    for field in ("s.mcp_cap_estimated", "s.hint_followed || s.hint_followed_estimated",
+                  "s.verbosity_steer || s.verbosity_steer_estimated", "s.resume_lean_estimated",
+                  "Number(s.total_tokens)"):
+        assert field in card, field
+    assert card.count("pushEst(obj, label)") == 4

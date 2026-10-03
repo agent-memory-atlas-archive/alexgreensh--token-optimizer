@@ -46024,7 +46024,9 @@ Fields:
                          zeros on days with no savings
     total_30d_usd        exactly _get_merged_savings(days=30)["total_cost_usd"],
                          the realized metered headline (rolling 30 x 24 h)
-    total_30d_tokens     _get_merged_savings(days=30)["total_tokens"], same window
+    total_30d_tokens     the dashboard's Tokens Saved headline for the same window:
+                       measured + estimated (_dashboard_saved_tokens)
+  total_30d_measured_tokens  _get_merged_savings(days=30)["total_tokens"], the floor
     computed_at          epoch seconds the savings were computed
     The session figure and the bars are savings_events + realized
     compression_events rows, netted by the same helpers as the headline
@@ -46042,8 +46044,8 @@ Fields:
                          request in the transcript (subagent rows ignored)
   cache_lifetime         "1h" | "5m" | null: the last measured cache-write
                          lifetime on the main thread (null = unmeasured)
-  last_checkpoint_epoch  last_checkpoint_epoch from the freshest quality cache
-                         for this session across Token Optimizer's storage dirs
+  last_checkpoint_epoch  this session's newest checkpoint (quality cache or
+                         checkpoint file) across Token Optimizer's storage dirs
   earlier_checkpoint     {epoch, about} for the earlier session's checkpoint
                          flagged as resumable for this one at start, or null
 
@@ -46142,6 +46144,28 @@ def _open_trends_db_readonly(timeout=2.0):
     return conn
 
 
+def _dashboard_saved_tokens(summary):
+    """The dashboard's Tokens Saved headline: measured plus the estimated tier.
+
+    Mirrors tokensSavedCardHtml in assets/dashboard.html exactly (same fields,
+    same `a || b` fallbacks), so the status bar and the dashboard never disagree.
+    """
+    s = summary or {}
+
+    def tok(obj):
+        try:
+            return max(0, int((obj or {}).get("tokens_saved", 0) or 0))
+        except (TypeError, ValueError, AttributeError):
+            return 0
+
+    estimated = (tok(s.get("mcp_cap_estimated"))
+                 + tok(s.get("hint_followed") or s.get("hint_followed_estimated"))
+                 + tok(s.get("verbosity_steer") or s.get("verbosity_steer_estimated"))
+                 + tok(s.get("resume_lean_estimated")))
+    measured = max(0, int(s.get("total_tokens", 0) or 0))
+    return measured + estimated, measured
+
+
 def _status_bar_savings_or_reason(session_id):
     """Compute the savings object. Returns (savings_dict, None) or (None, reason)."""
     if not Path(TRENDS_DB).exists():
@@ -46170,13 +46194,16 @@ def _status_bar_savings_or_reason(session_id):
         daily.append({"date": d, "tokens": int(b.get("tokens", 0)),
                       "usd": float(b.get("usd", 0.0))})
     headline = _get_merged_savings(days=_STATUS_BAR_DAYS)
+    shown, measured = _dashboard_saved_tokens(headline)
     return {
         "unit": "tokens",
         "session_tokens": int(sess.get("tokens", 0)),
         "session_usd": float(sess.get("usd", 0.0)),
         "daily": daily,
         "total_30d_usd": headline["total_cost_usd"],
-        "total_30d_tokens": int(headline["total_tokens"]),
+        # The dashboard's headline (measured + estimated); the measured floor beside it.
+        "total_30d_tokens": shown,
+        "total_30d_measured_tokens": measured,
         "computed_at": time.time(),
     }, None
 
@@ -46387,6 +46414,27 @@ def _status_bar_quality_cache_dirs():
 
 
 def _status_bar_checkpoint_epoch(session_id):
+    """When this session last saved a checkpoint, epoch seconds, or None.
+
+    The newer of the quality cache's last_checkpoint_epoch (quality-triggered
+    saves only) and this session's newest checkpoint file, so stop and
+    compaction checkpoints count too.
+    """
+    newest_file = None
+    for d in _status_bar_quality_cache_dirs():
+        try:
+            for f in (d / "checkpoints").glob(f"{session_id}-*.md"):
+                mt = int(f.stat().st_mtime)
+                if newest_file is None or mt > newest_file:
+                    newest_file = mt
+        except OSError:
+            continue
+    cached = _status_bar_cached_checkpoint_epoch(session_id)
+    found = [v for v in (cached, newest_file) if v is not None]
+    return max(found) if found else None
+
+
+def _status_bar_cached_checkpoint_epoch(session_id):
     """last_checkpoint_epoch from the freshest quality-cache-<sid>.json, or None."""
     best, best_mtime = None, -1.0
     for d in _status_bar_quality_cache_dirs():
