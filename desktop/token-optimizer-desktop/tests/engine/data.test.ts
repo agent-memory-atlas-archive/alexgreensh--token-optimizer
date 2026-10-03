@@ -243,3 +243,18 @@ test('without Token Optimizer savings and checkpoint are null and everything els
   expect(s?.branch).toBe('feat/band')
   expect(w.runs.every(argv => argv[0] === 'git')).toBe(true)
 })
+
+test('two clears in a row: the first clear\'s late read never writes over the second session', async ($, on) => {
+  const w = withTokenOptimizer(world())
+  w.files[`${LEGACY_DIR}/quality-cache-sess-1.json`] = [1, quality(77, 2)]
+  const clock = stub(on, w)
+  await $.session.start(START)
+  await clock.settle()
+  // Both clears land before either one's deferred status read runs.
+  w.sessionId = 'sess-2'
+  await $.classic.SessionStart({ source: 'clear', session_id: 'sess-2' } as never)
+  w.sessionId = 'sess-3'
+  await $.classic.SessionStart({ source: 'clear', session_id: 'sess-3' } as never)
+  await clock.settle()
+  expect(stored(w)?.sessionId).toBe('sess-3')
+})

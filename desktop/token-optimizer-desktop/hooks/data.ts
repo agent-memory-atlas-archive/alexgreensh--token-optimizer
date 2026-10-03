@@ -182,8 +182,10 @@ export async function findTokenOptimizerRoot(io: DataIo, home: string): Promise<
   // Compared with one separator and one case of drive letter, so a Windows home
   // (C:\\Users\\me) and a registry path (C:\\Users\\me\\.claude\\...) agree.
   const norm = (p: string) => p.replace(/\\/g, '/').replace(/^([a-zA-Z]):/, (_m: string, d: string) => `${d.toLowerCase()}:`)
-  const base = norm(claude)
-  const inside = (p: string) => base !== '' && (norm(p) === base || norm(p).startsWith(`${base}/`))
+  // Windows paths compare without case, as the filesystem does.
+  const fold = (p: string) => (/^[a-z]:\//.test(norm(claude)) ? norm(p).toLowerCase() : norm(p))
+  const base = fold(claude)
+  const inside = (p: string) => base !== '' && (fold(p) === base || fold(p).startsWith(`${base}/`))
   const listed = resolveTokenOptimizerRoot(registry, claude).filter(r => inside(r.scriptsDir))
   for (const root of [...sibling, ...listed]) {
     if (!(await attempt(() => io.stat(`${root.scriptsDir}/measure.py`), null))) {
@@ -295,7 +297,8 @@ export async function readStatusBar(
   // The JSON is the last line that is one (a stray line printed before it is not a reason to fail).
   const json = result.stdout.split(/\r?\n/).map(l => l.trim()).filter(l => l.startsWith('{')).pop()
   // An install without the command prints its usage instead of JSON (or exits 2).
-  if (!json) return result.exitCode === 0 || result.exitCode === 2 ? 'outdated' : null
+  // Usage text instead of JSON is an older install; empty output is just a failed read.
+  if (!json) return (result.exitCode === 0 || result.exitCode === 2) && result.stdout.trim() !== '' ? 'outdated' : null
   return result.exitCode === 0 ? parseStatusBar(json) : null
 }
 
@@ -347,6 +350,7 @@ export async function gather(
     return Number.isFinite(renews) && renews > now ? last : null
   }
   const usage = { ...reported, fiveHour: keep(reported.fiveHour, base?.fiveHour), week: keep(reported.week, base?.week) }
+  const sawLimits = Boolean(base?.sawLimits || reported.fiveHour || reported.week)
   const branch = await readBranch(io, cwd)
   const quality = await readQuality(io, home, sid)
 
@@ -409,6 +413,7 @@ export async function gather(
     // The newer of the two: the quality cache knows quality saves the moment they land,
     // the status command also knows stop and compaction saves (checkpoint files).
     ...seen,
+    sawLimits,
     checkpointEpoch: notFound ? null : newer(quality?.checkpointEpoch ?? null, facts.checkpointEpoch),
     sheetOpen: base?.sheetOpen ?? false,
   }

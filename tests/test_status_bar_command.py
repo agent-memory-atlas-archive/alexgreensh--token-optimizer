@@ -600,8 +600,9 @@ def test_compaction_memo_never_moves_backwards(sb, tmp_path):
     good = json.loads(memo.read_text(encoding="utf-8"))
     assert good["size"] == f.stat().st_size  # where the read really ended
     # A slower reader that ended earlier must not overwrite the newer memo.
+    # A memo from a reader that got further (the file has grown past what this call reads).
     memo.write_text(json.dumps({"path": str(f), "size": good["size"] + 999, "count": 7}), encoding="utf-8")
-    sb._status_bar_compactions(tmp_path / "other.jsonl", "sess-memo")  # missing file: no write
+    sb._status_bar_compactions(f, "sess-memo")
     assert json.loads(memo.read_text(encoding="utf-8"))["count"] == 7
 
 

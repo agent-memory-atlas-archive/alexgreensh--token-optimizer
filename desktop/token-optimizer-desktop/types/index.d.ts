@@ -56,6 +56,8 @@ export type TokenOptimizerDesktopSession = {
   /** When Token Optimizer last saved a checkpoint, epoch seconds. */
   checkpointEpoch: number | null
   /** The earlier session's checkpoint flagged as resumable for this one (epoch seconds). */
+  /** A rate limit was reported at least once this session: it runs on a Claude plan. */
+  sawLimits?: boolean
   /** When the live session began (ms), from the engine. */
   startedAtMs?: number | null
   /** Main-thread tool calls and compactions the band watched itself: the row never waits on Token Optimizer's quality file. */

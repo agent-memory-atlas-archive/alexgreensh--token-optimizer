@@ -195,10 +195,15 @@ function sameShown(a: TokenOptimizerDesktopSession, b: TokenOptimizerDesktopSess
  * clock can schedule it, it runs now rather than not at all.
  */
 async function later($: EngineInterface, work: () => Promise<void>): Promise<void> {
+  // Work for the session as it is now: a clear or session change before it runs drops it.
+  const gen = sessionGen
+  const guarded = async () => {
+    if (gen === sessionGen) await work()
+  }
   try {
-    $.clock.after(0, () => void attempt(work, undefined))
+    $.clock.after(0, () => void attempt(guarded, undefined))
   } catch {
-    await attempt(work, undefined)
+    await attempt(guarded, undefined)
   }
 }
 
@@ -277,7 +282,8 @@ async function closeAsks($: EngineInterface): Promise<void> {
 
 function planDefault(s: TokenOptimizerDesktopSession | null): 3600 | 300 {
   // Rate limits mean a Claude plan: an hour of cache; the API keeps five minutes.
-  return s && (s.fiveHour || s.week) ? 3600 : 300
+  // A limit seen once this session keeps it a plan, even if usage briefly stops reporting one.
+  return s && (s.fiveHour || s.week || s.sawLimits) ? 3600 : 300
 }
 
 /**

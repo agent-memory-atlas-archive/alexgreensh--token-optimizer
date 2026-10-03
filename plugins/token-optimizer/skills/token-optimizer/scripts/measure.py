@@ -46308,7 +46308,8 @@ def _status_bar_savings_or_reason(session_id, _retried=False):
     try:
         conn = _open_trends_db_readonly()
         try:
-            # One read transaction: every query below sees the same committed rows.
+            # One read transaction: both bucket reads see the same committed rows (the
+            # 30-day headline below runs on its own connection, as the dashboard's does).
             conn.execute("BEGIN")
             days = _realized_savings_buckets(conn, cutoff, by_day=True)
             sess = _realized_savings_buckets(conn, "", session_uuid=session_id).get(
