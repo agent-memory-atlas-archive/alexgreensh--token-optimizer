@@ -136,6 +136,7 @@ function dataIo($: EngineInterface): DataIo {
     cwd: () => $.session.cwd(),
     envHome: () => $.env.get('HOME'),
     envUserProfile: () => $.env.get('USERPROFILE'),
+    envConfigDir: () => $.env.get('CLAUDE_CONFIG_DIR'),
     usage: () => $.session.usage(),
     list: path => $.fs.list(path),
     stat: path => $.fs.stat(path),

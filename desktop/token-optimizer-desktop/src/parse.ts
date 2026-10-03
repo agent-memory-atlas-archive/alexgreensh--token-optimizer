@@ -260,7 +260,8 @@ function trimSlash(path: string): string {
  * the skill install `~/.claude/skills/token-optimizer`. The caller keeps the
  * first whose measure.py exists.
  */
-export function resolveTokenOptimizerRoot(installedPluginsJson: unknown, home: string): TokenOptimizerRoot[] {
+/** `claudeDir`: the Claude folder (CLAUDE_CONFIG_DIR, else ~/.claude). */
+export function resolveTokenOptimizerRoot(installedPluginsJson: unknown, claudeDir: string): TokenOptimizerRoot[] {
   const plugins = toRecord(toRecord(installedPluginsJson)?.plugins)
   const installs: { path: string; updated: number }[] = []
 
@@ -284,8 +285,8 @@ export function resolveTokenOptimizerRoot(installedPluginsJson: unknown, home: s
     .sort((a, b) => b.updated - a.updated)
     .map(({ path }) => ({ scriptsDir: `${path}/skills/token-optimizer/scripts`, runner: `${path}/hooks/module_runner.py` }))
 
-  if (home) {
-    roots.push({ scriptsDir: `${trimSlash(home)}/.claude/skills/token-optimizer/scripts`, runner: null })
+  if (claudeDir) {
+    roots.push({ scriptsDir: `${trimSlash(claudeDir)}/skills/token-optimizer/scripts`, runner: null })
   }
 
   return roots.filter((root, i) => roots.findIndex(other => other.scriptsDir === root.scriptsDir) === i)

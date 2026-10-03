@@ -16,6 +16,30 @@ export const BAND = {
   props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 120, scroll: { offset: 0, bodyRows: 10 }, view: {} },
 } as const
 
+/**
+ * The kit's settle runs what is due on the mocked clock, but work a timer starts can go on
+ * through engine calls (env, fs, state) the mocked clock does not see. Settling a few rounds
+ * (each a round trip to the host) lets that work land before a test asserts
+ * (Clean up's compact, started on the next tick, finished after the check about 1 run in 9).
+ */
+function steady<C extends { settle: () => Promise<void> }>(clock: C): C {
+  const settle = clock.settle.bind(clock)
+  // Each round is a host round trip, which lets engine calls in flight answer.
+  const steadySettle = async (): Promise<void> => {
+    for (let round = 0; round < 4; round++) await settle()
+  }
+  // The kit's clock is frozen: copy its members onto a plain object instead of patching it.
+  const out: Record<string, unknown> = {}
+  const keys = new Set<string>([...Object.keys(clock), ...Object.getOwnPropertyNames(Object.getPrototypeOf(clock) ?? {})])
+  for (const key of keys) {
+    if (key === 'constructor') continue
+    const value = (clock as Record<string, unknown>)[key]
+    out[key] = typeof value === 'function' ? (value as (...a: unknown[]) => unknown).bind(clock) : value
+  }
+  out.settle = steadySettle
+  return out as C
+}
+
 export const START = { cwd: '/work/project', surface: 'desktop', isInteractive: true } as const
 
 export type Status = {
@@ -141,7 +165,7 @@ export function stub(on: On, patch: Partial<Omit<World, 'clock' | 'runs' | 'toas
     compacts: 0,
     forks: 0,
     commands: [],
-    clock: mock.clock(on, { now: NOW_MS }),
+    clock: steady(mock.clock(on, { now: NOW_MS })),
     ...patch,
   }
   const missing = (path: string) => new Error(`ENOENT: ${path}`)

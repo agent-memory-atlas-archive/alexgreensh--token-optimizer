@@ -70,6 +70,8 @@ export type DataIo = {
   cwd: () => Promise<string>
   /** `$.env.get('HOME')` (the validator wants a literal variable name) */
   envHome: () => Promise<string | undefined>
+  /** `$.env.get('CLAUDE_CONFIG_DIR')`: a relocated Claude folder, as Token Optimizer honours it */
+  envConfigDir?: () => Promise<string | undefined>
   /** `$.env.get('USERPROFILE')`, the Windows home */
   envUserProfile: () => Promise<string | undefined>
   /** `$.session.usage()` */
@@ -109,6 +111,12 @@ export async function readHome(io: DataIo): Promise<string> {
   return (await attempt(() => io.envHome(), undefined)) || (await attempt(() => io.envUserProfile(), undefined)) || ''
 }
 
+/** The Claude folder: CLAUDE_CONFIG_DIR when set (as Token Optimizer's claude_home()), else ~/.claude. */
+export async function claudeDir(io: DataIo, home: string): Promise<string> {
+  const set = io.envConfigDir ? await attempt(() => io.envConfigDir!(), undefined) : undefined
+  return set && set.trim() ? set.trim().replace(/[\\/]+$/, '') : home ? `${home}/.claude` : ''
+}
+
 /**
  * The freshest `quality-cache-<sid>.json` across Token Optimizer's storage
  * directories (R16): each plugin install's data dir, then the legacy
@@ -119,12 +127,13 @@ export async function readQuality(io: DataIo, home: string, sid: string): Promis
     return null
   }
 
-  const dataRoot = `${home}/.claude/plugins/data`
+  const claude = await claudeDir(io, home)
+  const dataRoot = `${claude}/plugins/data`
   const entries = await attempt(() => io.list(dataRoot), [])
   const dirs = entries
     .filter(entry => entry.name.includes('token-optimizer'))
     .map(entry => `${dataRoot}/${entry.name}/token-optimizer`)
-  dirs.push(`${home}/.claude/token-optimizer`)
+  dirs.push(`${claude}/token-optimizer`)
 
   let freshest: { path: string; mtimeMs: number } | null = null
 
@@ -153,12 +162,13 @@ export async function readQuality(io: DataIo, home: string, sid: string): Promis
  * the skill install; the first whose measure.py exists. null when neither does.
  */
 export async function findTokenOptimizerRoot(io: DataIo, home: string): Promise<TokenOptimizerRoot | null> {
-  const registry = home ? await attempt(() => io.read(`${home}/.claude/plugins/installed_plugins.json`), null) : null
+  const claude = await claudeDir(io, home)
+  const registry = claude ? await attempt(() => io.read(`${claude}/plugins/installed_plugins.json`), null) : null
   // Inside a Token Optimizer checkout (desktop/<this plugin>), the scripts beside it are the matching version.
   const own = io.pluginRoot ? trimTwo(await attempt(async () => io.pluginRoot!(), '')) : ''
   const sibling = own ? [{ scriptsDir: `${own}/skills/token-optimizer/scripts`, runner: `${own}/hooks/module_runner.py` }] : []
 
-  for (const root of [...sibling, ...resolveTokenOptimizerRoot(registry, home)]) {
+  for (const root of [...sibling, ...resolveTokenOptimizerRoot(registry, claude)]) {
     if (!(await attempt(() => io.stat(`${root.scriptsDir}/measure.py`), null))) {
       continue
     }

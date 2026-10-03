@@ -229,7 +229,7 @@ const INSTALLED = {
 }
 
 test('Token Optimizer root: newest plugin install first, then the skill install', () => {
-  const roots = resolveTokenOptimizerRoot(JSON.stringify(INSTALLED), '/home/me')
+  const roots = resolveTokenOptimizerRoot(JSON.stringify(INSTALLED), '/home/me/.claude')
   assert.deepEqual(roots, [
     { scriptsDir: '/c/to/5.13.26/skills/token-optimizer/scripts', runner: '/c/to/5.13.26/hooks/module_runner.py' },
     { scriptsDir: '/c/to/5.13.20/skills/token-optimizer/scripts', runner: '/c/to/5.13.20/hooks/module_runner.py' },
@@ -239,15 +239,15 @@ test('Token Optimizer root: newest plugin install first, then the skill install'
 
 test('Token Optimizer root: no registry, or a broken one, still offers the skill install', () => {
   const skill = [{ scriptsDir: '/home/me/.claude/skills/token-optimizer/scripts', runner: null }]
-  assert.deepEqual(resolveTokenOptimizerRoot(null, '/home/me'), skill)
-  assert.deepEqual(resolveTokenOptimizerRoot('{nope', '/home/me'), skill)
-  assert.deepEqual(resolveTokenOptimizerRoot({ plugins: { 'token-optimizer@m': 'x' } }, '/home/me'), skill)
+  assert.deepEqual(resolveTokenOptimizerRoot(null, '/home/me/.claude'), skill)
+  assert.deepEqual(resolveTokenOptimizerRoot('{nope', '/home/me/.claude'), skill)
+  assert.deepEqual(resolveTokenOptimizerRoot({ plugins: { 'token-optimizer@m': 'x' } }, '/home/me/.claude'), skill)
 })
 
 test('Token Optimizer root: a Windows home keeps its own separators out of the way', () => {
   const roots = resolveTokenOptimizerRoot(
     { plugins: { 'token-optimizer@m': [{ installPath: 'C:\\Users\\me\\.claude\\plugins\\cache\\to\\5.13.26\\' }] } },
-    'C:\\Users\\me',
+    'C:\\Users\\me/.claude',
   )
   assert.equal(roots[0]?.scriptsDir, 'C:\\Users\\me\\.claude\\plugins\\cache\\to\\5.13.26/skills/token-optimizer/scripts')
   assert.equal(roots[1]?.scriptsDir, 'C:\\Users\\me/.claude/skills/token-optimizer/scripts')
@@ -255,4 +255,8 @@ test('Token Optimizer root: a Windows home keeps its own separators out of the w
 
 test('Token Optimizer root: no home gives only registry entries', () => {
   assert.deepEqual(resolveTokenOptimizerRoot(null, ''), [])
+})
+
+test('Token Optimizer root: a relocated Claude folder (CLAUDE_CONFIG_DIR) is where the skill install lives', () => {
+  assert.deepEqual(resolveTokenOptimizerRoot(null, '/data/claude'), [{ scriptsDir: '/data/claude/skills/token-optimizer/scripts', runner: null }])
 })
