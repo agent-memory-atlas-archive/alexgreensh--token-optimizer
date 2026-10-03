@@ -133,13 +133,18 @@ export function requestContextTokens(usage: unknown): number {
   return num(u.input_tokens) + num(u.cache_read_input_tokens) + num(u.cache_creation_input_tokens)
 }
 
-export type WarmOutcome = { ok: true; lapsed: boolean; contextTokens: number } | { ok: false; reason: string }
+export type WarmOutcome =
+  | { ok: true; lapsed: boolean; contextTokens: number; cacheRead?: number; lifetimeS?: number }
+  | { ok: false; reason: string }
 
 /** One line for the Keep warm outcome; a lapsed cache names what the warm-up cost (KTD11). */
 export function warmToast(o: WarmOutcome): string {
   if (!o.ok) return `Keep warm did not run: ${o.reason}.`
   if (o.lapsed) return `The cache had already dropped, so the warm-up re-read ${tokens(o.contextTokens)} tokens at full price.`
-  return 'Cache kept warm.'
+  // The receipt: what the warm-up read from the cache, and that the clock restarted.
+  const read = o.cacheRead && o.cacheRead > 0 ? `: re-read ${tokens(o.cacheRead)} tokens from the cache at a tenth of the price` : ''
+  const clock = o.lifetimeS ? ` The clock is back to ${Math.round(o.lifetimeS / 60)}m.` : ''
+  return `Cache kept warm${read}.${clock}`
 }
 
 const TYPED = new Set(['composer', 'sdk', 'bridge', 'unclassified'])

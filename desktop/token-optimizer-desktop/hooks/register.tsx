@@ -580,7 +580,16 @@ async function runWarm($: EngineInterface, known: number | null, gen: number): P
     } else if (reply.isAnswered) {
       await feedClock($, { type: 'warm-done', at, cacheReadTokens: reply.usage.cache_read_input_tokens, contextTokens })
       const after = await attempt(() => read($, clockAtom), null)
-      toast($, warmToast({ ok: true, lapsed: Boolean(after?.lapsed), contextTokens }))
+      const line = warmToast({
+        ok: true,
+        lapsed: Boolean(after?.lapsed),
+        contextTokens,
+        cacheRead: reply.usage.cache_read_input_tokens,
+        lifetimeS: view(after ?? initialClock(), at, planDefault(session)).lifetime,
+      })
+      toast($, line)
+      // Also in the sentence for a few seconds, where the eye already is.
+      await setUi($, u => withNote(u, line, at))
     } else {
       await feedClock($, { type: 'warm-failed' })
       toast($, warmToast({ ok: false, reason: reply.reason }))

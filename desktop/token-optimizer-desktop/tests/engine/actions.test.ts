@@ -113,9 +113,10 @@ test('Keep warm 200 s before the deadline forks once, however often it is presse
 
   await w.clock.advance(2000)
   expect(await has(ui, 'Keeping the cache warm.')).toBe(false)
-  // The deadline re-anchored to the warm-up: an hour from now.
-  expect(await has(ui, 'All clear.')).toBe(true)
-  expect(w.toasts.at(-1)).toBe('Cache kept warm.')
+  // The receipt: what was re-read, and the clock re-anchored to the warm-up (an hour from now).
+  const receipt = w.toasts.at(-1)!
+  expect(receipt).toMatch(/^Cache kept warm: re-read \S+ tokens from the cache at a tenth of the price\. The clock is back to 60m\.$/)
+  expect(await has(ui, receipt)).toBe(true)
 })
 
 test('a warm-up that reads almost nothing finds the cache lapsed: cold, and the toast states the cost', async ($, on) => {

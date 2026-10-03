@@ -79,6 +79,10 @@ test('context tokens of one request are input plus cache read plus cache write',
 
 test('the warm-up toast says what it did, and what it cost when the cache had lapsed', () => {
   assert.match(warmToast({ ok: true, lapsed: false, contextTokens: 340_000 }), /warm/i)
+  assert.equal(
+    warmToast({ ok: true, lapsed: false, contextTokens: 340_000, cacheRead: 29_328, lifetimeS: 3600 }),
+    'Cache kept warm: re-read 29k tokens from the cache at a tenth of the price. The clock is back to 60m.',
+  )
   const lapsed = warmToast({ ok: true, lapsed: true, contextTokens: 340_000 })
   assert.match(lapsed, /340k tokens/)
   assert.match(lapsed, /full price/)
