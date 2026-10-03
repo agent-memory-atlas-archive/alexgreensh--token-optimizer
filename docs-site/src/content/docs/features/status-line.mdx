@@ -108,6 +108,14 @@ Automatically. The fill bar updates on every status-line render. The quality gra
 | Auto-install | on (plugin) | When `statusLine` slot is empty |
 | Opt-out | `quality_bar_disabled` | Set by `--uninstall`, sticky |
 
+## The desktop status bar
+
+The terminal status line above has a sibling for the Claude desktop app. The separate `token-optimizer-desktop` plugin draws a status bar above your prompt: one sentence about the most urgent thing, with at most one button, then five marks (quality grade, context fill, cache countdown, 5-hour limit, weekly limit) that open a card on hover. Click Clawd to unfold branch, session time, tool calls, compactions, last checkpoint, and tokens saved this session and over the past 30 days. Clawd acts out what the session is doing, from thinking and typing to compacting, a cold cache, or napping.
+
+Buttons: **Clean up** compacts with Token Optimizer's guidance. **Start fresh** asks for a second click, then saves a checkpoint, clears, and hands the checkpoint to your first message. **Keep warm** is a manual cache refresh, covered in [Keep-Warm](/features/keep-warm/#the-manual-keep-warm-button).
+
+The cache countdown is an estimate, since Claude does not publish the exact expiry: 1 hour on Claude plans, 5 minutes on the API, measured from the session itself when possible. Turn the bar or its animation off with `enabled` and `animate` in `/config`. Install steps and requirements are in [Claude desktop app](/install/claude-desktop/).
+
 ## Risk rating
 
 None. The status line only displays. It never edits your conversation, and installing it only writes the `statusLine` setting (and only when the slot is empty). The worst case if the cache is missing or stale is a `--` or `~`-marked grade, not a wrong action.

@@ -125,6 +125,16 @@ Two disclosures specific to this adapter:
   `conversation_summaries.db` and are treated as untrusted, filtered to
   printable characters, and capped at 200 characters per field (R22).
 
+## Desktop mod plugin
+
+`token-optimizer-desktop` is a separate plugin in the same marketplace. It is not a hook runner: it uses Claude Code's mods feature (2.1.287+) to draw a status bar above the prompt in the Claude desktop app. It adds no entries to the hook inventory above and changes nothing for terminal or VS Code sessions.
+
+- **Install**: `/plugin install token-optimizer-desktop@alexgreensh-token-optimizer`, alongside the main plugin.
+- **Reads**: Token Optimizer's existing local data through one read command, plus the session itself. No network access of its own.
+- **Writes**: nothing on its own. Its three buttons act only on a click: Clean up compacts using Token Optimizer's guidance, Start fresh saves a checkpoint and clears after a second click, and Keep warm sends a manual one-click cache refresh that uses a small amount of usage.
+- **Switch**: Anthropic can turn mods off remotely. When off, the bar does not appear and nothing else changes.
+- **Settings**: `enabled` and `animate`, via `/config`.
+
 ## Generating a Security Report
 
 ```

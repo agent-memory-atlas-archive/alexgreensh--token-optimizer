@@ -1,0 +1,64 @@
+---
+title: Claude desktop app
+description: "Add the Token Optimizer status bar above the prompt in the Claude desktop app with the separate token-optimizer-desktop plugin."
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+The `token-optimizer-desktop` plugin adds a status bar above the prompt in the Claude desktop app. It shows session quality, context, cache and limits at a glance, and puts Clean up, Start fresh and Keep warm one click away.
+
+## Prerequisites
+
+- The main Token Optimizer plugin (see [Claude Code (CLI)](/install/claude-code-cli/)). The status bar reads its data.
+- Claude Code 2.1.287 or newer.
+- Anthropic's mods feature. Anthropic can switch it off remotely. When it is off, nothing breaks and the bar simply does not appear.
+
+## Install
+
+<Steps>
+
+1. Install the main plugin if you have not already.
+
+2. Install the desktop plugin alongside it:
+
+   ```
+   /plugin install token-optimizer-desktop@alexgreensh-token-optimizer
+   ```
+
+</Steps>
+
+## What it shows
+
+- One sentence about the most urgent thing, with at most one button.
+- Five marks: quality grade, context fill, cache countdown, 5-hour limit, weekly limit. Hover any mark for a card.
+- Click Clawd to unfold branch, session time, tool calls, compactions (when any), last checkpoint, and tokens saved this session and over the past 30 days.
+- Clawd acts out what the session is doing: thinking, reading, typing, subagents, waiting for your permission, writing, compacting, done, stopped, API error, cold cache, napping.
+
+## Buttons
+
+- **Clean up** compacts with Token Optimizer's guidance.
+- **Start fresh** asks for a second click, then saves a checkpoint, clears, and hands the checkpoint to your first message.
+- **Keep warm** is a manual, one-click cache refresh. It is offered only while the cache is still warm and its lifetime has been measured. It never runs on its own, disappears when the cache expires, and uses a small amount of your usage. It is separate from the [Keep-Warm daemon](/features/keep-warm/#the-manual-keep-warm-button).
+
+## The cache countdown
+
+The countdown is an estimate, because Claude does not publish the exact expiry. It assumes 1 hour on Claude plans and 5 minutes on the API, and is measured from the session itself when possible.
+
+## Settings
+
+Two settings, both in `/config`: `enabled` and `animate`.
+
+## Where it works
+
+The Claude desktop app only. The terminal keeps its existing [status line](/features/status-line/). VS Code is not supported.
+
+## Uninstall
+
+```
+/plugin uninstall token-optimizer-desktop@alexgreensh-token-optimizer
+```
+
+## See also
+
+- [The quality status line](/features/status-line/) for the terminal version.
+- [Keep-Warm](/features/keep-warm/) for the automatic, API-billed daemon.
