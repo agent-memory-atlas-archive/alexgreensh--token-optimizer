@@ -1,5 +1,11 @@
 # Changelog
 
+## [5.13.30] - 2026-10-03
+
+- The desktop status bar now comes with Token Optimizer itself: install or update the plugin and it appears above your prompt, nothing extra to add.
+- Turn it off any time with Show the status bar under Token Optimizer in `/config`.
+- Older Claude Code versions keep every Token Optimizer feature and simply skip the bar.
+
 ## [5.13.29] - 2026-10-03
 
 - New: a Token Optimizer status bar for the Claude desktop app, as the separate `token-optimizer-desktop` plugin: `/plugin install token-optimizer-desktop@alexgreensh-token-optimizer`.

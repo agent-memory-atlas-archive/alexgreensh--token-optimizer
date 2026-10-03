@@ -612,13 +612,9 @@ python3 measure.py setup-quality-bar --uninstall
 
 ## Desktop Status Bar
 
-Using the Claude desktop app? Add the `token-optimizer-desktop` plugin and a status bar appears above your prompt.
+Using the Claude desktop app? The status bar comes with the Token Optimizer plugin: once it is installed, the bar appears above your prompt. Nothing extra to install.
 
-```
-/plugin install token-optimizer-desktop@alexgreensh-token-optimizer
-```
-
-Install it alongside the main Token Optimizer plugin. It needs Claude Code 2.1.287 or newer and Anthropic's mods feature. Anthropic can switch mods off remotely; if that happens nothing breaks, the bar just doesn't appear. The terminal keeps its existing status line. VS Code is not supported.
+It needs Claude Code 2.1.287 or newer and Anthropic's mods feature. Anthropic can switch mods off remotely; if that happens nothing breaks, the bar just doesn't appear. The terminal keeps its existing status line. VS Code is not supported. To hide it, turn off **Show the status bar** for Token Optimizer in `/config`.
 
 - **One sentence, one button**: the most urgent thing about your session, with at most one button to act on it.
 - **Five marks**: quality grade, context fill, cache countdown, 5-hour limit and weekly limit, each with its label. Hover any mark for a card with the detail.

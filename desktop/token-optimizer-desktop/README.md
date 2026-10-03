@@ -4,11 +4,7 @@ A status bar for the Claude desktop app. It draws above your prompt and shows se
 
 ## Install
 
-Alongside the main Token Optimizer plugin:
-
-```
-/plugin install token-optimizer-desktop@alexgreensh-token-optimizer
-```
+It ships inside the Token Optimizer plugin (`hooks/hooks.json` names this folder's `hooks/register.tsx` under `modules`), so there is nothing extra to install. This folder keeps its own manifest only so its tests run on their own with `claude plugin test`.
 
 Needs Claude Code 2.1.287 or newer and Anthropic's mods feature. Anthropic can switch mods off remotely; when off, nothing breaks and the bar just does not appear. The terminal keeps its existing status line. VS Code is not supported.
 
@@ -23,7 +19,7 @@ The cache countdown is an estimate: 1 hour on Claude plans, 5 minutes on the API
 
 ## Settings
 
-`enabled` and `animate`, via `/config`.
+Show the status bar (`enabled`) and Animate Clawd (`animate`), under Token Optimizer in `/config`.
 
 ## Full docs
 

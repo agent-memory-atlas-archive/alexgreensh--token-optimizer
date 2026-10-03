@@ -173,9 +173,12 @@ export async function readQuality(io: DataIo, home: string, sid: string): Promis
 export async function findTokenOptimizerRoot(io: DataIo, home: string): Promise<TokenOptimizerRoot | null> {
   const claude = await claudeDir(io, home)
   const registry = claude ? await attempt(() => io.read(`${claude}/plugins/installed_plugins.json`), null) : null
-  // Inside a Token Optimizer checkout (desktop/<this plugin>), the scripts beside it are the matching version.
-  const own = io.pluginRoot ? trimTwo(await attempt(async () => io.pluginRoot!(), '')) : ''
-  const sibling = own ? [{ scriptsDir: `${own}/skills/token-optimizer/scripts`, runner: `${own}/hooks/module_runner.py` }] : []
+  // Shipped inside Token Optimizer, the plugin root is Token Optimizer itself; loaded on its
+  // own from a checkout (desktop/<this plugin>), the scripts two folders up are the matching version.
+  const root = io.pluginRoot ? await attempt(async () => io.pluginRoot!(), '') : ''
+  const sibling = [root.replace(/[\\/]+$/, ''), trimTwo(root)]
+    .filter(dir => dir !== '')
+    .map(dir => ({ scriptsDir: `${dir}/skills/token-optimizer/scripts`, runner: `${dir}/hooks/module_runner.py` }))
 
   // Only scripts inside the Claude folder run (or beside this plugin in a checkout): a
   // tampered or stale registry entry pointing elsewhere is skipped, never executed.
@@ -199,6 +202,25 @@ export async function findTokenOptimizerRoot(io: DataIo, home: string): Promise<
   }
 
   return null
+}
+
+/**
+ * True when this copy was installed on its own and an installed Token Optimizer
+ * already carries the status bar: that one draws it, so this copy stays hidden
+ * rather than draw a second band.
+ */
+export async function supersededByBundled(io: DataIo, home: string): Promise<boolean> {
+  const root = io.pluginRoot ? (await attempt(async () => io.pluginRoot!(), '')).replace(/[\\/]+$/, '') : ''
+  if (root === '' || (await attempt(() => io.stat(`${root}/skills/token-optimizer/scripts/measure.py`), null))) return false
+  const claude = await claudeDir(io, home)
+  const registry = claude ? await attempt(() => io.read(`${claude}/plugins/installed_plugins.json`), null) : null
+  for (const install of resolveTokenOptimizerRoot(registry, '')) {
+    const dir = install.scriptsDir.replace(/\/skills\/token-optimizer\/scripts$/, '')
+    const hooks = await attempt(() => io.read(`${dir}/hooks/hooks.json`), '')
+    const modules = await attempt(async () => (JSON.parse(hooks || '{}') as { modules?: unknown }).modules, undefined)
+    if (Array.isArray(modules) && modules.length > 0) return true
+  }
+  return false
 }
 
 function newer(a: number | null, b: number | null): number | null {

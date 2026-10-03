@@ -56,6 +56,7 @@ import {
   mergeStored,
   readHome,
   runMeasure,
+  supersededByBundled,
   type DataIo,
   type GatherOptions,
 } from './data.ts'
@@ -81,6 +82,8 @@ function tonesFor(p: Palette): Tones {
 let enabled = true
 let animate = true
 let active = false
+/** True once this copy learns an installed Token Optimizer draws the band itself; null until checked. */
+let superseded: boolean | null = null
 let timers: { cancel: () => void }[] = []
 let statusTimer: { cancel: () => void } | null = null
 let poseLive: PoseState | null = null
@@ -1146,6 +1149,15 @@ async function endTurn($: EngineInterface, reason: Extract<PoseEvent, { type: 't
   }
 }
 
+/** Whether this copy stays hidden because an installed Token Optimizer draws the band; checked once. */
+async function standsDown($: EngineInterface): Promise<boolean> {
+  if (superseded === null) {
+    const io = dataIo($)
+    superseded = await attempt(async () => supersededByBundled(io, await readHome(io)), false)
+  }
+  return superseded
+}
+
 // ---- hooks ----
 
 export const register: Register = (on, options) => {
@@ -1155,6 +1167,7 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     const result = await next(e)
     active = enabled && e.isInteractive && e.surface !== 'terminal' && e.surface !== 'vscode'
+    if (active && (await standsDown($))) active = false
     if (active) await start($)
     return result
   })
@@ -1343,11 +1356,17 @@ export const register: Register = (on, options) => {
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     // The terminal keeps its own status line; a survey holds the band.
-    if (!enabled || e.surface !== 'desktop' || e.props.hasSurvey) return next(e)
+    if (!enabled || superseded === true || e.surface !== 'desktop' || e.props.hasSurvey) return next(e)
     if (!active) {
       // A desktop band without a session.start of ours (a late enable): start now, outside the drawing.
       active = true
-      $.clock.after(0, () => void attempt(() => start($), undefined))
+      const unchecked = superseded === null
+      $.clock.after(0, () => void attempt(async () => {
+        if (await standsDown($)) active = false
+        else await start($)
+      }, undefined))
+      // Not drawn until the check says this copy is the one to draw it; start redraws.
+      if (unchecked) return next(e)
     }
 
     // Every read fails soft: a hiccup in one value draws the band without it, never no band.
