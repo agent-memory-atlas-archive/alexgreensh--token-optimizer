@@ -582,3 +582,64 @@ def test_post_compact_refresh_end_to_end_counts_once(sb, tmp_path):
         fh.write(json.dumps({"type": "system", "subtype": "compact_boundary", "timestamp": now_iso}) + "\n")
     assert run(False) == 1
     assert run(True) == 1
+
+
+# --------------------------------------------------------------------------
+# Gauntlet regressions
+# --------------------------------------------------------------------------
+
+def test_compaction_memo_never_moves_backwards(sb, tmp_path):
+    f = tmp_path / "t.jsonl"
+    mark = '{"type":"system","subtype":"compact_boundary"}\n'
+    f.write_text(mark * 2, encoding="utf-8")
+    assert sb._status_bar_compactions(f, "sess-memo") == 2
+    memo = sb._status_bar_dir() / "compactions-sess-memo.json"
+    good = json.loads(memo.read_text(encoding="utf-8"))
+    assert good["size"] == f.stat().st_size  # where the read really ended
+    # A slower reader that ended earlier must not overwrite the newer memo.
+    memo.write_text(json.dumps({"path": str(f), "size": good["size"] + 999, "count": 7}), encoding="utf-8")
+    sb._status_bar_compactions(tmp_path / "other.jsonl", "sess-memo")  # missing file: no write
+    assert json.loads(memo.read_text(encoding="utf-8"))["count"] == 7
+
+
+def test_boundary_probe_ignores_the_words_inside_a_message(sb, tmp_path):
+    f = tmp_path / "t.jsonl"
+    now = 1_800_000_000
+    iso = datetime.utcfromtimestamp(now - 10).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    f.write_text(json.dumps({"type": "user", "timestamp": iso,
+                             "message": {"content": 'a pasted log: "subtype":"compact_boundary"'}}) + "\n",
+                 encoding="utf-8")
+    assert sb._recent_compact_boundary(f, now=now) is False
+
+
+def test_status_bar_json_never_carries_infinity_or_nan(sb):
+    out = sb._status_bar_finite({"a": float("inf"), "b": [float("nan"), 1.5], "c": {"d": -float("inf")}})
+    assert out == {"a": None, "b": [None, 1.5], "c": {"d": None}}
+    json.dumps(out, allow_nan=False)
+
+
+def test_long_session_ids_get_short_file_names(sb):
+    long_id = "x" * 400
+    name = sb._status_bar_cache_path(long_id).name
+    assert len(name) < 120 and name.endswith(".json")
+    assert sb._status_bar_cache_path("short-id-1") .name == "short-id-1.json"
+
+
+def test_release_never_deletes_another_owners_lock(sb):
+    sid = "aaaaaaaa-1111-2222-3333-555555555555"
+    lock = sb._status_bar_lock_path(sid)
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text("someone-elses-token", encoding="ascii")
+    assert sb._status_bar_release_lock(sid, "my-token") is False
+    assert lock.read_text(encoding="ascii") == "someone-elses-token"
+    assert sb._status_bar_release_lock(sid, "someone-elses-token") is True
+    assert not lock.exists()
+
+
+def test_earlier_checkpoint_outside_token_optimizer_folders_is_not_read(sb, tmp_path):
+    outside = tmp_path / "elsewhere" / "88888888-cccc-20261003-120001-stop.md"
+    outside.parent.mkdir(parents=True)
+    outside.write_text("# not ours", encoding="utf-8")
+    (sb._sb_claude / "token-optimizer" / f"resumable-{SID_A}.json").write_text(
+        json.dumps({"checkpoint": str(outside), "relevant": True}), encoding="utf-8")
+    assert sb._status_bar_earlier_checkpoint(SID_A) is None

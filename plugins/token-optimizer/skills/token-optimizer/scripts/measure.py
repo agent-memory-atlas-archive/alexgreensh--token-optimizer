@@ -37890,7 +37890,8 @@ def _cleanup_quality_cache():
         # `once-*.json` are the per-session run-once guard markers:
         # three per session, never otherwise cleaned, so age them out here on the
         # same retention window as the quality-cache snapshots.
-        for pattern in ("quality-cache-*.json", "once-*.json"):
+        # `resumable-*.json` are the per-session resumable flags (one per session).
+        for pattern in ("quality-cache-*.json", "once-*.json", "resumable-*.json"):
             for f in cache_dir.glob(pattern):
                 try:
                     if f.stat().st_mtime < cutoff:
@@ -39183,13 +39184,22 @@ def _recent_compact_boundary(path, within_s=_COMPACT_BOUNDARY_FRESH_S, now=None)
             tail = fh.read()
     except (OSError, TypeError, ValueError):
         return False
-    i = tail.rfind(b'"compact_boundary"')
-    if i < 0:
+    # The boundary row itself, not the words inside a message: same marker as the
+    # counter, and the parsed row must be a system compact_boundary.
+    i = tail.rfind(_COMPACT_MARK)
+    while i >= 0:
+        start = tail.rfind(b"\n", 0, i) + 1
+        end = tail.find(b"\n", i)
+        try:
+            row = json.loads(tail[start:end if end >= 0 else len(tail)])
+        except Exception:
+            row = None
+        if isinstance(row, dict) and row.get("type") == "system" and row.get("subtype") == "compact_boundary":
+            break
+        i = tail.rfind(_COMPACT_MARK, 0, start)
+    else:
         return False
-    start = tail.rfind(b"\n", 0, i) + 1
-    end = tail.find(b"\n", i)
     try:
-        row = json.loads(tail[start:end if end >= 0 else len(tail)])
         ts = _keepwarm_iso_to_epoch(row.get("timestamp"))
     except Exception:
         return False
@@ -39214,14 +39224,18 @@ def _settled_compactions(parsed, prev_result, post_compact, now=None):
     """
     try:
         prev = max(0, int((prev_result or {}).get("compactions", 0) or 0))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         prev = 0
-    count = max(int(parsed or 0), prev)
-    if post_compact and int(parsed or 0) <= prev:
+    try:
+        parsed = max(0, int(parsed or 0))
+    except (TypeError, ValueError, OverflowError):
+        parsed = 0
+    count = max(parsed, prev)
+    if post_compact and parsed <= prev:
         now = time.time() if now is None else now
         try:
             last = float((prev_result or {}).get("_compact_bumped_at") or 0)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             last = 0.0
         if now - last > _COMPACT_BUMP_WINDOW_S:
             count = prev + 1
@@ -39796,7 +39810,7 @@ def quality_cache(throttle_seconds=120, warn_threshold=70, quiet=False, session_
                 result["_compact_bumped_at"] = _prev_empty["_compact_bumped_at"]
             try:
                 _prev_n = int((_prev_empty or {}).get("compactions", 0) or 0)
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 _prev_n = 0
             if post_compact and result["compactions"] > _prev_n:
                 result["_compact_bumped_at"] = time.time()
@@ -39833,7 +39847,7 @@ def quality_cache(throttle_seconds=120, warn_threshold=70, quiet=False, session_
             post_compact and not _recent_compact_boundary(filepath))
         try:
             _prev_compactions = int(prev_result.get("compactions", 0) or 0)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             _prev_compactions = 0
         if post_compact and result["compactions"] > max(int(quality_data["compactions"] or 0), _prev_compactions):
             result["_compact_bumped_at"] = time.time()
@@ -46160,12 +46174,21 @@ def _status_bar_dir():
     return SNAPSHOT_DIR / "status-bar"
 
 
+def _status_bar_key(session_id):
+    """A file-name-safe key for a session: long ids are shortened with a hash so a
+    file name never exceeds what the filesystem allows."""
+    sid = str(session_id)
+    if len(sid) <= 100:
+        return sid
+    return sid[:64] + "-" + hashlib.sha256(sid.encode("utf-8")).hexdigest()[:16]
+
+
 def _status_bar_cache_path(session_id):
-    return _status_bar_dir() / f"{session_id}.json"
+    return _status_bar_dir() / f"{_status_bar_key(session_id)}.json"
 
 
 def _status_bar_lock_path(session_id):
-    return _status_bar_dir() / f"{session_id}.refresh.lock"
+    return _status_bar_dir() / f"{_status_bar_key(session_id)}.refresh.lock"
 
 
 def _realized_savings_buckets(conn, cutoff, session_uuid=None, by_day=False):
@@ -46181,8 +46204,9 @@ def _realized_savings_buckets(conn, cutoff, session_uuid=None, by_day=False):
     where = "WHERE timestamp >= ? "
     params = [cutoff]
     if session_uuid is not None:
-        where += "AND session_uuid = ? "
-        params.append(session_uuid)
+        # Other runtimes' ids are not UUIDs: their rows keep the id in session_id.
+        where += "AND (session_uuid = ? OR (session_uuid IS NULL AND session_id = ?)) "
+        params.extend([session_uuid, session_uuid])
     se_rows = conn.execute(
         "SELECT " + day_col + ", event_type, COUNT(*), SUM(tokens_saved), "
         "SUM(cost_saved_usd) FROM savings_events " + where +
@@ -46254,7 +46278,7 @@ def _dashboard_saved_tokens(summary):
     def num(v):
         try:
             return max(0, int(float(v or 0)))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return 0
 
     def tok(obj):
@@ -46332,10 +46356,15 @@ def _status_bar_write_cache(session_id, savings, reason):
     os.replace(tmp, path)
     # Bound the directory: drop caches for sessions untouched for 30 days.
     cutoff = time.time() - _STATUS_BAR_CACHE_RETENTION_S
+    orphan_cutoff = time.time() - 86400
     try:
-        for f in d.glob("*.json"):
+        for f in d.iterdir():
             try:
-                if f.stat().st_mtime < cutoff:
+                name = f.name
+                # Temp files and set-aside locks left by a crash go after a day.
+                orphan = name.endswith(".tmp") or name.endswith(".stale")
+                if (orphan and f.stat().st_mtime < orphan_cutoff) or (
+                        name.endswith(".json") and f.stat().st_mtime < cutoff):
                     f.unlink()
             except OSError:
                 pass
@@ -46362,15 +46391,34 @@ def _status_bar_start_refresh(session_id):
     TO_STATUS_BAR_LOCK_TOKEN environment variable; the child deletes the lock
     only while it still holds that token.
     """
+    token = _status_bar_acquire_lock(session_id)
+    if token is None:
+        return False
+    # The child releases the lock only if it still holds this token, so a child
+    # that outlives its lock never deletes a newer caller's lock.
+    proc = spawn_detached(
+        [_detached_python_exe(), str(MEASURE_PY_PATH), "status-bar",
+         "--session", session_id, "--sync", "--release-lock"],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        env={**os.environ, _STATUS_BAR_LOCK_TOKEN_ENV: token})
+    if proc is None:
+        _status_bar_release_lock(session_id, token)
+        return False
+    return True
+
+
+def _status_bar_acquire_lock(session_id):
+    """Take the session's refresh lock; its owner token, or None when it is held."""
     lock = _status_bar_lock_path(session_id)
     token = os.urandom(16).hex()
+    fd = None
     try:
         lock.parent.mkdir(parents=True, exist_ok=True)
         try:
             fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         except FileExistsError:
             if time.time() - lock.stat().st_mtime < _STATUS_BAR_LOCK_STALE_S:
-                return False
+                return None
             # Take an abandoned lock over by renaming it aside. Rename is atomic,
             # so when two callers race only one moves the file; the other gets
             # FileNotFoundError and backs off instead of deleting the winner's lock.
@@ -46379,7 +46427,7 @@ def _status_bar_start_refresh(session_id):
             try:
                 os.rename(str(lock), str(quarantine))
             except OSError:
-                return False
+                return None
             try:
                 moved_fresh = (time.time() - os.stat(str(quarantine)).st_mtime
                                < _STATUS_BAR_LOCK_STALE_S)
@@ -46397,7 +46445,7 @@ def _status_bar_start_refresh(session_id):
                     quarantine.unlink()
                 except OSError:
                     pass
-                return False
+                return None
             try:
                 quarantine.unlink()
             except OSError:
@@ -46405,36 +46453,60 @@ def _status_bar_start_refresh(session_id):
             try:
                 fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             except FileExistsError:
-                return False
-        os.write(fd, token.encode("ascii"))
+                return None
+        written = os.write(fd, token.encode("ascii"))
         os.close(fd)
+        fd = None
+        if written != len(token):
+            # A short write leaves a lock nobody can prove they own: remove ours now.
+            try:
+                lock.unlink()
+            except OSError:
+                pass
+            return None
+        return token
     except OSError:
-        return False
-    # The child releases the lock only if it still holds this token, so a child
-    # that outlives its lock never deletes a newer caller's lock.
-    proc = spawn_detached(
-        [_detached_python_exe(), str(MEASURE_PY_PATH), "status-bar",
-         "--session", session_id, "--sync", "--release-lock"],
-        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        env={**os.environ, _STATUS_BAR_LOCK_TOKEN_ENV: token})
-    if proc is None:
-        _status_bar_release_lock(session_id, token)
-        return False
-    return True
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            try:
+                lock.unlink()
+            except OSError:
+                pass
+        return None
 
 
 def _status_bar_release_lock(session_id, token):
-    """Delete the refresh lock only when it still holds `token`. Never raises."""
+    """Delete the refresh lock only when it still holds `token`. Never raises.
+
+    The lock is moved aside first (one atomic rename) and only then checked, so a
+    lock another process created after ours is never deleted by mistake: when the
+    moved file is not ours it goes back, unless a newer lock already took its name.
+    """
     if not token:
         return False
     lock = _status_bar_lock_path(session_id)
+    aside = lock.with_name(f"{lock.name}.{os.getpid()}.{time.time_ns()}.release")
     try:
-        if lock.read_text(encoding="ascii", errors="replace").strip() != token:
-            return False
-        lock.unlink()
-        return True
+        os.rename(str(lock), str(aside))
     except OSError:
         return False
+    try:
+        mine = aside.read_text(encoding="ascii", errors="replace").strip() == token
+    except OSError:
+        mine = False
+    if not mine:
+        try:
+            os.link(str(aside), str(lock))
+        except (OSError, AttributeError):
+            pass
+    try:
+        aside.unlink()
+    except OSError:
+        pass
+    return mine
 
 
 _COMPACT_MARK = b'"subtype":"compact_boundary"'
@@ -46451,7 +46523,7 @@ def _status_bar_compactions(path, session_id=None):
     memo = None
     if session_id:
         try:
-            memo = _status_bar_dir() / f"compactions-{sanitize_session_id(session_id)}.json"
+            memo = _status_bar_dir() / f"compactions-{_status_bar_key(sanitize_session_id(session_id))}.json"
         except Exception:
             memo = None
     start, count = 0, 0
@@ -46482,12 +46554,22 @@ def _status_bar_compactions(path, session_id=None):
                 count += buf.count(_COMPACT_MARK)
                 # A marker straddling two chunks is found once: the kept bytes are too short to hold one.
                 tail = buf[-overlap:]
+            # Where this read really ended: rows appended while it ran are counted, so the
+            # memo resumes after them (the size taken before the read would count them twice).
+            end = fh.tell()
         if memo is not None:
             try:
-                memo.parent.mkdir(parents=True, exist_ok=True)
-                tmp = memo.with_name(f".{memo.name}.{os.getpid()}.tmp")
-                tmp.write_text(json.dumps({"path": str(path), "size": size, "count": count}), encoding="utf-8")
-                os.replace(tmp, memo)
+                # Never written backwards: a slower reader that ended earlier leaves a newer memo alone.
+                try:
+                    cur = json.loads(memo.read_text(encoding="utf-8"))
+                    newer = cur.get("path") == str(path) and int(cur.get("size", -1)) > end
+                except (OSError, ValueError, TypeError):
+                    newer = False
+                if not newer:
+                    memo.parent.mkdir(parents=True, exist_ok=True)
+                    tmp = memo.with_name(f".{memo.name}.{os.getpid()}.tmp")
+                    tmp.write_text(json.dumps({"path": str(path), "size": end, "count": count}), encoding="utf-8")
+                    os.replace(tmp, memo)
             except OSError:
                 pass
         return count
@@ -46529,7 +46611,10 @@ def _status_bar_transcript_state(path):
         if last_ts is None:
             last_ts = _keepwarm_iso_to_epoch(rec.get("timestamp"))
         if lifetime is None:
-            kind = _keepwarm_ttl_kind(usage)
+            try:
+                kind = _keepwarm_ttl_kind(usage)
+            except (TypeError, ValueError, OverflowError):
+                kind = "unknown"  # one malformed row; the older rows still count
             if kind != "unknown":
                 lifetime = kind
 
@@ -46644,8 +46729,12 @@ def _status_bar_earlier_checkpoint(session_id):
         if flag.get("relevant") is not True:
             return None
         cp = Path(str(flag.get("checkpoint") or ""))
+        # Only a file in one of Token Optimizer's own checkpoint folders is read.
+        homes = {str((d / "checkpoints").resolve()) for d in _status_bar_quality_cache_dirs()}
+        if cp.suffix != ".md" or str(cp.resolve().parent) not in homes:
+            return None
         epoch = int(cp.stat().st_mtime)
-    except (OSError, ValueError, AttributeError, TypeError):
+    except (OSError, ValueError, AttributeError, TypeError, RuntimeError):
         return None
     if not cp.name or cp.name.startswith(session_id):
         return None
@@ -46740,7 +46829,8 @@ def _status_bar_cli(args):
     def _opt(name):
         if name in args:
             i = args.index(name)
-            if i + 1 < len(args):
+            # A following flag is not a value: `--session --json` has no session.
+            if i + 1 < len(args) and not args[i + 1].startswith("--"):
                 return args[i + 1]
         return None
 
@@ -46749,14 +46839,37 @@ def _status_bar_cli(args):
         print(STATUS_BAR_HELP, file=sys.stderr)
         sys.exit(2)
     sync = "--sync" in args
+    child = sync and "--release-lock" in args
+    sid = sanitize_session_id(session)
+    token = os.environ.get(_STATUS_BAR_LOCK_TOKEN_ENV, "") if child else None
+    if sync and not child:
+        # A direct --sync takes the same lock as the background refresh; when one is
+        # already running, this answers from the cache instead of computing twice.
+        token = _status_bar_acquire_lock(sid) if sid != "unknown" else None
+        if token is None:
+            sync = False
     try:
         payload = status_bar_payload(session, transcript=_opt("--transcript"), sync=sync)
+    except Exception:
+        payload = {"schema": _STATUS_BAR_SCHEMA, "session_id": sid, "savings": None,
+                   "savings_state": "unavailable", "savings_reason": "savings unavailable"}
     finally:
-        if sync and "--release-lock" in args:
-            _status_bar_release_lock(sanitize_session_id(session),
-                                     os.environ.get(_STATUS_BAR_LOCK_TOKEN_ENV, ""))
-    print(json.dumps(payload))
+        if token:
+            _status_bar_release_lock(sid, token)
+    # Always one JSON object, exit 0: JSON has no Infinity or NaN, so those read as null.
+    print(json.dumps(_status_bar_finite(payload), allow_nan=False))
     sys.exit(0)
+
+
+def _status_bar_finite(v):
+    """The payload with every non-finite float (inf, nan) replaced by None."""
+    if isinstance(v, float):
+        return v if math.isfinite(v) else None
+    if isinstance(v, dict):
+        return {k: _status_bar_finite(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_status_bar_finite(x) for x in v]
+    return v
 
 
 def _install_date():
