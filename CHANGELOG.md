@@ -1,12 +1,12 @@
 # Changelog
 
-## [Unreleased]
+## [5.13.29] - 2026-10-03
 
-- New: a Token Optimizer status bar for the Claude desktop app, shipped as the separate `token-optimizer-desktop` plugin. Install with `/plugin install token-optimizer-desktop@alexgreensh-token-optimizer`.
-- One sentence names the most urgent thing about your session, with at most one button to act on it.
-- Five marks (quality grade, context fill, cache countdown, 5-hour limit, weekly limit) with hover cards, and a click on Clawd unfolds branch, session time, tool calls, checkpoint and tokens saved.
-- Clean up, Start fresh and a manual Keep warm cache refresh are one click away. Keep warm never runs on its own.
-- Clawd acts out what your session is doing. Needs Claude Code 2.1.287 or newer and Anthropic's mods feature; the terminal status line is unchanged.
+- New: a Token Optimizer status bar for the Claude desktop app, as the separate `token-optimizer-desktop` plugin: `/plugin install token-optimizer-desktop@alexgreensh-token-optimizer`.
+- Quality, context, cache countdown and both usage limits at a glance, with a one-click Clean up, Start fresh or Keep warm when you need one.
+- One more line shows your session, its last checkpoint, and the tokens Token Optimizer saved you in the last 30 days.
+- Clawd acts out what your session is doing. Needs Claude Code 2.1.287 or newer; the terminal status line is unchanged.
+- The status line now counts compactions the moment they happen.
 
 ## [5.13.28] - 2026-09-30
 

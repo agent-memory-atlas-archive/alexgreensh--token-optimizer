@@ -16,7 +16,7 @@ Needs Claude Code 2.1.287 or newer and Anthropic's mods feature. Anthropic can s
 
 - One sentence about the most urgent thing, with at most one button.
 - Five marks with hover cards: quality grade, context fill, cache countdown, 5-hour limit, weekly limit.
-- Click **Session details** under Clawd to unfold branch, session time, tool calls, compactions (when any), last checkpoint, and tokens saved this session and over the past 30 days.
+- The **arrow beside Clawd** unfolds one more line: branch, session time, tool calls, compactions (when any), when the last checkpoint was saved (any kind, or a relevant one from an earlier session), and the tokens Token Optimizer saved you in the last 30 days, the same total the dashboard shows.
 - Buttons: **Clean up** (compacts with Token Optimizer's guidance), **Start fresh** (second click saves a checkpoint, clears, and hands it to your first message), **Keep warm** (manual one-click cache refresh, only while the cache is warm, never automatic, uses a small amount of usage).
 
 The cache countdown is an estimate: 1 hour on Claude plans, 5 minutes on the API, measured from the session itself when possible.

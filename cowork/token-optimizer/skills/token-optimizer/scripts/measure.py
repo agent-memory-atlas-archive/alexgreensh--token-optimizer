@@ -46112,25 +46112,26 @@ a missing or busy trends.db, or a missing transcript, gives nulls, not errors.
 Fields:
   schema                 1
   session_id             the sanitized session id
-  savings                null, or the object below (realized, metered savings)
+  savings                null, or the object below
     unit                 "tokens": the band shows tokens saved
-    session_tokens       this session's realized tokens saved (all time)
+    session_tokens       this session's realized (metered) tokens saved
     session_usd          the same in USD
     daily                30 entries, oldest first, one per LOCAL day ending
                          today: {"date": "YYYY-MM-DD", "tokens": int, "usd": float};
-                         zeros on days with no savings
+                         zeros on days with no savings (metered only)
     total_30d_usd        exactly _get_merged_savings(days=30)["total_cost_usd"],
-                         the realized metered headline (rolling 30 x 24 h)
-    total_30d_tokens     the dashboard's Tokens Saved headline for the same window:
-                       measured + estimated (_dashboard_saved_tokens)
-  total_30d_measured_tokens  _get_merged_savings(days=30)["total_tokens"], the floor
+                         the realized metered figure (rolling 30 x 24 h)
+    total_30d_tokens     the dashboard's Tokens Saved headline for the same
+                         window: measured + estimated (_dashboard_saved_tokens);
+                         0 when nothing was measured, as the dashboard hides it
+    total_30d_measured_tokens  _get_merged_savings(days=30)["total_tokens"], the floor
     computed_at          epoch seconds the savings were computed
-    The session figure and the bars are savings_events + realized
+    The session figure and the daily entries are savings_events + realized
     compression_events rows, netted by the same helpers as the headline
     (model-mix reprice, estimated-tier relocations, tool_archive re-expand
-    netting, v5 dedup). The headline also carries structural savings, which
-    cannot be split by session or day, so the 30 bars need not add up to the
-    30-day total. The band should show total_30d_tokens beside the bars.
+    netting, v5 dedup). The 30-day headline also carries structural and
+    estimated savings, which cannot be split by session or day, so the daily
+    entries need not add up to it. The band shows total_30d_tokens.
   savings_state          "fresh" (cache <= 60 s old), "stale" (served from an
                          older cache while a refresh runs), "loading" (no cache
                          yet, refresh started), or "unavailable"

@@ -621,14 +621,14 @@ Using the Claude desktop app? Add the `token-optimizer-desktop` plugin and a sta
 Install it alongside the main Token Optimizer plugin. It needs Claude Code 2.1.287 or newer and Anthropic's mods feature. Anthropic can switch mods off remotely; if that happens nothing breaks, the bar just doesn't appear. The terminal keeps its existing status line. VS Code is not supported.
 
 - **One sentence, one button**: the most urgent thing about your session, with at most one button to act on it.
-- **Five marks**: quality grade, context fill, cache countdown, 5-hour limit and weekly limit. Hover any mark for a card with the detail.
-- **Session details** (under Clawd) unfolds more: branch, session time, tool calls, compactions (when there are any), last checkpoint, and tokens saved this session and over the past 30 days.
+- **Five marks**: quality grade, context fill, cache countdown, 5-hour limit and weekly limit, each with its label. Hover any mark for a card with the detail.
+- **The arrow beside Clawd** unfolds one more line: branch, session time, tool calls, compactions (when there are any), when the last checkpoint was saved (any kind, or a relevant one from an earlier session), and how many tokens Token Optimizer saved you in the last 30 days, the same total the dashboard shows.
 - **Clawd acts out the session**: thinking, reading, typing, subagents, waiting for your permission, writing, compacting, done, stopped, API error, cold cache, napping.
 - **Clean up**: compacts with Token Optimizer's guidance.
 - **Start fresh**: asks for a second click, then saves a checkpoint, clears, and hands the checkpoint to your first message.
-- **Keep warm**: a manual, one-click cache refresh. It is offered only while the cache is still warm, never runs on its own, and uses a small amount of your usage.
+- **Keep warm**: a manual, one-click cache refresh. It is offered only while the cache is still warm, never runs on its own, and uses a small amount of your usage. Afterwards it tells you how many tokens it re-read from the cache.
 
-The cache countdown is an estimate, because Claude does not publish the exact expiry: 1 hour on Claude plans, 5 minutes on the API, measured from the session itself when possible. Turn the bar or its animation off with `enabled` and `animate` in `/config`.
+Point at the bar and Clawd looks over. The cache countdown is an estimate, because Claude does not publish the exact expiry: 1 hour on Claude plans, 5 minutes on the API, measured from the session itself when possible. Turn the bar or its animation off with `enabled` and `animate` in `/config`.
 
 ## Coach Mode
 
@@ -686,7 +686,7 @@ python3 measure.py keepwarm-report            # net savings, spend, tripwire sta
 python3 measure.py keepwarm-disable           # opt out any time
 ```
 
-Prefer a button? The [desktop status bar](#desktop-status-bar) has a manual **Keep warm** refresh for Claude plans. It is a separate one-click action, never automatic, and does not use the API-billed daemon above.
+Prefer a button? The [desktop status bar](#desktop-status-bar) has a manual **Keep warm** refresh. It is a separate one-click action, never automatic, and does not use the API-billed daemon above.
 
 ### Fleet Auditor
 

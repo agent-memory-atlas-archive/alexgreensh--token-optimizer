@@ -31,14 +31,14 @@ The `token-optimizer-desktop` plugin adds a status bar above the prompt in the C
 
 - One sentence about the most urgent thing, with at most one button.
 - Five marks: quality grade, context fill, cache countdown, 5-hour limit, weekly limit. Hover any mark for a card.
-- Click **Session details** under Clawd to unfold branch, session time, tool calls, compactions (when any), last checkpoint, and tokens saved this session and over the past 30 days.
+- The **arrow beside Clawd** unfolds one more line: branch, session time, tool calls, compactions (when any), when the last checkpoint was saved (any kind, or a relevant one from an earlier session), and the tokens Token Optimizer saved you in the last 30 days, the same total the dashboard shows.
 - Clawd acts out what the session is doing: thinking, reading, typing, subagents, waiting for your permission, writing, compacting, done, stopped, API error, cold cache, napping.
 
 ## Buttons
 
-- **Clean up** compacts with Token Optimizer's guidance.
+- **Clean up** compacts with Token Optimizer's guidance, the same as typing `/compact`.
 - **Start fresh** asks for a second click, then saves a checkpoint, clears, and hands the checkpoint to your first message.
-- **Keep warm** is a manual, one-click cache refresh. It is offered only while the cache is still warm and its lifetime has been measured. It never runs on its own, disappears when the cache expires, and uses a small amount of your usage. It is separate from the [Keep-Warm daemon](/features/keep-warm/#the-manual-keep-warm-button).
+- **Keep warm** is a manual, one-click cache refresh. It is offered only while the cache is still warm and its lifetime has been measured. It never runs on its own, disappears when the cache expires, and uses a small amount of your usage. Afterwards it tells you how many tokens it re-read from the cache and that the countdown is back to full. It is separate from the [Keep-Warm daemon](/features/keep-warm/#the-manual-keep-warm-button).
 
 ## The cache countdown
 
