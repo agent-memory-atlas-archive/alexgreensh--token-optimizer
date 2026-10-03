@@ -44,7 +44,7 @@ test('desktop draws Clawd, "Token Optimizer", the sentence and five marks', asyn
   }
   expect((await exactly(ui, '62%')).length).toBeGreaterThan(0)
   expect((await exactly(ui, '88')).length).toBeGreaterThan(0)
-  expect((await exactly(ui, '60m')).length).toBeGreaterThan(0)
+  expect((await exactly(ui, '59:30')).length).toBeGreaterThan(0)
 
   // Every Svg names its state (R18).
   for (const svg of svgs) {

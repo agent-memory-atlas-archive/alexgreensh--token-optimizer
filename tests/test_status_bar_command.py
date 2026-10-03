@@ -483,3 +483,12 @@ def test_dashboard_headline_formula_matches_the_dashboard_source():
                   "Number(s.total_tokens)"):
         assert field in card, field
     assert card.count("pushEst(obj, label)") == 4
+
+
+def test_compactions_counted_from_transcript(sb, tmp_path):
+    f = tmp_path / "t.jsonl"
+    rows = ['{"type":"user"}', '{"type":"system","subtype":"compact_boundary"}', '{"type":"assistant"}',
+            '{"type":"system","subtype":"compact_boundary"}']
+    f.write_text("\n".join(rows) + "\n", encoding="utf-8")
+    assert sb._status_bar_compactions(f) == 2
+    assert sb._status_bar_compactions(tmp_path / "missing.jsonl") is None

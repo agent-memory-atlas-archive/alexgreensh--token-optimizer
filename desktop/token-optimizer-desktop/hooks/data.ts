@@ -310,6 +310,7 @@ export async function gather(
     cacheLifetime: base?.cacheLifetime ?? null,
     checkpointEpoch: base?.checkpointEpoch ?? null,
     earlierCheckpoint: base?.earlierCheckpoint ?? null,
+    compactions: base?.compactions ?? null,
   }
 
   const facts = notFound
@@ -326,13 +327,18 @@ export async function gather(
           cacheLifetime: status.cacheLifetime ?? kept.cacheLifetime,
           checkpointEpoch: status.checkpointEpoch,
           earlierCheckpoint: status.earlierCheckpoint,
+          compactions: status.compactions ?? kept.compactions,
         }
       : kept
+
+  // The higher count wins: the quality cache can lag a compaction that just landed.
+  const counted = 'compactions' in facts ? facts.compactions : null
+  const merged = quality && counted != null && counted > quality.compactions ? { ...quality, compactions: counted } : quality
 
   return {
     sessionId: sid,
     gatheredAt: now,
-    quality,
+    quality: merged,
     ...usage,
     branch,
     ...facts,

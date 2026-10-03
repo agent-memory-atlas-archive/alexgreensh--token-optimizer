@@ -46046,6 +46046,7 @@ Fields:
                          lifetime on the main thread (null = unmeasured)
   last_checkpoint_epoch  this session's newest checkpoint (quality cache or
                          checkpoint file) across Token Optimizer's storage dirs
+  compactions            compact_boundary rows in the transcript, or null
   earlier_checkpoint     {epoch, about} for the earlier session's checkpoint
                          flagged as resumable for this one at start, or null
 
@@ -46331,6 +46332,33 @@ def _status_bar_release_lock(session_id, token):
         return False
 
 
+_COMPACT_MARK = b'"subtype":"compact_boundary"'
+
+
+def _status_bar_compactions(path):
+    """How many times this transcript was compacted (compact_boundary rows), or None.
+
+    A plain byte count in 1 MB chunks: the quality cache's own count can lag a
+    compaction, and the band shows this number right after one.
+    """
+    try:
+        count = 0
+        tail = b""
+        with open(path, "rb") as fh:
+            while True:
+                chunk = fh.read(1 << 20)
+                if not chunk:
+                    break
+                buf = tail + chunk
+                count += buf.count(_COMPACT_MARK)
+                # Keep a boundary-straddling prefix, minus anything already counted.
+                keep = buf[-(len(_COMPACT_MARK) - 1):]
+                tail = keep if _COMPACT_MARK not in keep else b""
+        return count
+    except OSError:
+        return None
+
+
 def _status_bar_transcript_state(path):
     """(last_request_epoch, cache_lifetime) from a transcript, read from the end.
 
@@ -46507,6 +46535,7 @@ def status_bar_payload(session_id, transcript=None, sync=False):
         "cache_lifetime": None,
         "last_checkpoint_epoch": None,
         "earlier_checkpoint": None,
+        "compactions": None,
     }
     if sid == "unknown":
         out["savings_reason"] = "no session id"
@@ -46516,6 +46545,7 @@ def status_bar_payload(session_id, transcript=None, sync=False):
         path = Path(transcript) if transcript else _find_session_jsonl_by_id(sid)
         if path is not None:
             out["last_request_epoch"], out["cache_lifetime"] = _status_bar_transcript_state(path)
+            out["compactions"] = _status_bar_compactions(path)
     except Exception:
         pass
     try:

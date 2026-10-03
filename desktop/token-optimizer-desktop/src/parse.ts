@@ -20,6 +20,8 @@ export type StatusBar = {
   checkpointEpoch: number | null
   /** The earlier session's checkpoint Token Optimizer flagged as resumable for this one. */
   earlierCheckpoint: EarlierCheckpoint
+  /** Compactions counted in the transcript; the quality cache can lag one. */
+  compactions: number | null
 }
 
 export type EarlierCheckpoint = { epoch: number; about: string | null } | null
@@ -197,6 +199,10 @@ export function parseStatusBar(json: unknown): StatusBar | null {
     cacheLifetime: lifetime,
     checkpointEpoch: checkpoint !== null && checkpoint > 0 ? checkpoint : null,
     earlierCheckpoint: parseEarlier(out.earlier_checkpoint),
+    compactions: (() => {
+      const n = num(out.compactions)
+      return n !== null && n >= 0 ? Math.floor(n) : null
+    })(),
   }
 }
 

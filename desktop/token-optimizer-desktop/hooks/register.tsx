@@ -258,8 +258,8 @@ async function tick($: EngineInterface): Promise<void> {
       lastCold = cold
       await feedPose($, { type: 'cache-cold-changed', cold })
     }
-    // Only a change the band shows redraws it: each redraw risks restarting Clawd's animation.
-    const shown = v.state === 'warning' ? v.secondsLeft : v.secondsLeft != null ? Math.ceil(v.secondsLeft / 60) : ''
+    // Only a change the band shows redraws it: the cache clock counts seconds, as the design does.
+    const shown = v.secondsLeft ?? ''
     const text = [v.state, shown, Math.floor(now / TICK_IDLE_MS), busyNow(ui, now), noteNow(ui, now), isArmed(ui, now)].join('|')
     if (text !== frameText) {
       frameText = text
@@ -812,16 +812,15 @@ function themed(svg: string, rootClass?: string): string {
 
 const esc = (v: string): string => v.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
-/** A mark's icon beside its ring or grade badge, as one small picture. */
+/** A mark's ring or grade badge, as the artifact draws it: the colour lives here, the text stays ink. */
 function markSvg(mark: Mark, t: Tones): string {
   const color = toneColor(mark.tone, t)
-  const icon = `<g transform="translate(0 2)"${mark.tone === 'none' ? ' class="k"' : ''} fill="none" stroke="${mark.tone === 'none' ? t.ink : color}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">${ICONS[mark.icon]}</g>`
   const right =
     mark.badge !== undefined
-      ? `<rect x="20" y="1" width="18" height="18" rx="5"${mark.tone === 'none' ? ' class="tf"' : ''} fill="${mark.tone === 'none' ? t.track : color}"/>` +
-        `<text x="29" y="14" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11.5" font-weight="700" fill="${t.card}">${esc(mark.badge)}</text>`
-      : `<g transform="translate(19 0)">${ring(mark.ringPercent ?? 0, color, t.track, mark.tone === 'cold')}</g>`
-  return themed(`<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20" viewBox="0 0 40 20" role="img" aria-label="${esc(mark.alt)}"><title>${esc(mark.alt)}</title>${icon}${right}</svg>`)
+      ? `<rect x="1" y="1" width="18" height="18" rx="5"${mark.tone === 'none' ? ' class="tf"' : ''} fill="${mark.tone === 'none' ? t.track : color}"/>` +
+        `<text x="10" y="14" text-anchor="middle" font-family="system-ui, sans-serif" font-size="11.5" font-weight="700" fill="${t.card}">${esc(mark.badge)}</text>`
+      : ring(mark.ringPercent ?? 0, color, t.track, mark.tone === 'cold')
+  return themed(`<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20" role="img" aria-label="${esc(mark.alt)}"><title>${esc(mark.alt)}</title>${right}</svg>`)
 }
 
 function toneColor(tone: MarkTone, t: Tones): string {
@@ -954,92 +953,106 @@ function drawBand(D: Desktop, m: Model, on: Handlers) {
     ...(m.canWarm && snap.cache.state === 'warning' ? [{ id: 'warm' as const, label: 'Keep warm' }] : []),
   ].filter(a => a.id !== say.action?.id && !(a.id === 'clean' && say.action?.id === 'clean-first'))
 
+  const savingsBlock = (
+    <Box flexDirection="row" alignItems="center" columnGap={2}>
+      {bars.length > 0 ? (() => {
+        const b = barsSvg(bars, t)
+        return <Svg source={b.source} alt={b.alt} width={b.width} height={28} />
+      })() : icon(D, 'bookmark', t.ink, 'Savings')}
+      <Box flexDirection="column">
+        {(detail.savings.sessionTokens ?? 0) >= SESSION_SAVED_MIN ? (
+          <Text>
+            <Text bold>{detail.savings.sessionText}</Text> saved this session
+          </Text>
+        ) : (
+          ''
+        )}
+        <Text>
+          <Text bold>{detail.savings.last30Text}</Text> past 30 days
+        </Text>
+        {detail.savings.state === 'unavailable' ? <Text>{m.savingsReason ?? detail.savings.reason ?? ''}</Text> : ''}
+      </Box>
+    </Box>
+  )
+
+  // The artifact's layout: Clawd and his arrow beside the sentence and the marks; the
+  // unfolded row under all of it, from Clawd's left edge, savings on the right.
   return (
-    <Box flexDirection="row" alignItems="flex-start" columnGap={2} paddingX={1}>
-      <Box flexDirection="column" alignItems="center" flexShrink={0}>
-        {/* Box sizes count text cells on desktop, so the bottom picture sizes the stack and the new one sits over it.
-            Hovering Clawd lights the arrow beneath him: only a Button can be pressed, and its label is text. */}
-        <Box position="relative" hover={{ scope: MORE_SCOPE }}>
-          {m.clawd.map((c, i) => (
-            <Box key={c.key} {...(i === 0 ? {} : { position: 'absolute' as const, top: 0, left: 0 })}>
-              {/* Not isInteractive: the desktop reloads an interactive picture on every redraw (a blank frame); a plain one keeps its animation. */}
-              <Svg source={c.source} alt={c.alt} width={72} height={57} />
-            </Box>
-          ))}
-          {/* Hover can reveal but not move: each look is its own picture, drawn hidden over him and shown by its part of the band. */}
-          {m.gazes.map(g => (
-            <Box key={g.key} position="absolute" top={0} left={0} display="none" hover={{ scope: gazeScope(g.gaze), display: 'flex' }}>
-              <Svg source={g.source} alt={g.alt} width={72} height={57} />
-            </Box>
-          ))}
+    <Box flexDirection="column" paddingX={1} rowGap={1}>
+      <Box flexDirection="row" alignItems="center" columnGap={2}>
+        <Box flexDirection="row" alignItems="center" columnGap={1} flexShrink={0}>
+          {/* Box sizes count text cells on desktop, so the bottom picture sizes the stack and the new one sits over it.
+              Hovering Clawd lights the arrow beside him: only a Button can be pressed, and its label is text. */}
+          <Box position="relative" hover={{ scope: MORE_SCOPE }}>
+            {m.clawd.map((c, i) => (
+              <Box key={c.key} {...(i === 0 ? {} : { position: 'absolute' as const, top: 0, left: 0 })}>
+                {/* Not isInteractive: the desktop reloads an interactive picture on every redraw (a blank frame); a plain one keeps its animation. */}
+                <Svg source={c.source} alt={c.alt} width={72} height={57} />
+              </Box>
+            ))}
+            {/* Hover can reveal but not move: each look is its own picture, drawn hidden over him and shown by its part of the band. */}
+            {m.gazes.map(g => (
+              <Box key={g.key} position="absolute" top={0} left={0} display="none" hover={{ scope: gazeScope(g.gaze), display: 'flex' }}>
+                <Svg source={g.source} alt={g.alt} width={72} height={57} />
+              </Box>
+            ))}
+          </Box>
+          <Box hover={{ scope: gazeScope('down') }}>
+            {/* A native button, not a bare glyph: its frame says "press me". */}
+            <Button
+              key="details"
+              label={m.sheetOpen ? '▴' : '▾'}
+              hover={{ scope: MORE_SCOPE, bold: true, color: LIGHT.skin }}
+              onPress={() => on.details()}
+            />
+          </Box>
         </Box>
-        <Box hover={{ scope: gazeScope('down') }}>
-          <Button
-            key="details"
-            plain
-            label={m.sheetOpen ? '▴' : '▾'}
-            hover={{ scope: MORE_SCOPE, bold: true, color: LIGHT.skin }}
-            onPress={() => on.details()}
-          />
+        <Box flexDirection="column" flexGrow={1} flexShrink={1} rowGap={1}>
+          <Box flexDirection="row" alignItems="center" justifyContent="space-between" columnGap={2} hover={{ scope: gazeScope('up-right') }}>
+            <Box flexDirection="row" alignItems="center" columnGap={1} flexShrink={1}>
+              <Text bold>Token Optimizer</Text>
+              {icon(D, say.icon, toneColor(say.tone, t))}
+              <Text wrap="wrap">{runsOf(D, say.runs, t)}</Text>
+            </Box>
+            {say.action ? <Button key="action" variant="primary" label={say.action.label} onPress={() => on.act(say.action!.id)} /> : ''}
+          </Box>
+          {/* One line, never wrapped: a wrapped mark's card would open over the marks above it. */}
+          <Box flexDirection="row" flexWrap="nowrap" columnGap={3} hover={{ scope: gazeScope('right') }}>
+            {markList.map((mark, i) => (
+              <Box key={`mark-${mark.id}`} position="relative" flexDirection="row" alignItems="center" columnGap={1}>
+                <Svg source={markSvg(mark, t)} alt={mark.alt} width={20} height={20} />
+                <Text bold>{mark.value}</Text>
+                {m.narrow ? '' : <Text>{mark.label}</Text>}
+                {cardList[i] ? cardBox(D, cardList[i], i, t, on) : ''}
+              </Box>
+            ))}
+          </Box>
         </Box>
       </Box>
-      <Box flexDirection="column" flexGrow={1} flexShrink={1} rowGap={1}>
-        <Box flexDirection="row" alignItems="flex-start" justifyContent="space-between" columnGap={2} hover={{ scope: gazeScope('up-right') }}>
-          <Box flexDirection="row" alignItems="flex-start" columnGap={1} flexShrink={1}>
-            <Text bold>Token Optimizer</Text>
-            {icon(D, say.icon, toneColor(say.tone, t))}
-            <Text wrap="wrap">{runsOf(D, say.runs, t)}</Text>
-          </Box>
-          {say.action ? <Button key="action" variant="primary" label={say.action.label} onPress={() => on.act(say.action!.id)} /> : ''}
-        </Box>
-        {/* One line, never wrapped: a wrapped mark's card would open over the marks above it. */}
-        <Box flexDirection="row" flexWrap="nowrap" columnGap={2} hover={{ scope: gazeScope('right') }}>
-          {markList.map((mark, i) => (
-            <Box key={`mark-${mark.id}`} position="relative" flexDirection="row" alignItems="center" columnGap={1}>
-              <Svg source={markSvg(mark, t)} alt={mark.alt} width={40} height={20} />
-              <Text bold>{mark.value}</Text>
-              {m.narrow ? '' : <Text>{mark.label}</Text>}
-              {cardList[i] ? cardBox(D, cardList[i], i, t, on) : ''}
-            </Box>
-          ))}
-        </Box>
-        {m.sheetOpen ? (
-          <Box key="row" flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={3} rowGap={1} hover={{ scope: gazeScope('down-right') }}>
+      {m.sheetOpen ? (
+        <Box key="row" flexDirection="row" flexWrap="wrap" alignItems="center" justifyContent="space-between" columnGap={4} rowGap={1} hover={{ scope: gazeScope('down-right') }}>
+          <Box flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={3} rowGap={1}>
             {detail.facts.map(f => (
               <Box flexDirection="row" alignItems="center" columnGap={1}>
                 {icon(D, f.icon, t.ink)}
                 <Text>{runsOf(D, f.runs, t)}</Text>
               </Box>
             ))}
-            <Box flexDirection="row" alignItems="center" columnGap={1}>
-              {bars.length > 0 ? (() => {
-                const b = barsSvg(bars, t)
-                return <Svg source={b.source} alt={b.alt} width={b.width} height={28} />
-              })() : icon(D, 'bookmark', t.ink, 'Savings')}
-              <Box flexDirection="column">
-                {(detail.savings.sessionTokens ?? 0) >= SESSION_SAVED_MIN ? (
-                  <Text>
-                    <Text bold>{detail.savings.sessionText}</Text> saved this session
-                  </Text>
-                ) : (
-                  ''
-                )}
-                <Text>
-                  <Text bold>{detail.savings.last30Text}</Text> past 30 days
-                </Text>
-                {detail.savings.state === 'unavailable' ? <Text>{m.savingsReason ?? detail.savings.reason ?? ''}</Text> : ''}
+            {rowActions.length > 0 ? (
+              <Box flexDirection="row" alignItems="center" columnGap={1}>
+                {rowActions.map(a => (
+                  <Button key={`row-${a.id}`} label={a.label} onPress={() => on.act(a.id)} />
+                ))}
               </Box>
-            </Box>
-            {rowActions.length > 0 ? <Box flexDirection="row" alignItems="center" columnGap={1}>
-              {rowActions.map(a => (
-                <Button key={`row-${a.id}`} label={a.label} onPress={() => on.act(a.id)} />
-              ))}
-            </Box> : ''}
+            ) : (
+              ''
+            )}
           </Box>
-        ) : (
-          ''
-        )}
-      </Box>
+          {savingsBlock}
+        </Box>
+      ) : (
+        ''
+      )}
     </Box>
   )
 }
@@ -1203,7 +1216,10 @@ export const register: Register = (on, options) => {
       return await next(e)
     } finally {
       await feedPose($, { type: 'compact-end' })
-      $.clock.after(0, () => void attempt(() => refresh($), undefined))
+      // Any compaction (button, typed /compact, automatic): Token Optimizer saved a checkpoint
+      // before it, so re-read everything now and again once its after-compact hooks have written.
+      $.clock.after(0, () => void attempt(() => refresh($, { savings: true }), undefined))
+      $.clock.after(STATUS_AFTER_TURN_MS, () => void attempt(() => refresh($, { savings: true }), undefined))
     }
   })
 

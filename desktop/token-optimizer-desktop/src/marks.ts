@@ -71,7 +71,7 @@ function cacheMark(c: CacheView): Mark {
       const left = c.secondsLeft ?? 0
       const tone: Tone = c.state === 'warm' ? 'good' : 'caution'
       const word = c.state === 'warm' ? 'warm' : 'about to drop'
-      return { ...base, icon: 'hourglass', value: c.state === 'warm' ? minutes(left) : clock(left), tone, ringPercent: clamp((left / c.lifetime) * 100), alt: `Cache ${word}, ${clock(left)} left, ${est}` }
+      return { ...base, icon: 'hourglass', value: clock(left), tone, ringPercent: clamp((left / c.lifetime) * 100), alt: `Cache ${word}, ${clock(left)} left, ${est}` }
     }
     case 'cold':
       return { ...base, icon: 'cold', value: 'cold', tone: 'cold', ringPercent: 0, alt: `Cache cold, ${est}` }
@@ -99,7 +99,7 @@ function limitMark(id: 'fiveHour' | 'week', limit: Limit, now: number, opts: For
     id,
     icon: 'clock',
     value: `${p}%`,
-    label: id === 'fiveHour' ? '5h' : 'week',
+    label: id === 'fiveHour' ? '5 hours' : 'week',
     tone: limitTone(limit.percentUsed),
     ringPercent: clamp(limit.percentUsed),
     alt: `${name} limit ${p}% used` + (when ? `, renews ${when}` : ''),
