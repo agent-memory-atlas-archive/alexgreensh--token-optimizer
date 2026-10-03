@@ -38487,6 +38487,27 @@ def _install_hook_budget(seconds=8, on_timeout=None):
     return HookDeadline(seconds, on_timeout=on_timeout).start()
 
 
+_COMPACT_CAPTURE_BUDGET_DEFAULT_S = 8
+_COMPACT_CAPTURE_BUDGET_MAX_S = 60
+
+
+def _compact_capture_budget_seconds(args):
+    """Wall-clock budget for `compact-capture`, from `--budget-seconds N`.
+
+    Hooks pass nothing and keep the 8 s default. A missing, unreadable or
+    non-positive value gives the default; anything above 60 s is capped at 60."""
+    try:
+        argv = list(args or ())
+        if "--budget-seconds" in argv:
+            i = argv.index("--budget-seconds")
+            value = float(argv[i + 1])
+            if value == value and value > 0:  # rejects NaN
+                return min(value, float(_COMPACT_CAPTURE_BUDGET_MAX_S))
+    except (IndexError, ValueError, TypeError):
+        pass
+    return _COMPACT_CAPTURE_BUDGET_DEFAULT_S
+
+
 def _dashboard_hook_budget_seconds(default=20):
     """Wall-clock budget for a hook-run dashboard rebuild.
 
@@ -45974,6 +45995,8 @@ _STATUS_BAR_SCHEMA = 1
 _STATUS_BAR_DAYS = 30
 _STATUS_BAR_CACHE_MAX_AGE_S = 60
 _STATUS_BAR_LOCK_STALE_S = 120
+# The detached refresh child reads its lock's owner token from this variable.
+_STATUS_BAR_LOCK_TOKEN_ENV = "TO_STATUS_BAR_LOCK_TOKEN"
 _STATUS_BAR_CACHE_RETENTION_S = 30 * 86400
 _STATUS_BAR_TAIL_CHUNK = 1 << 20
 _STATUS_BAR_TAIL_MAX_BYTES = 16 << 20
@@ -46195,8 +46218,12 @@ def _status_bar_start_refresh(session_id):
 
     A lock file (O_EXCL) makes concurrent callers start at most one child; the
     child removes it when done, and a lock older than 120 s counts as abandoned.
+    The lock holds a random owner token, passed to the child in the
+    TO_STATUS_BAR_LOCK_TOKEN environment variable; the child deletes the lock
+    only while it still holds that token.
     """
     lock = _status_bar_lock_path(session_id)
+    token = os.urandom(16).hex()
     try:
         lock.parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -46204,23 +46231,70 @@ def _status_bar_start_refresh(session_id):
         except FileExistsError:
             if time.time() - lock.stat().st_mtime < _STATUS_BAR_LOCK_STALE_S:
                 return False
-            lock.unlink()
-            fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        os.write(fd, str(os.getpid()).encode("ascii"))
+            # Take an abandoned lock over by renaming it aside. Rename is atomic,
+            # so when two callers race only one moves the file; the other gets
+            # FileNotFoundError and backs off instead of deleting the winner's lock.
+            quarantine = lock.with_name(
+                f"{lock.name}.{os.getpid()}.{time.time_ns()}.stale")
+            try:
+                os.rename(str(lock), str(quarantine))
+            except OSError:
+                return False
+            try:
+                moved_fresh = (time.time() - os.stat(str(quarantine)).st_mtime
+                               < _STATUS_BAR_LOCK_STALE_S)
+            except OSError:
+                moved_fresh = False
+            if moved_fresh:
+                # Another caller replaced the stale lock between our check and the
+                # rename, so we moved its live lock. Put it back without
+                # overwriting anything (link fails if the name is taken) and back off.
+                try:
+                    os.link(str(quarantine), str(lock))
+                except (OSError, AttributeError):
+                    pass
+                try:
+                    quarantine.unlink()
+                except OSError:
+                    pass
+                return False
+            try:
+                quarantine.unlink()
+            except OSError:
+                pass
+            try:
+                fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                return False
+        os.write(fd, token.encode("ascii"))
         os.close(fd)
     except OSError:
         return False
+    # The child releases the lock only if it still holds this token, so a child
+    # that outlives its lock never deletes a newer caller's lock.
     proc = spawn_detached(
         [_detached_python_exe(), str(MEASURE_PY_PATH), "status-bar",
          "--session", session_id, "--sync", "--release-lock"],
-        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        env={**os.environ, _STATUS_BAR_LOCK_TOKEN_ENV: token})
     if proc is None:
-        try:
-            lock.unlink()
-        except OSError:
-            pass
+        _status_bar_release_lock(session_id, token)
         return False
     return True
+
+
+def _status_bar_release_lock(session_id, token):
+    """Delete the refresh lock only when it still holds `token`. Never raises."""
+    if not token:
+        return False
+    lock = _status_bar_lock_path(session_id)
+    try:
+        if lock.read_text(encoding="ascii", errors="replace").strip() != token:
+            return False
+        lock.unlink()
+        return True
+    except OSError:
+        return False
 
 
 def _status_bar_transcript_state(path):
@@ -46417,10 +46491,8 @@ def _status_bar_cli(args):
         payload = status_bar_payload(session, transcript=_opt("--transcript"), sync=sync)
     finally:
         if sync and "--release-lock" in args:
-            try:
-                _status_bar_lock_path(sanitize_session_id(session)).unlink()
-            except OSError:
-                pass
+            _status_bar_release_lock(sanitize_session_id(session),
+                                     os.environ.get(_STATUS_BAR_LOCK_TOKEN_ENV, ""))
     print(json.dumps(payload))
     sys.exit(0)
 
@@ -49998,7 +50070,9 @@ if __name__ == "__main__":
         # feel like anything but a freeze). Cap it and fail open: a skipped checkpoint on
         # a single Stop is invisible (progressive checkpoints already cover the session),
         # a frozen hook is not. Mirrors the keepwarm-arm budget in the block below.
-        _tok_hook_old_sig = _install_hook_budget(8)
+        # Hooks keep the 8s default. A caller that waits on the result (the desktop
+        # Start fresh button) passes --budget-seconds N, capped at 60.
+        _tok_hook_old_sig = _install_hook_budget(_compact_capture_budget_seconds(args))
         try:
             # Read hook input from stdin (JSON with session_id, transcript_path, etc.)
             hook_input = _read_stdin_hook_input()
@@ -51554,6 +51628,7 @@ if __name__ == "__main__":
         print("  python3 measure.py setup-hook --dry-run # Show what would be installed")
         print("  python3 measure.py setup-hook --uninstall  # Remove Token Optimizer's SessionEnd hook")
         print("  python3 measure.py compact-capture          # Capture session state checkpoint")
+        print("  python3 measure.py compact-capture --budget-seconds N  # Allow up to N s (default 8, max 60)")
         print("  python3 measure.py checkpoint-trigger --milestone pre-fanout  # Milestone checkpoint with guards")
         print("  python3 measure.py compact-restore          # Restore context from checkpoint")
         print("  python3 measure.py continue-last --topic TEXT  # Show Codex continuity hint for a topic")

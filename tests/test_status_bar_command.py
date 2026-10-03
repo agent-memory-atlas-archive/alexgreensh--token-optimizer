@@ -320,3 +320,98 @@ def test_full_compute_within_5s_on_50k_rows(sb):
     elapsed = time.perf_counter() - t0
     assert elapsed < 5.0, f"full compute took {elapsed:.2f}s"
     assert sav["session_tokens"] == 25_000 * 100
+
+
+# --------------------------------------------------------------------------
+# Refresh lock: atomic stale takeover and owner token (TR-22)
+# --------------------------------------------------------------------------
+
+def _stale_lock(sb, content="old-owner", age_s=200):
+    lock = sb._status_bar_lock_path(SID_A)
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text(content, encoding="ascii")
+    old = time.time() - age_s
+    os.utime(lock, (old, old))
+    return lock
+
+
+def test_stale_lock_taken_over_by_one_caller_only(sb, monkeypatch):
+    lock = _stale_lock(sb)
+    spawns = []
+    monkeypatch.setattr(sb, "spawn_detached", lambda argv, **kw: spawns.append(kw) or object())
+    assert sb._status_bar_start_refresh(SID_A) is True
+    assert sb._status_bar_start_refresh(SID_A) is False
+    assert len(spawns) == 1
+    assert lock.exists()
+    assert not list(lock.parent.glob(lock.name + ".*.stale")), "quarantined lock left behind"
+
+
+def test_racing_takeover_of_a_stale_lock_starts_one_child(sb, monkeypatch):
+    """Both callers see the stale lock before either acts. The late one must
+    not delete or replace the lock the first one just took."""
+    import pathlib
+    lock = _stale_lock(sb)
+    spawns = []
+    monkeypatch.setattr(sb, "spawn_detached", lambda argv, **kw: spawns.append(kw) or object())
+    real_stat = pathlib.Path.stat
+    raced = {"done": False}
+
+    def racing_stat(self, *a, **kw):
+        st = real_stat(self, *a, **kw)
+        if not raced["done"] and self == lock:
+            raced["done"] = True
+            # Caller B runs to completion between A's staleness check and A's takeover.
+            assert sb._status_bar_start_refresh(SID_A) is True
+        return st
+
+    monkeypatch.setattr(pathlib.Path, "stat", racing_stat)
+    assert sb._status_bar_start_refresh(SID_A) is False
+    monkeypatch.setattr(pathlib.Path, "stat", real_stat)
+    assert len(spawns) == 1
+    assert lock.read_text(encoding="ascii") == spawns[0]["env"][sb._STATUS_BAR_LOCK_TOKEN_ENV]
+    assert not list(lock.parent.glob(lock.name + ".*.stale"))
+
+
+def test_child_gets_the_lock_token_in_its_environment(sb, monkeypatch):
+    spawns = []
+    monkeypatch.setattr(sb, "spawn_detached", lambda argv, **kw: spawns.append((argv, kw)) or object())
+    assert sb._status_bar_start_refresh(SID_A) is True
+    argv, kw = spawns[0]
+    token = kw["env"]["TO_STATUS_BAR_LOCK_TOKEN"]
+    assert len(token) == 32
+    assert sb._status_bar_lock_path(SID_A).read_text(encoding="ascii") == token
+    assert not any("TOKEN" in a for a in argv), "the token travels by env, not the CLI"
+
+
+def test_failed_spawn_releases_its_own_lock(sb, monkeypatch):
+    monkeypatch.setattr(sb, "spawn_detached", lambda argv, **kw: None)
+    assert sb._status_bar_start_refresh(SID_A) is False
+    assert not sb._status_bar_lock_path(SID_A).exists()
+
+
+def _run_release(sb, env_token):
+    env = dict(os.environ)
+    env.update(sb._sb_env)
+    env.pop("TO_STATUS_BAR_LOCK_TOKEN", None)
+    if env_token is not None:
+        env["TO_STATUS_BAR_LOCK_TOKEN"] = env_token
+    proc = subprocess.run(
+        [sys.executable, str(MEASURE), "status-bar", "--session", SID_A,
+         "--sync", "--release-lock"],
+        capture_output=True, text=True, env=env, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    return sb._status_bar_lock_path(SID_A)
+
+
+@pytest.mark.parametrize("env_token", ["b" * 32, None, ""])
+def test_child_keeps_a_lock_it_does_not_own(sb, env_token):
+    _stale_lock(sb, content="a" * 32, age_s=0)
+    lock = _run_release(sb, env_token)
+    assert lock.exists()
+    assert lock.read_text(encoding="ascii") == "a" * 32
+
+
+def test_child_releases_its_own_lock(sb):
+    _stale_lock(sb, content="a" * 32, age_s=0)
+    lock = _run_release(sb, "a" * 32)
+    assert not lock.exists()
