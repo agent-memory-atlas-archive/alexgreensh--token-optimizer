@@ -141,8 +141,6 @@ declare module 'claude-code' {
       pose: TokenOptimizerDesktopPose | null
       ui: TokenOptimizerDesktopUi | null
       engineCall: TokenOptimizerDesktopEngineCall
-      /** The app theme's palette, from the `theme` config row. */
-      theme: 'light' | 'dark'
       /** Bumped by the clock tick when the visible clock changes (KTD13). */
       frame: number
     }

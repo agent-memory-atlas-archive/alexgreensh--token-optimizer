@@ -162,7 +162,7 @@ test('iconSvg returns a standalone SVG with xmlns, colour and alt', () => {
   assert.ok(svg.includes(ICONS.check))
   assert.ok(svg.endsWith('</svg>'))
   assert.match(iconSvg('ask', 'red" onload="x'), /stroke="red&quot; onload=&quot;x"/)
-  for (const name of ['branch', 'clock', 'tool', 'compact', 'bookmark', 'cold', 'hourglass', 'gauge', 'check', 'slip', 'ask', 'chevron'] as const) {
+  for (const name of ['branch', 'clock', 'tool', 'compact', 'bookmark', 'cold', 'hourglass', 'gauge', 'check', 'slip', 'ask', 'saved'] as const) {
     assert.ok(ICONS[name].length > 0, name)
   }
 })

@@ -66,17 +66,14 @@ const clockAtom = atom({ plugin: 'token-optimizer-desktop', key: 'clock' } as co
 const poseAtom = atom({ plugin: 'token-optimizer-desktop', key: 'pose' } as const, null)
 const engineCallAtom = atom({ plugin: 'token-optimizer-desktop', key: 'engineCall' } as const, null)
 const uiAtom = atom({ plugin: 'token-optimizer-desktop', key: 'ui' } as const, null)
-const themeAtom = atom({ plugin: 'token-optimizer-desktop', key: 'theme' } as const, 'light')
 const frameAtom = atom({ plugin: 'token-optimizer-desktop', key: 'frame' } as const, 0)
 
 type Desktop = Elements['desktop']
 type Tones = { good: string; caution: string; bad: string; cold: string; ink: string; track: string; card: string; line: string }
 
-/** The design page's tone colours, light and dark; bad, cold and ink come from Clawd's palette. */
-function tonesFor(theme: 'light' | 'dark', p: Palette): Tones {
-  return theme === 'dark'
-    ? { good: '#57c27c', caution: '#e0a63c', bad: p.bad, cold: p.cold, ink: p.ink, track: '#4b4a46', card: p.card, line: '#3e3e3b' }
-    : { good: '#2f9e55', caution: '#c98a1b', bad: p.bad, cold: p.cold, ink: p.ink, track: '#d9d6cd', card: p.card, line: '#e2dfd6' }
+/** The design page's tone colours (light; each picture follows dark mode itself, see DARK_STYLE). */
+function tonesFor(p: Palette): Tones {
+  return { good: '#2f9e55', caution: '#c98a1b', bad: p.bad, cold: p.cold, ink: p.ink, track: '#d9d6cd', card: p.card, line: '#e2dfd6' }
 }
 
 // ---- module state: plain variables, rebuilt from the atoms after a reload ----
@@ -272,13 +269,6 @@ async function closeAsks($: EngineInterface): Promise<void> {
   for (let i = poseLive?.questions ?? 0; i > 0; i--) await feedPose($, { type: 'question-closed' })
 }
 
-async function refreshTheme($: EngineInterface): Promise<void> {
-  const rows = await attempt(() => $.config.list(), [])
-  const value = rows.find(r => r.key === 'theme')?.value
-  const theme = typeof value === 'string' && value.toLowerCase().includes('dark') ? 'dark' : 'light'
-  await attempt(() => update($, themeAtom, () => theme), undefined)
-}
-
 function planDefault(s: TokenOptimizerDesktopSession | null): 3600 | 300 {
   // Rate limits mean a Claude plan: an hour of cache; the API keeps five minutes (K3).
   return s && (s.fiveHour || s.week) ? 3600 : 300
@@ -341,13 +331,12 @@ function startCadence($: EngineInterface): void {
   }
 }
 
-/** Everything a desktop session needs once: theme, a pending hand-off from disk, figures, the cadence. */
+/** Everything a desktop session needs once: a pending hand-off from disk, figures, the cadence. */
 async function start($: EngineInterface): Promise<void> {
   sessionGen += 1
   // A warm-up marked running with no fork in flight here was cut off by a reload (TR-10).
   const clock = await attempt(() => read($, clockAtom), null)
   if (clock?.warming && !warmInFlight) await feedClock($, { type: 'warm-failed' })
-  await refreshTheme($)
   const held = await heldHandoff($)
   if (held) await handoffThatFits($, held)
   await feedPose($, { type: 'session-start' })
@@ -918,7 +907,6 @@ function icon(D: Desktop, name: IconName, color: string, alt?: string) {
 
 type Model = {
   snap: Snapshot
-  palette: Palette
   tones: Tones
   sheetOpen: boolean
   savingsReason: string | null
@@ -1327,12 +1315,6 @@ export const register: Register = (on, options) => {
     }
   })
 
-  on('config.set', async ($, e, next) => {
-    const result = await next(e)
-    if (active && e.key === 'theme') $.clock.after(0, () => void refreshTheme($))
-    return result
-  })
-
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     // The terminal keeps its own status line (K6); a survey holds the band.
     if (!enabled || e.surface !== 'desktop' || e.props.hasSurvey) return next(e)
@@ -1349,7 +1331,6 @@ export const register: Register = (on, options) => {
     const clock = (await attempt(() => read($, clockAtom), null)) ?? initialClock()
     const ui = (await attempt(() => read($, uiAtom), null)) ?? initialUi()
     const pose = await attempt(() => read($, poseAtom), null)
-    const theme = await attempt(() => read($, themeAtom), 'light')
     const handoff = await attempt(() => read($, handoffAtom), null)
     const liveSid = cleanId(await attempt(() => $.session.id(), ''))
     // A stored figure of another session never shows (R15), nor its clock: a
@@ -1405,8 +1386,7 @@ export const register: Register = (on, options) => {
       $.ui.resolve(e),
       {
         snap,
-        palette,
-        tones: tonesFor('light', palette),
+        tones: tonesFor(palette),
         sheetOpen: s?.sheetOpen ?? false,
         savingsReason: s?.savingsReason ?? null,
         canWarm: canKeepWarm({ ...shownClock, working }, now),

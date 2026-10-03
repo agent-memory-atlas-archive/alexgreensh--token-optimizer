@@ -71,8 +71,8 @@ export type World = {
   /** How many of the next prompt submissions / turn completions beneath the band reject. */
   submitFails: number
   completeFails: number
-  /** Mocked-clock delay before the theme read answers: the band is active but has not started yet. */
-  themeDelayMs: number
+  /** Mocked-clock delay before a store read answers: the band is active but has not started yet. */
+  storeGetDelayMs: number
   /** Band state (`$.state`, by atom key) as a reload finds it: served while nothing has been written. */
   seed: Record<string, unknown>
   /** Every value the band wrote to each of its atoms, in order (by key). */
@@ -148,7 +148,7 @@ export function stub(on: On, patch: Partial<Omit<World, 'clock' | 'runs' | 'toas
     statusDelayMs: 0,
     submitFails: 0,
     completeFails: 0,
-    themeDelayMs: 0,
+    storeGetDelayMs: 0,
     seed: {},
     handoffWriteFails: 0,
     written: {},
@@ -171,7 +171,8 @@ export function stub(on: On, patch: Partial<Omit<World, 'clock' | 'runs' | 'toas
   const missing = (path: string) => new Error(`ENOENT: ${path}`)
 
   // `$.store` answered from `w.store`, with failures and a slow save on demand.
-  on('store.get', (_, e) => {
+  on('store.get', async (_, e) => {
+    if (w.storeGetDelayMs) await w.clock.sleep(w.storeGetDelayMs)
     if (w.storeGetFails > 0) {
       w.storeGetFails -= 1
       throw new Error('store read failed')
@@ -227,7 +228,6 @@ export function stub(on: On, patch: Partial<Omit<World, 'clock' | 'runs' | 'toas
     return result
   })
   on('config.list', async () => {
-    if (w.themeDelayMs) await w.clock.sleep(w.themeDelayMs)
     return { value: [{ key: 'theme', label: 'Theme', kind: 'choice', value: w.theme, provider: { plugin: 'engine', tier: 'core' } }] as never }
   })
   on('fs.list', () => ({ value: [] }))

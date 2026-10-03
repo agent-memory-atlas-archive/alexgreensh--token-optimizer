@@ -13,7 +13,6 @@ export const ICONS = {
   check: '<circle cx="8" cy="8" r="5.8"></circle><path d="M5.6 8.2 7.3 9.9l3.2-3.6"></path>',
   slip: '<path d="M2.5 4.5 6.5 8.5l2.5-2.5 4.5 4.5M13.5 7v3.5H10"></path>',
   ask: '<circle cx="8" cy="8" r="5.8"></circle><path d="M6.3 6.4a1.75 1.75 0 1 1 2.4 1.6c-.45.2-.7.55-.7 1v.35M8 11.3v.05"></path>',
-  chevron: '<path d="M4.5 6.2 8 9.8l3.5-3.6"></path>',
   saved: '<ellipse cx="8" cy="4.2" rx="4.8" ry="1.9"></ellipse><path d="M3.2 4.2v3.8c0 1 2.1 1.9 4.8 1.9s4.8-.9 4.8-1.9V4.2M3.2 8v3.8c0 1 2.1 1.9 4.8 1.9s4.8-.9 4.8-1.9V8"></path>',
 } as const
 
@@ -32,7 +31,6 @@ export const ICON_ALT: Record<IconName, string> = {
   check: 'All clear',
   slip: 'Quality slipping',
   ask: 'Question',
-  chevron: 'Toggle details',
   saved: 'Tokens saved',
 }
 

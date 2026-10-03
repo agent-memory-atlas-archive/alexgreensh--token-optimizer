@@ -210,9 +210,9 @@ export function measureArgv(root: TokenOptimizerRoot, args: readonly string[], p
   return [...launch, ...args]
 }
 
-/** The argv for `measure.py status-bar`. */
-export function statusBarArgv(root: TokenOptimizerRoot, sid: string, transcript?: string, python?: readonly string[]): string[] {
-  return measureArgv(root, ['status-bar', '--session', sid, '--json', ...(transcript ? ['--transcript', transcript] : [])], python)
+/** The arguments of `measure.py status-bar` for one session. */
+function statusBarArgs(sid: string, transcript?: string): string[] {
+  return ['status-bar', '--session', sid, '--json', ...(transcript ? ['--transcript', transcript] : [])]
 }
 
 function isTimeout(error: unknown): boolean {
@@ -272,7 +272,7 @@ export async function readStatusBar(
   sid: string,
   transcript?: string,
 ): Promise<StatusBar | 'outdated' | 'nopython' | null> {
-  const args = ['status-bar', '--session', sid, '--json', ...(transcript ? ['--transcript', transcript] : [])]
+  const args = statusBarArgs(sid, transcript)
   let result: { exitCode: number; stdout: string } | 'nopython' | null = null
   try {
     result = await runMeasure(io, root, args, { timeoutMs: STATUS_TIMEOUT_MS })

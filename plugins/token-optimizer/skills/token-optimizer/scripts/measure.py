@@ -46338,10 +46338,6 @@ def _status_bar_savings_or_reason(session_id):
     }, None
 
 
-def _status_bar_compute_savings(session_id):
-    return _status_bar_savings_or_reason(session_id)[0]
-
-
 def _status_bar_write_cache(session_id, savings, reason):
     d = _status_bar_dir()
     d.mkdir(parents=True, exist_ok=True)
@@ -46662,6 +46658,20 @@ def _status_bar_quality_cache_dirs():
     return out
 
 
+def _status_bar_freshest(name):
+    """The newest file called `name` across Token Optimizer's storage dirs, or None."""
+    best, best_mtime = None, -1.0
+    for d in _status_bar_quality_cache_dirs():
+        f = d / name
+        try:
+            mt = f.stat().st_mtime
+        except OSError:
+            continue
+        if mt > best_mtime:
+            best, best_mtime = f, mt
+    return best
+
+
 def _status_bar_checkpoint_epoch(session_id):
     """When this session last saved a checkpoint, epoch seconds, or None.
 
@@ -46685,15 +46695,7 @@ def _status_bar_checkpoint_epoch(session_id):
 
 def _status_bar_cached_checkpoint_epoch(session_id):
     """last_checkpoint_epoch from the freshest quality-cache-<sid>.json, or None."""
-    best, best_mtime = None, -1.0
-    for d in _status_bar_quality_cache_dirs():
-        f = d / f"quality-cache-{session_id}.json"
-        try:
-            mt = f.stat().st_mtime
-        except OSError:
-            continue
-        if mt > best_mtime:
-            best, best_mtime = f, mt
+    best = _status_bar_freshest(f"quality-cache-{session_id}.json")
     if best is None:
         return None
     try:
@@ -46712,15 +46714,7 @@ def _status_bar_earlier_checkpoint(session_id):
     the quality-cache dirs), so the band names the same checkpoint the
     terminal status line marks as resumable.
     """
-    best, best_mtime = None, -1.0
-    for d in _status_bar_quality_cache_dirs():
-        f = d / f"resumable-{session_id}.json"
-        try:
-            mt = f.stat().st_mtime
-        except OSError:
-            continue
-        if mt > best_mtime:
-            best, best_mtime = f, mt
+    best = _status_bar_freshest(f"resumable-{session_id}.json")
     if best is None:
         return None
     try:

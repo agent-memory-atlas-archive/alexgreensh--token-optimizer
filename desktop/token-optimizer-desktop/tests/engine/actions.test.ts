@@ -417,9 +417,9 @@ test('a turn that fails beneath the band still ends the turn on the band (TR-18)
 })
 
 test('an open question from before a reload closes at the end of the turn (TR-19)', async ($, on) => {
-  // A reload finds Clawd asking; the band is live but has not run a pose event yet (the theme read is slow).
+  // A reload finds Clawd asking; the band is live but has not run a pose event yet (a store read is slow).
   const asking = { pose: 'ask', since: NOW_MS, now: NOW_MS, working: true, rawSub: null, rawSince: NOW_MS, sub: null, agents: {}, permissions: 1, questions: 0, compacting: false, cold: false, lastActivity: NOW_MS, until: { wake: 0, done: 0, stop: 0, error: 0 } }
-  const w = stub(on, { themeDelayMs: 1000, seed: { pose: asking } })
+  const w = stub(on, { storeGetDelayMs: 1000, seed: { pose: asking } })
   const starting = $.session.start(START)
   await $.turn.complete(turnEnd('answer'))
   const ui = await mountBand($)

@@ -109,7 +109,7 @@ def _by_date(daily):
 
 def test_three_days_two_sessions(sb):
     _three_day_fixture(sb)
-    sav = sb._status_bar_compute_savings(SID_A)
+    sav = sb._status_bar_savings_or_reason(SID_A)[0]
     assert sav is not None
     assert sav["unit"] == "tokens"
     # Session A: 1000 + 2000 + 3000 realized + 500 compression; mcp_cap excluded.
@@ -136,7 +136,7 @@ def test_three_days_two_sessions(sb):
 
 def test_rows_older_than_30_days_excluded(sb):
     _three_day_fixture(sb)
-    sav = sb._status_bar_compute_savings(SID_B)
+    sav = sb._status_bar_savings_or_reason(SID_B)[0]
     assert sum(d["tokens"] for d in sav["daily"]) == 11500
     assert _day(40).date().isoformat() not in _by_date(sav["daily"])
     # The 70,000-token row 40 days back is outside the 30-day headline too.
@@ -146,7 +146,7 @@ def test_rows_older_than_30_days_excluded(sb):
 
 def test_total_equals_merged_savings_headline(sb):
     _three_day_fixture(sb)
-    sav = sb._status_bar_compute_savings(SID_A)
+    sav = sb._status_bar_savings_or_reason(SID_A)[0]
     assert sav["total_30d_usd"] == sb._get_merged_savings(days=30)["total_cost_usd"]
 
 
@@ -159,7 +159,7 @@ def test_savings_summary_still_matches_realized_helper(sb):
     ])
     summary = sb._get_savings_summary(days=30)
     assert summary["total_tokens"] == 2500
-    sav = sb._status_bar_compute_savings(SID_A)
+    sav = sb._status_bar_savings_or_reason(SID_A)[0]
     assert sav["session_tokens"] == 2500
 
 
@@ -358,7 +358,7 @@ def test_full_compute_within_5s_on_50k_rows(sb):
         rows.append((ts, "tool_archive", 100, 0.001, sid))
     _seed(sb, rows=rows)
     t0 = time.perf_counter()
-    sav = sb._status_bar_compute_savings(SID_A)
+    sav = sb._status_bar_savings_or_reason(SID_A)[0]
     elapsed = time.perf_counter() - t0
     assert elapsed < 5.0, f"full compute took {elapsed:.2f}s"
     assert sav["session_tokens"] == 25_000 * 100
