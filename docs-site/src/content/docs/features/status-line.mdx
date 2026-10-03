@@ -114,7 +114,7 @@ The terminal status line above has a sibling for the Claude desktop app. Token O
 
 Buttons: **Clean up** compacts with Token Optimizer's guidance. **Start fresh** asks for a second click, then saves a checkpoint, clears, and hands the checkpoint to your first message. **Keep warm** is a manual cache refresh, covered in [Keep-Warm](/features/keep-warm/#the-manual-keep-warm-button).
 
-The cache countdown is an estimate, since Claude does not publish the exact expiry: 1 hour on Claude plans, 5 minutes on the API, measured from the session itself when possible. Turn the bar or its animation off with `enabled` and `animate` in `/config`. Install steps and requirements are in [Claude desktop app](/install/claude-desktop/).
+The cache countdown is an estimate, since Claude does not publish the exact expiry: 1 hour on Claude plans, 5 minutes on the API, measured from the session itself when possible. Hide the bar with `TOKEN_OPTIMIZER_STATUS_BAR=0`, or keep Clawd still with `TOKEN_OPTIMIZER_STATUS_BAR_ANIMATE=0`, in your settings `env`. Install steps and requirements are in [Claude desktop app](/install/claude-desktop/).
 
 ## Risk rating
 

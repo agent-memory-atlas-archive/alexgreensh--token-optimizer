@@ -1149,13 +1149,24 @@ async function endTurn($: EngineInterface, reason: Extract<PoseEvent, { type: 't
   }
 }
 
-/** Whether this copy stays hidden because an installed Token Optimizer draws the band; checked once. */
+/** Set to 0, false, off or no, a Token Optimizer switch turns its feature off. */
+function switchedOff(value: string | undefined): boolean {
+  return /^(0|false|off|no)$/i.test((value ?? '').trim())
+}
+
+/**
+ * Whether the band stays hidden, checked once: switched off with
+ * TOKEN_OPTIMIZER_STATUS_BAR, or this copy was installed on its own and an
+ * installed Token Optimizer draws the band itself.
+ */
 async function standsDown($: EngineInterface): Promise<boolean> {
   if (superseded === null) {
+    if (switchedOff(await attempt(() => $.env.get('TOKEN_OPTIMIZER_STATUS_BAR'), undefined))) enabled = false
+    if (switchedOff(await attempt(() => $.env.get('TOKEN_OPTIMIZER_STATUS_BAR_ANIMATE'), undefined))) animate = false
     const io = dataIo($)
     superseded = await attempt(async () => supersededByBundled(io, await readHome(io)), false)
   }
-  return superseded
+  return superseded || !enabled
 }
 
 // ---- hooks ----

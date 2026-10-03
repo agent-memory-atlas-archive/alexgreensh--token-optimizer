@@ -40,7 +40,10 @@ The countdown is an estimate, because Claude does not publish the exact expiry. 
 
 ## Settings
 
-Two settings, both under Token Optimizer in `/config`: **Show the status bar** and **Animate Clawd**.
+Two switches, set in the `env` block of `~/.claude/settings.json` like the other Token Optimizer switches:
+
+- `"TOKEN_OPTIMIZER_STATUS_BAR": "0"` hides the bar.
+- `"TOKEN_OPTIMIZER_STATUS_BAR_ANIMATE": "0"` keeps Clawd still.
 
 ## Where it works
 
@@ -48,7 +51,7 @@ The Claude desktop app only. The terminal keeps its existing [status line](/feat
 
 ## Turning it off
 
-Turn off **Show the status bar** under Token Optimizer in `/config`. The rest of Token Optimizer keeps working.
+Add `"TOKEN_OPTIMIZER_STATUS_BAR": "0"` to the `env` block of `~/.claude/settings.json` and start a new session. The rest of Token Optimizer keeps working.
 
 ## See also
 

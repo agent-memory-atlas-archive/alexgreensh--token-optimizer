@@ -245,8 +245,6 @@ def _add_hooks_pointer(manifest_path: Path) -> None:
     everywhere else."""
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["hooks"] = "./hooks/hooks.json"
-    # Its settings belong to the desktop status bar, which the Cowork build leaves out.
-    manifest.pop("userConfig", None)
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
 

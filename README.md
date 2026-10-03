@@ -614,7 +614,7 @@ python3 measure.py setup-quality-bar --uninstall
 
 Using the Claude desktop app? The status bar comes with the Token Optimizer plugin: once it is installed, the bar appears above your prompt. Nothing extra to install.
 
-It needs Claude Code 2.1.287 or newer and Anthropic's mods feature. Anthropic can switch mods off remotely; if that happens nothing breaks, the bar just doesn't appear. The terminal keeps its existing status line. VS Code is not supported. To hide it, turn off **Show the status bar** for Token Optimizer in `/config`.
+It needs Claude Code 2.1.287 or newer and Anthropic's mods feature. Anthropic can switch mods off remotely; if that happens nothing breaks, the bar just doesn't appear. The terminal keeps its existing status line. VS Code is not supported. To hide it, add `"TOKEN_OPTIMIZER_STATUS_BAR": "0"` to the `env` block of `~/.claude/settings.json`; `"TOKEN_OPTIMIZER_STATUS_BAR_ANIMATE": "0"` keeps Clawd still.
 
 - **One sentence, one button**: the most urgent thing about your session, with at most one button to act on it.
 - **Five marks**: quality grade, context fill, cache countdown, 5-hour limit and weekly limit, each with its label. Hover any mark for a card with the detail.
@@ -624,7 +624,7 @@ It needs Claude Code 2.1.287 or newer and Anthropic's mods feature. Anthropic ca
 - **Start fresh**: asks for a second click, then saves a checkpoint, clears, and hands the checkpoint to your first message.
 - **Keep warm**: a manual, one-click cache refresh. It is offered only while the cache is still warm, never runs on its own, and uses a small amount of your usage. Afterwards it tells you how many tokens it re-read from the cache.
 
-Point at the bar and Clawd looks over. The cache countdown is an estimate, because Claude does not publish the exact expiry: 1 hour on Claude plans, 5 minutes on the API, measured from the session itself when possible. Turn the bar or its animation off with `enabled` and `animate` in `/config`.
+Point at the bar and Clawd looks over. The cache countdown is an estimate, because Claude does not publish the exact expiry: 1 hour on Claude plans, 5 minutes on the API, measured from the session itself when possible.
 
 ## Coach Mode
 

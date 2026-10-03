@@ -19,7 +19,7 @@ The cache countdown is an estimate: 1 hour on Claude plans, 5 minutes on the API
 
 ## Settings
 
-Show the status bar (`enabled`) and Animate Clawd (`animate`), under Token Optimizer in `/config`.
+`TOKEN_OPTIMIZER_STATUS_BAR=0` hides the bar and `TOKEN_OPTIMIZER_STATUS_BAR_ANIMATE=0` keeps Clawd still, set in the `env` block of `~/.claude/settings.json`.
 
 ## Full docs
 

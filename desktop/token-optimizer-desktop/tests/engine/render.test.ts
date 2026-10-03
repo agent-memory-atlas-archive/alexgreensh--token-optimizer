@@ -78,6 +78,13 @@ test('switched off, nothing is drawn on desktop', { options: { enabled: false } 
   expect(await passesOn($.ui.mount({ ...BAND, surface: 'desktop' }))).toBe(true)
 })
 
+test('TOKEN_OPTIMIZER_STATUS_BAR=0 hides the band on desktop', async ($, on) => {
+  const w = stub(on, { env: { TOKEN_OPTIMIZER_STATUS_BAR: '0' } })
+  await $.session.start(START)
+  await w.clock.settle()
+  expect(await passesOn($.ui.mount({ ...BAND, surface: 'desktop' }))).toBe(true)
+})
+
 test("the arrow under Clawd unfolds the row, points up while open, and folds it again", async ($, on) => {
   const w = stub(on)
   await $.session.start(START)

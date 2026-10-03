@@ -53,6 +53,8 @@ export type Status = {
 
 export type World = {
   sessionId: string
+  /** Environment variables beside HOME. */
+  env?: Record<string, string>
   files: Record<string, [mtimeMs: number, contents: string]>
   status: Status
   /** How the next compact-capture / resume-lean runs answer. */
@@ -192,7 +194,7 @@ export function stub(on: On, patch: Partial<Omit<World, 'clock' | 'runs' | 'toas
     delete w.store[e.key]
     return { value: undefined }
   })
-  mock.env(on, { HOME })
+  mock.env(on, { HOME, ...w.env })
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('classic.SessionStart', () => ({ additionalContext: ['Recovered notes', '[Token Optimizer] Cross-session checkpoint (abcd1234): /p.md. Not your session\'s work.'] }))
   on('session.id', () => ({ value: w.sessionId }))

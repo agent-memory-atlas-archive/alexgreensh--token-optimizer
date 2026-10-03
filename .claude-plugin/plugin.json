@@ -16,19 +16,5 @@
     "audit",
     "cost",
     "coach"
-  ],
-  "userConfig": {
-    "enabled": {
-      "type": "boolean",
-      "title": "Show the status bar",
-      "description": "Show the Token Optimizer band above the prompt.",
-      "default": true
-    },
-    "animate": {
-      "type": "boolean",
-      "title": "Animate Clawd",
-      "description": "Play Clawd's animations. Off shows a still pose.",
-      "default": true
-    }
-  }
+  ]
 }
