@@ -213,17 +213,15 @@ def test_rebuild_emit_committed_reproduces_committed_tree(tmp_path):
 # (e) marketplace shape
 # --------------------------------------------------------------------------- #
 
-def test_marketplace_lists_exactly_four_plugins():
+def test_marketplace_lists_exactly_three_plugins():
+    # The desktop status bar ships inside token-optimizer, not as its own entry.
     plugins = _load(MARKETPLACE)["plugins"]
     by_name = {p["name"]: p for p in plugins}
-    assert len(plugins) == 4, f"expected 4 plugins, got {[p['name'] for p in plugins]}"
-    assert set(by_name) == {
-        "token-optimizer", "to-hook-probe", "token-optimizer-cowork", "token-optimizer-desktop",
-    }
+    assert len(plugins) == 3, f"expected 3 plugins, got {[p['name'] for p in plugins]}"
+    assert set(by_name) == {"token-optimizer", "to-hook-probe", "token-optimizer-cowork"}
     assert by_name["token-optimizer"]["source"] == "./"
     assert by_name["to-hook-probe"]["source"] == "./cowork/to-hook-probe"
     assert by_name["token-optimizer-cowork"]["source"] == "./cowork/token-optimizer"
-    assert by_name["token-optimizer-desktop"]["source"] == "./desktop/token-optimizer-desktop"
 
 
 def test_marketplace_cowork_entry_version_matches_root_and_probe_pinned():
