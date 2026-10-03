@@ -193,7 +193,9 @@ test('usage: fill, window and both limits', () => {
     contextWindow: 1_000_000,
     fiveHour: { percentUsed: 80, resetsAt: '2026-10-03T05:00:00Z' },
     week: { percentUsed: 12, resetsAt: null },
+    startedAtMs: null, // startedAt 0 is no start time
   })
+  assert.equal(parseUsage({ startedAt: 1_791_000_000_000 }).startedAtMs, 1_791_000_000_000)
 })
 
 test('usage: a percent the engine left out is worked out from tokens and window', () => {
@@ -210,6 +212,7 @@ test('usage: nothing known reads as all nulls', () => {
     contextWindow: null,
     fiveHour: null,
     week: null,
+    startedAtMs: null,
   })
 })
 
