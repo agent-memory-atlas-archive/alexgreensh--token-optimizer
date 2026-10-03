@@ -1323,7 +1323,8 @@ export const register: Register = (on, options) => {
         canWarm: canKeepWarm({ ...shownClock, working }, now),
         clawd,
         gazes:
-          poseNow === 'idle' && animate
+          // Watching or napping: pointing at the band wakes him to look at it.
+          (poseNow === 'idle' || poseNow === 'sleep') && animate
             ? (['up-right', 'right', 'down-right', 'down'] as const).map(gaze => {
                 const source = clawdSvg('idle', mood, { animate, palette, gaze, fadeIn: false })
                 return { key: `gaze-${gaze}-${mood}`, source, alt: 'Clawd: watching your pointer', gaze }

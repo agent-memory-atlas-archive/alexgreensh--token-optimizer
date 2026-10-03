@@ -51,10 +51,10 @@ export type Gaze = 'up-right' | 'right' | 'down-right' | 'down'
 
 /** Eye offsets per gaze, in the picture's own units (the face is 9 wide). */
 export const GAZE: Record<Gaze, [number, number]> = {
-  'up-right': [0.7, -0.6],
-  right: [0.8, 0],
-  'down-right': [0.7, 0.5],
-  down: [0, 0.6],
+  'up-right': [1.3, -0.9],
+  right: [1.5, 0],
+  'down-right': [1.3, 0.9],
+  down: [0, 1.1],
 }
 
 export type ClawdOptions = {
