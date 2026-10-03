@@ -23,10 +23,10 @@ test('five marks for a healthy subscriber, each with an icon and alt text', () =
   assert.equal(q!.tone, 'good')
   assert.equal(ctx!.value, '34%')
   assert.equal(ctx!.ringPercent, 34)
-  assert.equal(cache!.value, '41:23')
+  assert.equal(cache!.value, '42m') // warm counts minutes; seconds only in the last 5
   assert.equal(cache!.tone, 'good')
   assert.equal(five!.value, '41%')
-  assert.equal(five!.label, '5 hours')
+  assert.equal(five!.label, '5h')
   assert.match(five!.alt, /renews today at 3:20 PM/)
   assert.equal(week!.label, 'week')
 })

@@ -4,7 +4,9 @@
 import type { Pose } from './contracts.ts'
 
 /** Working sub-pose changes wait this long to settle, so read/type bursts do not strobe. */
-export const DEBOUNCE_MS = 300
+export const DEBOUNCE_MS = 900
+/** A working sub-pose stays on screen at least this long before the next one replaces it. */
+export const MIN_DWELL_MS = 1600
 /** Idle this long (no events) and Clawd naps. Agent default (plan Assumptions). */
 export const NAP_AFTER_MS = 10 * 60_000
 /** How long each transient pose holds. */
@@ -203,7 +205,7 @@ function needsYou(s: PoseState): boolean {
 /** Debounce: the first sub-pose of a turn shows at once; later changes wait to settle. */
 function settle(s: PoseState, t: number): void {
   if (s.rawSub === s.sub) return
-  if (s.sub === null || t - s.rawSince >= DEBOUNCE_MS) s.sub = s.rawSub
+  if (s.sub === null || (t - s.rawSince >= DEBOUNCE_MS && t - s.since >= MIN_DWELL_MS)) s.sub = s.rawSub
 }
 
 function playing(s: PoseState, tr: Transient, t: number): boolean {

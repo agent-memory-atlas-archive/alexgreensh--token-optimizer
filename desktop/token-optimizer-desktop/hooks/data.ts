@@ -24,7 +24,7 @@ import {
 /** Redraw once a second, but only inside the cache warning window (KTD13). */
 export const TICK_WARNING_MS = 1_000
 /** Redraw otherwise, beside the event-driven redraws (KTD13). */
-export const TICK_IDLE_MS = 30_000
+export const TICK_IDLE_MS = 60_000
 /** Re-read the quality cache this often, and after each turn (KTD13). */
 export const QUALITY_REFRESH_MS = 60_000
 /** Run the status command this long after a turn ends (KTD13). */
@@ -36,6 +36,8 @@ export const GIT_TIMEOUT_MS = 1_000
 
 /** Shown as the savings reason when no Token Optimizer install is found (R6). */
 export const NOT_FOUND = 'Token Optimizer not found'
+/** The installed Token Optimizer predates the status command this band reads. */
+export const OUTDATED = 'Update Token Optimizer to see savings.'
 
 /**
  * Python launchers in the order tried. The mod cannot see the host's OS, so a
@@ -78,6 +80,8 @@ export type DataIo = {
   stat: (path: string) => Promise<{ kind: string; mtimeMs: number }>
   /** `$.fs.read(path)` */
   read: (path: string) => Promise<string>
+  /** `$.plugin.root`: this plugin's own folder */
+  pluginRoot?: () => string
   /** `$.process.run(argv, init)` */
   run: (argv: string[], init: { cwd?: string; timeoutMs: number; stdin?: string }) => Promise<{ exitCode: number; stdout: string }>
 }
@@ -150,8 +154,11 @@ export async function readQuality(io: DataIo, home: string, sid: string): Promis
  */
 export async function findTokenOptimizerRoot(io: DataIo, home: string): Promise<TokenOptimizerRoot | null> {
   const registry = home ? await attempt(() => io.read(`${home}/.claude/plugins/installed_plugins.json`), null) : null
+  // Inside a Token Optimizer checkout (desktop/<this plugin>), the scripts beside it are the matching version.
+  const own = io.pluginRoot ? trimTwo(await attempt(async () => io.pluginRoot!(), '')) : ''
+  const sibling = own ? [{ scriptsDir: `${own}/skills/token-optimizer/scripts`, runner: `${own}/hooks/module_runner.py` }] : []
 
-  for (const root of resolveTokenOptimizerRoot(registry, home)) {
+  for (const root of [...sibling, ...resolveTokenOptimizerRoot(registry, home)]) {
     if (!(await attempt(() => io.stat(`${root.scriptsDir}/measure.py`), null))) {
       continue
     }
@@ -163,6 +170,12 @@ export async function findTokenOptimizerRoot(io: DataIo, home: string): Promise<
   }
 
   return null
+}
+
+/** A path two folders up, or '' when it has fewer. */
+function trimTwo(path: string): string {
+  const parts = path.replace(/[\\/]+$/, '').split(/[\\/]/)
+  return parts.length > 2 ? parts.slice(0, -2).join('/') : ''
 }
 
 /** The argv for `measure.py <args>`, through module_runner when the install has it (bytecode reuse). */
@@ -217,16 +230,22 @@ export async function runMeasure(
   throw lastError
 }
 
-/** `measure.py status-bar --json` (KTD5); null when it fails, times out or prints something else. */
+/**
+ * `measure.py status-bar --json` (KTD5); 'outdated' when the install has no
+ * such command (it prints usage, not JSON), null when it fails, times out or
+ * prints something else.
+ */
 export async function readStatusBar(
   io: DataIo,
   root: TokenOptimizerRoot,
   sid: string,
   transcript?: string,
-): Promise<StatusBar | null> {
+): Promise<StatusBar | 'outdated' | null> {
   const args = ['status-bar', '--session', sid, '--json', ...(transcript ? ['--transcript', transcript] : [])]
   const result = await attempt(() => runMeasure(io, root, args, { timeoutMs: STATUS_TIMEOUT_MS }), null)
 
+  // An install without the command prints its usage instead of JSON (or exits 2).
+  if (result && (result.exitCode === 2 || result.exitCode === 0) && !result.stdout.trimStart().startsWith('{')) return 'outdated'
   return result && result.exitCode === 0 ? parseStatusBar(result.stdout) : null
 }
 
@@ -270,7 +289,7 @@ export async function gather(
   const branch = await readBranch(io, cwd)
   const quality = await readQuality(io, home, sid)
 
-  let status: StatusBar | null = null
+  let status: StatusBar | 'outdated' | null = null
   let notFound = false
 
   if (options.savings && sid) {
@@ -286,10 +305,13 @@ export async function gather(
     lastRequestEpoch: base?.lastRequestEpoch ?? null,
     cacheLifetime: base?.cacheLifetime ?? null,
     checkpointEpoch: base?.checkpointEpoch ?? null,
+    earlierCheckpoint: base?.earlierCheckpoint ?? null,
   }
 
   const facts = notFound
     ? { ...kept, savings: null, savingsState: 'unavailable' as const, savingsReason: NOT_FOUND, checkpointEpoch: null }
+    : status === 'outdated'
+      ? { ...kept, savings: null, savingsState: 'unavailable' as const, savingsReason: OUTDATED }
     : status
       ? {
           // While savings load, the last known figures stay on show (R6).
@@ -299,6 +321,7 @@ export async function gather(
           lastRequestEpoch: status.lastRequestEpoch ?? kept.lastRequestEpoch,
           cacheLifetime: status.cacheLifetime ?? kept.cacheLifetime,
           checkpointEpoch: status.checkpointEpoch,
+          earlierCheckpoint: status.earlierCheckpoint,
         }
       : kept
 

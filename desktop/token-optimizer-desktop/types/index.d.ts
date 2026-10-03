@@ -53,6 +53,8 @@ export type TokenOptimizerDesktopSession = {
   cacheLifetime: '1h' | '5m' | null
   /** When Token Optimizer last saved a checkpoint, epoch seconds. */
   checkpointEpoch: number | null
+  /** The earlier session's checkpoint flagged as resumable for this one (epoch seconds). */
+  earlierCheckpoint?: { epoch: number; about: string | null } | null
   /** The detail row under Clawd is unfolded (R6). */
   sheetOpen: boolean
 }

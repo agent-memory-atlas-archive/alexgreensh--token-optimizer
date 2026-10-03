@@ -110,6 +110,9 @@ function rect(x: number, y: number, w: number, h: number, fill: string, extra = 
 
 const BODY = 'M4 4H13V9H12.5V11H11.5V9H10.5V11H9.5V9H7.5V11H6.5V9H5.5V11H4.5V9H4Z'
 
+/** Seconds a new pose takes to fade in. */
+export const FADE_IN_S = 0.35
+
 export function clawdSvg(pose: Pose, mood: Mood, opts: ClawdOptions): string {
   const p = opts.palette
   const a = smil(opts.animate)
@@ -252,7 +255,9 @@ export function clawdSvg(pose: Pose, mood: Mood, opts: ClawdOptions): string {
 
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -1.6 18 14.2" role="img" aria-label="${ALT[pose]}">` +
     `<title>${ALT[pose]}</title>` +
+    // A new pose fades in over the old one the band keeps beneath it, so a switch never cuts.
+    (opts.animate ? `<g opacity="0"><animate attributeName="opacity" from="0" to="1" begin="0s" dur="${FADE_IN_S}s" fill="freeze"/>` : '<g>') +
     `<ellipse cx="8.5" cy="11.2" rx="5.2" ry="0.5" fill="${p.ground}" opacity="0.1"/>` +
     `<g>${rigMotion[pose] ?? ''}${arms}${body}${glow}${frost}${eyes}${drop}${hold}</g>` +
-    (frontFor[pose] ?? '') + '</svg>'
+    (frontFor[pose] ?? '') + '</g></svg>'
 }

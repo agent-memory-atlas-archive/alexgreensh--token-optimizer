@@ -177,7 +177,8 @@ export function stub(on: On, patch: Partial<Omit<World, 'clock' | 'runs' | 'toas
         { kind: 'five_hour', percentUsed: 40, resetsAt: '2026-10-03T12:00:00Z' },
         { kind: 'seven_day', percentUsed: 20 },
       ],
-    },
+      // An engine that reports no start time is a case the band must survive; the types now require it.
+    } as never,
   }))
   on('state.get', async (_, e, next) => {
     const held = await next(e)

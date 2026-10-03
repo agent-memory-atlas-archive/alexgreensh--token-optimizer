@@ -18,7 +18,11 @@ export type StatusBar = {
   lastRequestEpoch: number | null
   cacheLifetime: CacheLifetime | null
   checkpointEpoch: number | null
+  /** The earlier session's checkpoint Token Optimizer flagged as resumable for this one. */
+  earlierCheckpoint: EarlierCheckpoint
 }
+
+export type EarlierCheckpoint = { epoch: number; about: string | null } | null
 
 /** `$.session.usage()`, reduced to fill and limits (R16). */
 export type UsageView = {
@@ -192,7 +196,14 @@ export function parseStatusBar(json: unknown): StatusBar | null {
     lastRequestEpoch: lastRequest !== null && lastRequest > 0 ? lastRequest : null,
     cacheLifetime: lifetime,
     checkpointEpoch: checkpoint !== null && checkpoint > 0 ? checkpoint : null,
+    earlierCheckpoint: parseEarlier(out.earlier_checkpoint),
   }
+}
+
+function parseEarlier(value: unknown): EarlierCheckpoint {
+  const rec = toRecord(value)
+  const at = rec ? num(rec.epoch) : null
+  return rec && at !== null && at > 0 ? { epoch: at, about: text(rec.about) } : null
 }
 
 function limit(limits: unknown, kind: string): Limit | null {

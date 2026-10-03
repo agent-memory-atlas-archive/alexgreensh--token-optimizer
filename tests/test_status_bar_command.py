@@ -253,6 +253,27 @@ def test_checkpoint_epoch_from_freshest_quality_cache(sb):
     assert sb._status_bar_checkpoint_epoch(SID_A) == 2000
 
 
+def test_earlier_checkpoint_from_resumable_flag(sb):
+    cp = sb._sb_claude / "token-optimizer" / "checkpoints" / "99999999-aaaa-20261003-120001-stop.md"
+    cp.parent.mkdir(parents=True, exist_ok=True)
+    cp.write_text("# checkpoint", encoding="utf-8")
+    flag = sb._sb_claude / "token-optimizer" / f"resumable-{SID_A}.json"
+    flag.write_text(json.dumps({"checkpoint": str(cp), "ts": 1}), encoding="utf-8")
+    got = sb._status_bar_earlier_checkpoint(SID_A)
+    assert got is not None and got["epoch"] == int(cp.stat().st_mtime)
+    assert "about" in got
+
+
+def test_earlier_checkpoint_none_without_flag_or_for_own_checkpoint(sb):
+    assert sb._status_bar_earlier_checkpoint(SID_A) is None
+    own = sb._sb_claude / "token-optimizer" / "checkpoints" / f"{SID_A}-20261003-120001-stop.md"
+    own.parent.mkdir(parents=True, exist_ok=True)
+    own.write_text("# mine", encoding="utf-8")
+    (sb._sb_claude / "token-optimizer" / f"resumable-{SID_A}.json").write_text(
+        json.dumps({"checkpoint": str(own)}), encoding="utf-8")
+    assert sb._status_bar_earlier_checkpoint(SID_A) is None
+
+
 # --------------------------------------------------------------------------
 # Cache and refresh (KTD5)
 # --------------------------------------------------------------------------

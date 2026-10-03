@@ -4,6 +4,7 @@ import assert from 'node:assert/strict'
 
 import {
   DEBOUNCE_MS,
+  MIN_DWELL_MS,
   HOLD_MS,
   NAP_AFTER_MS,
   initialPose,
@@ -33,7 +34,8 @@ function typingTurn(t = T0): Array<[number, PoseEvent]> {
     [t, { type: 'turn-start' }],
     [t, { type: 'working-changed', working: true }],
     [t + 10, { type: 'tool-call', tool: 'Edit' }],
-    [t + 10 + DEBOUNCE_MS, { type: 'tick', now: t + 10 + DEBOUNCE_MS }],
+    // The first working pose (think) holds for its dwell before typing replaces it.
+    [t + MIN_DWELL_MS, { type: 'tick', now: t + MIN_DWELL_MS }],
   ]
 }
 
@@ -219,8 +221,8 @@ test('a burst that returns to the shown pose causes no change at all', () => {
 test('Task tool call on the main thread shows heavy lifting', () => {
   const { s } = run([
     ...typingTurn(),
-    [T0 + 1000, { type: 'tool-call', tool: 'Task' }],
-    [T0 + 1000 + DEBOUNCE_MS, { type: 'tick', now: T0 + 1000 + DEBOUNCE_MS }],
+    [T0 + 2000, { type: 'tool-call', tool: 'Task' }],
+    [T0 + 2000 + MIN_DWELL_MS, { type: 'tick', now: T0 + 2000 + MIN_DWELL_MS }],
   ])
   assert.equal(s.pose, 'lift')
 })
@@ -310,4 +312,19 @@ test('a stray close never drives a counter negative', () => {
   assert.equal(s.pose, 'ask')
   s = reducePose(s, { type: 'permission-closed' }, T0 + 2)
   assert.equal(s.pose, 'idle')
+})
+
+test('a working pose holds its dwell: a quick type-write-type flicker never shows', () => {
+  const { s: settled } = run([...typingTurn()])
+  const t = settled.since
+  const { shown } = run(
+    [
+      [t + 200, { type: 'text' }],
+      [t + 200 + DEBOUNCE_MS, { type: 'tick', now: t + 200 + DEBOUNCE_MS }],
+      [t + 1300, { type: 'tool-call', tool: 'Edit' }],
+      [t + 1300 + MIN_DWELL_MS, { type: 'tick', now: t + 1300 + MIN_DWELL_MS }],
+    ],
+    settled,
+  )
+  assert.deepEqual(shown, ['type'])
 })

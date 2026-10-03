@@ -13,6 +13,12 @@ export function clock(sec: number): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
 }
 
+/** Minutes left as 52m; a countdown that only needs to move once a minute. */
+export function minutes(sec: number): string {
+  const s = Math.min(3600, Math.max(0, Number.isFinite(sec) ? sec : 0))
+  return `${Math.ceil(s / 60)}m`
+}
+
 /** Token counts as 940, 340k, 1.2M, 50M. */
 export function tokens(n: number): string {
   if (!Number.isFinite(n) || n < 0) return '--'

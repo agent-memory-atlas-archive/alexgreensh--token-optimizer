@@ -38,7 +38,7 @@ test('desktop draws Clawd, "Token Optimizer", the sentence and five marks', asyn
   }
   expect((await exactly(ui, '62%')).length).toBeGreaterThan(0)
   expect((await exactly(ui, '88')).length).toBeGreaterThan(0)
-  expect((await exactly(ui, '59:30')).length).toBeGreaterThan(0)
+  expect((await exactly(ui, '60m')).length).toBeGreaterThan(0)
 
   // Every Svg names its state (R18).
   for (const svg of svgs) {
@@ -75,12 +75,12 @@ test('pressing Clawd\'s details button unfolds the row, flips the chevron, and f
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const chevron = async () => (await ui.findAll({ type: 'Svg' })).map(s => String(s.props.alt)).find(alt => alt.startsWith('Session details'))
 
-  expect((await ui.find({ key: 'details' }))?.props.label).toBe('Session details')
+  expect((await ui.find({ key: 'details' }))?.props.label).toBe('Details')
   expect(await chevron()).toBe('Session details folded')
   expect(await ui.find({ key: 'row' })).toBeUndefined()
 
   await ui.press({ key: 'details' })
-  expect((await ui.find({ key: 'details' }))?.props.label).toBe('Session details')
+  expect((await ui.find({ key: 'details' }))?.props.label).toBe('Details')
   expect(await chevron()).toBe('Session details open')
   expect(await ui.find({ key: 'row' })).toBeDefined()
   expect((await exactly(ui, 'feat/band')).length).toBeGreaterThan(0)
@@ -157,4 +157,21 @@ test('the row offers Keep warm only while it can run: never on a cold cache', as
   await ui.press({ key: 'details' })
   expect(await ui.find({ key: 'row-clean' })).toBeDefined()
   expect(await ui.find({ key: 'row-warm' })).toBeUndefined()
+})
+
+test('a new pose fades in over the old one, which stays beneath until the fade is done', async ($, on) => {
+  const w = stub(on)
+  await $.session.start(START)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  const clawds = async () => (await ui.findAll({ type: 'Svg' })).filter(s => String(s.props.alt).startsWith('Clawd: '))
+  expect((await clawds()).length).toBe(1)
+
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  const both = await clawds()
+  expect(both.length).toBe(2)
+  expect(String(both[1]!.props.source)).toContain('attributeName="opacity" from="0" to="1"')
+
+  await w.clock.advance(1000)
+  await w.clock.settle()
+  expect((await clawds()).length).toBe(1)
 })

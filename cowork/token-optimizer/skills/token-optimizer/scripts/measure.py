@@ -46039,6 +46039,8 @@ Fields:
                          lifetime on the main thread (null = unmeasured)
   last_checkpoint_epoch  last_checkpoint_epoch from the freshest quality cache
                          for this session across Token Optimizer's storage dirs
+  earlier_checkpoint     {epoch, about} for the earlier session's checkpoint
+                         flagged as resumable for this one at start, or null
 
 Options:
   --session ID     required: the Claude Code session id
@@ -46401,6 +46403,38 @@ def _status_bar_checkpoint_epoch(session_id):
     return val
 
 
+def _status_bar_earlier_checkpoint(session_id):
+    """The earlier session's checkpoint flagged for this one at start, or None.
+
+    Reads the resumable flag the SessionStart pointer writes (freshest across
+    the quality-cache dirs), so the band names the same checkpoint the
+    terminal status line marks as resumable.
+    """
+    best, best_mtime = None, -1.0
+    for d in _status_bar_quality_cache_dirs():
+        f = d / f"resumable-{session_id}.json"
+        try:
+            mt = f.stat().st_mtime
+        except OSError:
+            continue
+        if mt > best_mtime:
+            best, best_mtime = f, mt
+    if best is None:
+        return None
+    try:
+        cp = Path(str(json.loads(best.read_text(encoding="utf-8")).get("checkpoint") or ""))
+        epoch = int(cp.stat().st_mtime)
+    except (OSError, ValueError, AttributeError, TypeError):
+        return None
+    if not cp.name or cp.name.startswith(session_id):
+        return None
+    try:
+        about = _checkpoint_descriptor(cp) or None
+    except Exception:
+        about = None
+    return {"epoch": epoch, "about": about}
+
+
 def status_bar_payload(session_id, transcript=None, sync=False):
     """Build the status-bar JSON object (see STATUS_BAR_HELP). Never raises."""
     sid = sanitize_session_id(session_id)
@@ -46415,6 +46449,7 @@ def status_bar_payload(session_id, transcript=None, sync=False):
         "last_request_epoch": None,
         "cache_lifetime": None,
         "last_checkpoint_epoch": None,
+        "earlier_checkpoint": None,
     }
     if sid == "unknown":
         out["savings_reason"] = "no session id"
@@ -46428,6 +46463,10 @@ def status_bar_payload(session_id, transcript=None, sync=False):
         pass
     try:
         out["last_checkpoint_epoch"] = _status_bar_checkpoint_epoch(sid)
+    except Exception:
+        pass
+    try:
+        out["earlier_checkpoint"] = _status_bar_earlier_checkpoint(sid)
     except Exception:
         pass
 

@@ -90,7 +90,6 @@ let poseSig = ''
 let settleQueued = false
 let lastCold = false
 let frameText = ''
-let frameAt = 0
 let transcriptPath: string | null = null
 let warmInFlight = false
 /**
@@ -144,6 +143,7 @@ function dataIo($: EngineInterface): DataIo {
       return typeof text === 'string' ? text : ''
     },
     run: (argv, init) => $.process.run(argv, init),
+    pluginRoot: () => $.plugin.root,
   }
 }
 
@@ -257,10 +257,11 @@ async function tick($: EngineInterface): Promise<void> {
       lastCold = cold
       await feedPose($, { type: 'cache-cold-changed', cold })
     }
-    const text = [v.state, v.state === 'warning' ? v.secondsLeft : '', busyNow(ui, now), noteNow(ui, now), isArmed(ui, now)].join('|')
-    if (text !== frameText || now - frameAt >= TICK_IDLE_MS) {
+    // Only a change the band shows redraws it: each redraw risks restarting Clawd's animation.
+    const shown = v.state === 'warning' ? v.secondsLeft : v.secondsLeft != null ? Math.ceil(v.secondsLeft / 60) : ''
+    const text = [v.state, shown, Math.floor(now / TICK_IDLE_MS), busyNow(ui, now), noteNow(ui, now), isArmed(ui, now)].join('|')
+    if (text !== frameText) {
       frameText = text
-      frameAt = now
       await update($, frameAtom, n => (n ?? 0) + 1)
     }
   } catch {
@@ -842,6 +843,30 @@ type Model = {
   narrow: boolean
   /** Keep warm can run now (the one guard, R12): only then does the row offer it. */
   canWarm: boolean
+  /** Clawd's pictures, bottom first: the previous pose stays beneath a new one while it fades in. */
+  clawd: ClawdLayer[]
+}
+
+type ClawdLayer = { key: string; source: string; alt: string }
+
+/** How long the previous pose stays beneath a new one: the fade plus the picture's own load. */
+const UNDERLAY_MS = 900
+let clawdTop: ClawdLayer | null = null
+let clawdUnder: (ClawdLayer & { until: number }) | null = null
+
+/**
+ * The desktop shows nothing while a changed picture loads, so a bare swap
+ * blinks. Keep the old pose drawn, unchanged and under its own key, beneath
+ * the new one until the new one has faded in, then drop it.
+ */
+function clawdLayers($: EngineInterface, layer: ClawdLayer, now: number): ClawdLayer[] {
+  if (clawdTop !== null && clawdTop.key !== layer.key) {
+    clawdUnder = { ...clawdTop, until: now + UNDERLAY_MS }
+    $.clock.after(UNDERLAY_MS + 50, () => void attempt(() => update($, frameAtom, n => (n ?? 0) + 1), undefined))
+  }
+  clawdTop = layer
+  if (clawdUnder !== null && (clawdUnder.until <= now || clawdUnder.key === layer.key)) clawdUnder = null
+  return clawdUnder !== null ? [clawdUnder, layer] : [layer]
 }
 
 type Handlers = { act: (id: ActionId) => void; details: () => void }
@@ -886,8 +911,6 @@ function drawBand(D: Desktop, m: Model, on: Handlers) {
   const cardList = cards(snap)
   const detail = row(snap)
   const chevron = chevronSvg(m.sheetOpen, t.ink)
-  const clawd = clawdSvg(m.pose, moodOf(snap), { animate, palette: m.palette })
-  const clawdAlt = /aria-label="([^"]*)"/.exec(clawd)?.[1] ?? 'Clawd'
   const bars = m.narrow ? detail.savings.bars.slice(-14) : detail.savings.bars
   // Every card action that can run now, for a keyboard (R5): the quality card's two, and Keep warm.
   const rowActions = [
@@ -898,10 +921,16 @@ function drawBand(D: Desktop, m: Model, on: Handlers) {
   return (
     <Box flexDirection="row" alignItems="flex-start" columnGap={2} paddingX={1}>
       <Box flexDirection="column" alignItems="center" flexShrink={0}>
-        <Svg source={clawd} alt={clawdAlt} width={72} height={57} isInteractive />
+        <Box position="relative" width={72} height={57}>
+          {m.clawd.map(c => (
+            <Box key={c.key} position="absolute" top={0} left={0}>
+              <Svg source={c.source} alt={c.alt} width={72} height={57} isInteractive />
+            </Box>
+          ))}
+        </Box>
         <Box flexDirection="row" alignItems="center" columnGap={0}>
           <Svg source={chevron.source} alt={chevron.alt} width={16} height={16} />
-          <Button key="details" plain label="Session details" onPress={() => on.details()} />
+          <Button key="details" plain label="Details" onPress={() => on.details()} />
         </Box>
       </Box>
       <Box flexDirection="column" flexGrow={1} flexShrink={1} rowGap={1}>
@@ -913,12 +942,13 @@ function drawBand(D: Desktop, m: Model, on: Handlers) {
           </Box>
           {say.action ? <Button key="action" variant="primary" label={say.action.label} onPress={() => on.act(say.action!.id)} /> : ''}
         </Box>
-        <Box flexDirection="row" flexWrap="wrap" columnGap={3}>
+        {/* One line, never wrapped: a wrapped mark's card would open over the marks above it. */}
+        <Box flexDirection="row" flexWrap="nowrap" columnGap={2}>
           {markList.map((mark, i) => (
             <Box key={`mark-${mark.id}`} position="relative" flexDirection="row" alignItems="center" columnGap={1}>
               <Svg source={markSvg(mark, t)} alt={mark.alt} width={40} height={20} />
               <Text bold>{mark.value}</Text>
-              <Text>{mark.label}</Text>
+              {m.narrow ? '' : <Text>{mark.label}</Text>}
               {cardList[i] ? cardBox(D, cardList[i], i, t, on) : ''}
             </Box>
           ))}
@@ -1186,8 +1216,17 @@ export const register: Register = (on, options) => {
       note: noteNow(ui, now),
       handoffPending: ready,
       freshArmed: isArmed(ui, now),
+      earlierCheckpoint: s?.earlierCheckpoint ?? null,
     }
     const palette = theme === 'dark' ? DARK : LIGHT
+    const poseNow = pose?.pose ?? 'idle'
+    const mood = moodOf(snap)
+    const clawdSource = clawdSvg(poseNow, mood, { animate, palette })
+    const clawd = clawdLayers(
+      $,
+      { key: `clawd-${poseNow}-${mood}-${theme ?? 'light'}-${animate ? 'a' : 's'}`, source: clawdSource, alt: /aria-label="([^"]*)"/.exec(clawdSource)?.[1] ?? 'Clawd' },
+      now,
+    )
 
     return drawBand(
       $.ui.resolve(e),
@@ -1200,6 +1239,7 @@ export const register: Register = (on, options) => {
         savingsReason: s?.savingsReason ?? null,
         narrow: e.props.bodyColumns < 90,
         canWarm: canKeepWarm({ ...shownClock, working }, now),
+        clawd,
       },
       {
         act: id => void act($, id),

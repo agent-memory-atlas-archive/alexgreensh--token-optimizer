@@ -2,7 +2,7 @@
 // data the drawing layer maps to elements. Pure (KTD4).
 import type { CacheView, Limit, Snapshot } from './contracts.ts'
 import type { IconName } from './icons.ts'
-import { ago, clock, duration, gradeOf, relative, renewal, tokens, type FormatOptions } from './format.ts'
+import { ago, clock, duration, minutes, gradeOf, relative, renewal, tokens, type FormatOptions } from './format.ts'
 import { LIMIT_WARN, QUALITY_FLOOR, loseRun, type Action, type Run, type Tone } from './ladder.ts'
 
 export type MarkId = 'quality' | 'context' | 'cache' | 'fiveHour' | 'week'
@@ -71,17 +71,17 @@ function cacheMark(c: CacheView): Mark {
       const left = c.secondsLeft ?? 0
       const tone: Tone = c.state === 'warm' ? 'good' : 'caution'
       const word = c.state === 'warm' ? 'warm' : 'about to drop'
-      return { ...base, icon: 'hourglass', value: clock(left), tone, ringPercent: clamp((left / c.lifetime) * 100), alt: `Cache ${word}, ${clock(left)} left, ${est}` }
+      return { ...base, icon: 'hourglass', value: c.state === 'warm' ? minutes(left) : clock(left), tone, ringPercent: clamp((left / c.lifetime) * 100), alt: `Cache ${word}, ${clock(left)} left, ${est}` }
     }
     case 'cold':
       return { ...base, icon: 'cold', value: 'cold', tone: 'cold', ringPercent: 0, alt: `Cache cold, ${est}` }
     case 'refreshing':
-      return { ...base, icon: 'hourglass', value: clock(c.lifetime), tone: 'good', ringPercent: 100, alt: 'Cache refreshing while the turn runs' }
+      return { ...base, icon: 'hourglass', value: minutes(c.lifetime), tone: 'good', ringPercent: 100, alt: 'Cache refreshing while the turn runs' }
     case 'warming':
       return {
         ...base,
         icon: 'hourglass',
-        value: c.secondsLeft != null ? clock(c.secondsLeft) : '--',
+        value: c.secondsLeft != null ? minutes(c.secondsLeft) : '--',
         tone: 'good',
         ringPercent: c.secondsLeft != null ? clamp((c.secondsLeft / c.lifetime) * 100) : 0,
         alt: 'Cache warm-up running',
@@ -99,7 +99,7 @@ function limitMark(id: 'fiveHour' | 'week', limit: Limit, now: number, opts: For
     id,
     icon: 'clock',
     value: `${p}%`,
-    label: id === 'fiveHour' ? '5 hours' : 'week',
+    label: id === 'fiveHour' ? '5h' : 'week',
     tone: limitTone(limit.percentUsed),
     ringPercent: clamp(limit.percentUsed),
     alt: `${name} limit ${p}% used` + (when ? `, renews ${when}` : ''),
@@ -222,7 +222,7 @@ function savingsBlock(s: Snapshot): SavingsBlock {
       last30Text: '--',
       daily: [],
       bars: [],
-      reason: s.savingsLoading ? null : 'Savings are not available right now.',
+      reason: s.savingsLoading ? null : 'Savings appear once Token Optimizer has measured some.',
     }
   }
   const top = Math.max(1, ...sv.daily)
@@ -251,7 +251,11 @@ export function row(s: Snapshot, _opts: FormatOptions = {}): Row {
   if (q && q.compactions > 0) facts.push({ icon: 'compact', runs: [plain('Compacted '), strong(`${q.compactions}×`)] })
   facts.push({
     icon: 'bookmark',
-    runs: q?.checkpointEpoch != null ? [plain(`Checkpoint saved ${ago(q.checkpointEpoch * 1000, s.now)}`)] : [plain('No checkpoint yet')],
+    runs: q?.checkpointEpoch != null
+      ? [plain(`Checkpoint saved ${ago(q.checkpointEpoch * 1000, s.now)}`)]
+      : s.earlierCheckpoint
+        ? [plain(`Earlier checkpoint ${ago(s.earlierCheckpoint.epoch * 1000, s.now)}`), ...(s.earlierCheckpoint.about ? [plain(' · '), strong(s.earlierCheckpoint.about)] : [])]
+        : [plain('No checkpoint yet')],
   })
   return { facts, savings: savingsBlock(s) }
 }
