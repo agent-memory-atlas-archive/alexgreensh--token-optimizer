@@ -154,6 +154,9 @@ function dataIo($: EngineInterface): DataIo {
     },
     run: (argv, init) => $.process.run(argv, init),
     pluginRoot: () => $.plugin.root,
+    log: async text => {
+      await $.ui.log(text, { to: 'debug' })
+    },
   }
 }
 
@@ -278,9 +281,9 @@ function planDefault(s: TokenOptimizerDesktopSession | null): 3600 | 300 {
 }
 
 /**
- * Once a second: keep Clawd's transients and naps moving, and redraw when
- * what the band shows changes; inside the cache warning window that is every
- * second, otherwise every 30 seconds.
+ * Keeps Clawd's transients and naps moving and redraws when what the band
+ * shows changes: by the second near a deadline or during a hold, otherwise
+ * every 5 s, with at most one redraw a minute while nothing moves.
  */
 /** Last tick that did its full work: when nothing moves by the second, every 5 s is enough. */
 let fullTickAt = 0
@@ -435,6 +438,8 @@ async function runningCall($: EngineInterface): Promise<'compact' | 'clear' | nu
  * call is not made.
  */
 async function claimCall($: EngineInterface, kind: 'compact' | 'clear'): Promise<{ kind: 'compact' | 'clear'; startedAt: number } | null> {
+  // Never over a call already in flight, whatever the caller checked before.
+  if (engineCall !== null) return null
   engineCall = kind
   try {
     const mine = { kind, startedAt: await $.clock.now() }
@@ -1076,7 +1081,11 @@ function drawBand(D: Desktop, m: Model, on: Handlers) {
                 <Text bold>{mark.value}</Text>
                 {/* Always labelled: without the word, nobody knows which number is which. */}
                 <Text>{mark.label}</Text>
-                {cardList[i] ? cardBox(D, cardList[i], i, t, on) : ''}
+                {(() => {
+                  // Matched by id, not position: a missing limit never shifts a card under the wrong mark.
+                  const card = cardList.find(c => c.id === mark.id)
+                  return card ? cardBox(D, card, i, t, on) : ''
+                })()}
               </Box>
             ))}
           </Box>

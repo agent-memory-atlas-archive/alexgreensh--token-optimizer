@@ -87,7 +87,9 @@ export type DataIo = {
   /** `$.plugin.root`: this plugin's own folder */
   pluginRoot?: () => string
   /** `$.process.run(argv, init)` */
-  run: (argv: string[], init: { cwd?: string; timeoutMs: number; stdin?: string }) => Promise<{ exitCode: number; stdout: string }>
+  run: (argv: string[], init: { cwd?: string; timeoutMs: number; stdin?: string }) => Promise<{ exitCode: number; stdout: string; stderr?: string }>
+  /** `$.ui.log(text, { to: 'debug' })`: a line in Claude Code's debug log */
+  log?: (text: string) => Promise<void>
 }
 
 async function attempt<T>(work: () => Promise<T>, fallback: T): Promise<T> {
@@ -235,7 +237,7 @@ export async function runMeasure(
   root: TokenOptimizerRoot,
   args: readonly string[],
   init: { timeoutMs: number; stdin?: string },
-): Promise<{ exitCode: number; stdout: string }> {
+): Promise<{ exitCode: number; stdout: string; stderr?: string }> {
   let lastError: unknown = new Error('no python launcher')
 
   for (let i = launcherIndex; i < PYTHON_LAUNCHERS.length; i++) {
@@ -273,7 +275,7 @@ export async function readStatusBar(
   transcript?: string,
 ): Promise<StatusBar | 'outdated' | 'nopython' | null> {
   const args = statusBarArgs(sid, transcript)
-  let result: { exitCode: number; stdout: string } | 'nopython' | null = null
+  let result: { exitCode: number; stdout: string; stderr?: string } | 'nopython' | null = null
   try {
     result = await runMeasure(io, root, args, { timeoutMs: STATUS_TIMEOUT_MS })
   } catch (error) {
@@ -282,6 +284,10 @@ export async function readStatusBar(
 
   if (result === 'nopython') return 'nopython'
   if (!result) return null
+  if (result.exitCode !== 0 && io.log) {
+    // Why the status read failed, where `claude --debug` shows it.
+    void attempt(() => io.log!(`token-optimizer-desktop: status-bar exited ${result.exitCode}: ${(result.stderr ?? '').trim().slice(0, 300)}`), undefined)
+  }
   // The JSON is the last line that is one (a stray line printed before it is not a reason to fail).
   const json = result.stdout.split(/\r?\n/).map(l => l.trim()).filter(l => l.startsWith('{')).pop()
   // An install without the command prints its usage instead of JSON (or exits 2).

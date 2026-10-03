@@ -46402,6 +46402,7 @@ def _status_bar_start_refresh(session_id):
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         env={**os.environ, _STATUS_BAR_LOCK_TOKEN_ENV: token})
     if proc is None:
+        _log_spawn_failure("status-bar refresh spawn failed")
         _status_bar_release_lock(session_id, token)
         return False
     return True
@@ -46437,10 +46438,8 @@ def _status_bar_acquire_lock(session_id):
                 # Another caller replaced the stale lock between our check and the
                 # rename, so we moved its live lock. Put it back without
                 # overwriting anything (link fails if the name is taken) and back off.
-                try:
-                    os.link(str(quarantine), str(lock))
-                except (OSError, AttributeError):
-                    pass
+                if _status_bar_put_back(quarantine, lock):
+                    return None
                 try:
                     quarantine.unlink()
                 except OSError:
@@ -46497,16 +46496,36 @@ def _status_bar_release_lock(session_id, token):
         mine = aside.read_text(encoding="ascii", errors="replace").strip() == token
     except OSError:
         mine = False
-    if not mine:
-        try:
-            os.link(str(aside), str(lock))
-        except (OSError, AttributeError):
-            pass
+    if not mine and _status_bar_put_back(aside, lock):
+        return False
     try:
         aside.unlink()
     except OSError:
         pass
     return mine
+
+
+def _status_bar_put_back(aside, lock):
+    """Return a lock moved aside to its name, never over a newer one.
+
+    True when `aside` itself now holds the name (renamed into place, so the
+    caller must not delete it); False when a hard link put it back (the caller
+    removes `aside`) or a newer lock already holds the name.
+    """
+    try:
+        os.link(str(aside), str(lock))
+        return False
+    except FileExistsError:
+        return False
+    except (OSError, AttributeError):
+        # No hard links here: rename into place only while the name is free.
+        try:
+            if not os.path.exists(str(lock)):
+                os.rename(str(aside), str(lock))
+                return True
+        except OSError:
+            pass
+        return False
 
 
 _COMPACT_MARK = b'"subtype":"compact_boundary"'
@@ -46847,7 +46866,16 @@ def _status_bar_cli(args):
         if token is None:
             sync = False
     # The background child gets a hard wall-clock budget: a hung read never lingers.
-    budget = _install_hook_budget(_STATUS_BAR_CHILD_BUDGET_S) if child else None
+    def _out_of_time():
+        # Killed by its budget: leave a reason for the band and free the lock.
+        try:
+            _status_bar_write_cache(sid, None, "savings took too long to compute")
+        except OSError:
+            pass
+        _status_bar_release_lock(sid, token)
+        _log_spawn_failure("status-bar refresh child ran out of time")
+
+    budget = _install_hook_budget(_STATUS_BAR_CHILD_BUDGET_S, on_timeout=_out_of_time) if child else None
     try:
         payload = status_bar_payload(session, transcript=_opt("--transcript"), sync=sync)
     except Exception:
