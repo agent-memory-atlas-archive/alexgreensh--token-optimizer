@@ -622,7 +622,7 @@ Install it alongside the main Token Optimizer plugin. It needs Claude Code 2.1.2
 
 - **One sentence, one button**: the most urgent thing about your session, with at most one button to act on it.
 - **Five marks**: quality grade, context fill, cache countdown, 5-hour limit and weekly limit. Hover any mark for a card with the detail.
-- **Click Clawd to unfold more**: branch, session time, tool calls, compactions (when there are any), last checkpoint, and tokens saved this session and over the past 30 days.
+- **Show session details** (under Clawd) unfolds more: branch, session time, tool calls, compactions (when there are any), last checkpoint, and tokens saved this session and over the past 30 days.
 - **Clawd acts out the session**: thinking, reading, typing, subagents, waiting for your permission, writing, compacting, done, stopped, API error, cold cache, napping.
 - **Clean up**: compacts with Token Optimizer's guidance.
 - **Start fresh**: asks for a second click, then saves a checkpoint, clears, and hands the checkpoint to your first message.
