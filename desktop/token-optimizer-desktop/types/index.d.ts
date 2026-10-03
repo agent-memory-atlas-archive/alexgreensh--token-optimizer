@@ -110,6 +110,17 @@ export type TokenOptimizerDesktopUi = {
   freshArmedAt: number | null
 }
 
+/**
+ * The compaction or clear the buttons have running, recorded before the call
+ * and cleared when it settles, so a reload mid-call still refuses a second
+ * one. A record older than 10 minutes is treated as gone.
+ */
+export type TokenOptimizerDesktopEngineCall = {
+  kind: 'compact' | 'clear'
+  /** `$.clock.now()` when the call was recorded (ms). */
+  startedAt: number
+} | null
+
 declare module 'claude-code' {
   interface PluginState {
     'token-optimizer-desktop': {
@@ -118,6 +129,7 @@ declare module 'claude-code' {
       clock: TokenOptimizerDesktopClock | null
       pose: TokenOptimizerDesktopPose | null
       ui: TokenOptimizerDesktopUi | null
+      engineCall: TokenOptimizerDesktopEngineCall
       /** The app theme's palette, from the `theme` config row. */
       theme: 'light' | 'dark'
       /** Bumped by the clock tick when the visible clock changes (KTD13). */

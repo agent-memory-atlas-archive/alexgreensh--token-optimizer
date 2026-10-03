@@ -17,6 +17,7 @@ import {
   BUSY_TIMEOUT_MS,
   CAPTURE_TIMEOUT_MS,
   HANDOFF_KEY,
+  HANDOFF_TTL_MS,
   RESUME_TIMEOUT_MS,
   WARM_PROMPT,
   attachesHandoff,
@@ -62,6 +63,7 @@ const sessionAtom = atom({ plugin: 'token-optimizer-desktop', key: 'session' } a
 const handoffAtom = atom({ plugin: 'token-optimizer-desktop', key: 'handoff' } as const, null)
 const clockAtom = atom({ plugin: 'token-optimizer-desktop', key: 'clock' } as const, null)
 const poseAtom = atom({ plugin: 'token-optimizer-desktop', key: 'pose' } as const, null)
+const engineCallAtom = atom({ plugin: 'token-optimizer-desktop', key: 'engineCall' } as const, null)
 const uiAtom = atom({ plugin: 'token-optimizer-desktop', key: 'ui' } as const, null)
 const themeAtom = atom({ plugin: 'token-optimizer-desktop', key: 'theme' } as const, 'light')
 const frameAtom = atom({ plugin: 'token-optimizer-desktop', key: 'frame' } as const, 0)
@@ -106,7 +108,8 @@ let claim: { at: number } | null = null
  * The one engine call the buttons may have running: our `$.session.compact()`
  * or our `$.command.run({ command: 'clear' })`. Set before the call's first
  * await, cleared only when it settles, whatever the busy timeout says: a
- * second compaction or clear never overlaps it.
+ * second compaction or clear never overlaps it. `engineCallAtom` records it
+ * too, so a reload mid-call still refuses (see runningCall).
  */
 let engineCall: 'compact' | 'clear' | null = null
 /** The live session a render last asked to re-read after finding another session's figures (TR-04). */
@@ -298,15 +301,15 @@ function isHandoff(v: unknown): v is Handoff {
 
 /**
  * The pending hand-off. `$.store` is the truth (it survives restarts and is
- * deleted when one session takes it); the atom mirrors it for drawing. A store
- * that cannot be read falls back to the mirror.
+ * deleted when one session takes it); the atom only mirrors it for drawing. A
+ * store that cannot be read holds nothing: no stale mirror is ever attached.
  */
 async function heldHandoff($: EngineInterface): Promise<Handoff | null> {
   let stored: unknown
   try {
     stored = await $.store.get(HANDOFF_KEY)
   } catch {
-    return attempt(() => read($, handoffAtom), null)
+    return null
   }
   const held = isHandoff(stored) ? stored : null
   if (stored != null && !held) await attempt(() => $.store.delete(HANDOFF_KEY), undefined)
@@ -326,9 +329,9 @@ async function sessionStartedAt($: EngineInterface): Promise<number | null> {
  * the one that saved it, in its project, started since the save, within 10
  * minutes of it. An expired one in this project is dropped with a one-line
  * note; another project's is left alone (R1). `as` names the session when the
- * caller knows it better than the engine does yet (a clear's own start event).
+ * caller knows its id better than the engine does yet (a clear's own start event).
  */
-async function handoffThatFits($: EngineInterface, h: Handoff, as?: { sessionId: string; startedAt: number }): Promise<Handoff | null> {
+async function handoffThatFits($: EngineInterface, h: Handoff, as?: { sessionId: string; startedAt: number | null }): Promise<Handoff | null> {
   const sessionId = as?.sessionId ?? cleanId(await attempt(() => $.session.id(), ''))
   const cwd = await attempt(() => $.session.cwd(), '')
   const now = await $.clock.now()
@@ -344,8 +347,47 @@ async function handoffThatFits($: EngineInterface, h: Handoff, as?: { sessionId:
 }
 
 /** The refusal for a press while our compaction or clear still runs. */
-function stillRunning(): string {
-  return engineCall === 'compact' ? 'Still finishing the last clean-up.' : 'Still clearing.'
+function stillRunning(kind: 'compact' | 'clear'): string {
+  return kind === 'compact' ? 'Still finishing the last clean-up.' : 'Still clearing.'
+}
+
+/**
+ * Our compaction or clear still running: this module's own, or one recorded
+ * before a reload that is under 10 minutes old (an older record is cleared).
+ */
+async function runningCall($: EngineInterface): Promise<'compact' | 'clear' | null> {
+  if (engineCall) return engineCall
+  const held = await attempt(() => read($, engineCallAtom), null)
+  if (engineCall) return engineCall
+  if (!held) return null
+  // A clock that cannot be read keeps the record: refuse rather than overlap.
+  const now = await attempt(() => $.clock.now(), null)
+  if (now === null || now - held.startedAt < HANDOFF_TTL_MS) return held.kind
+  await attempt(() => update($, engineCallAtom, cur => (cur && cur.startedAt === held.startedAt && cur.kind === held.kind ? null : cur)), undefined)
+  return null
+}
+
+/**
+ * Claims the one engine call (the caller checked runningCall with no await
+ * since) and records it for a reload. False when it cannot be recorded: the
+ * call is not made.
+ */
+async function claimCall($: EngineInterface, kind: 'compact' | 'clear'): Promise<{ kind: 'compact' | 'clear'; startedAt: number } | null> {
+  engineCall = kind
+  try {
+    const mine = { kind, startedAt: await $.clock.now() }
+    await update($, engineCallAtom, () => mine)
+    return mine
+  } catch {
+    engineCall = null
+    return null
+  }
+}
+
+/** The call settled: release it here and in the record (only our own record). */
+async function releaseCall($: EngineInterface, mine: { kind: 'compact' | 'clear'; startedAt: number }): Promise<void> {
+  engineCall = null
+  await attempt(() => update($, engineCallAtom, cur => (cur && cur.kind === mine.kind && cur.startedAt === mine.startedAt ? null : cur)), undefined)
 }
 
 // ---- buttons (U9) ----
@@ -393,9 +435,15 @@ async function expireBusy($: EngineInterface, busy: Exclude<Busy, null>, since: 
   toast($, line)
 }
 
-async function dropHandoff($: EngineInterface): Promise<void> {
+/** Deletes the held hand-off, store first; true only when the delete succeeded (the mirror follows it). */
+async function dropHandoff($: EngineInterface): Promise<boolean> {
+  try {
+    await $.store.delete(HANDOFF_KEY)
+  } catch {
+    return false
+  }
   await attempt(() => update($, handoffAtom, () => null), undefined)
-  await attempt(() => $.store.delete(HANDOFF_KEY), undefined)
+  return true
 }
 
 async function isTurnRunning($: EngineInterface): Promise<boolean> {
@@ -409,8 +457,9 @@ async function cleanUp($: EngineInterface): Promise<void> {
   const ui = (await attempt(() => read($, uiAtom), null)) ?? initialUi()
   if (busyNow(ui, now) !== null) return
   await disarm($)
-  if (engineCall) {
-    toast($, stillRunning())
+  const running = await runningCall($)
+  if (running) {
+    toast($, stillRunning(running))
     return
   }
   if (await isTurnRunning($)) {
@@ -432,24 +481,29 @@ async function runCompact($: EngineInterface, since: number): Promise<void> {
     toast($, 'Clean up waits until the turn finishes.')
     return
   }
-  if (engineCall) {
+  const running = await runningCall($)
+  if (running || engineCall) {
     const ui = await attempt(() => read($, uiAtom), null)
     if (!ui || ui.busy !== 'clean' || ui.busySince !== since) return
     const now = await $.clock.now()
     await setUi($, u => withBusy(u, null, now))
-    toast($, stillRunning())
+    toast($, stillRunning(running ?? engineCall ?? 'compact'))
     return
   }
   let skip: string | null = null
-  // Claimed with no await between the check and the call.
-  engineCall = 'compact'
-  try {
-    const result = await $.session.compact()
-    if (result.skip) skip = result.skip
-  } catch (error) {
-    skip = error instanceof Error && error.message ? error.message.split('\n')[0] ?? 'it failed' : 'it failed'
-  } finally {
-    engineCall = null
+  // Claimed with no await between the check and the claim; recorded before the call.
+  const mine = await claimCall($, 'compact')
+  if (!mine) {
+    skip = 'it could not be recorded'
+  } else {
+    try {
+      const result = await $.session.compact()
+      if (result.skip) skip = result.skip
+    } catch (error) {
+      skip = error instanceof Error && error.message ? error.message.split('\n')[0] ?? 'it failed' : 'it failed'
+    } finally {
+      await releaseCall($, mine)
+    }
   }
   const ui = await attempt(() => read($, uiAtom), null)
   // Timed out meanwhile, or another step took over: nothing to report here.
@@ -546,9 +600,10 @@ async function startFresh($: EngineInterface): Promise<void> {
     await setUi($, u => ({ ...u, freshArmedAt: now }))
     return
   }
-  if (engineCall) {
+  const running = await runningCall($)
+  if (running) {
     await disarm($)
-    toast($, stillRunning())
+    toast($, stillRunning(running))
     return
   }
   if (await isTurnRunning($)) {
@@ -595,6 +650,7 @@ async function runFresh($: EngineInterface, sid: string, since: number, gen: num
     read: path => io.read(path),
   }
   const cwd = await attempt(() => $.session.cwd(), '')
+  // `now` is a placeholder: the hand-off is stamped once its save lands (below).
   const result = await prepareHandoff(port, { sessionId: sid, transcriptPath, cwd, now: since })
   const standDown = async (): Promise<void> => {
     const now = await $.clock.now()
@@ -611,7 +667,8 @@ async function runFresh($: EngineInterface, sid: string, since: number, gen: num
   if (!ui || ui.busy !== 'fresh-capture' || ui.busySince !== since) return
   if (!result.ok) return stop(result.reason)
   // Our compaction or clear still running: never overlap it.
-  if (engineCall) return stop(engineCall === 'compact' ? 'the last clean-up is still running' : 'the last clear is still running')
+  const running = await runningCall($)
+  if (running) return stop(running === 'compact' ? 'the last clean-up is still running' : 'the last clear is still running')
   // A turn started during the capture: a queued clear would wipe it (TR-02).
   if (await isTurnRunning($)) {
     await standDown()
@@ -619,13 +676,23 @@ async function runFresh($: EngineInterface, sid: string, since: number, gen: num
     return
   }
 
+  // Saved, then stamped from the clock right after the save lands: the
+  // 10-minute window and "started since the save" both count from there.
+  let handoff: Handoff
   try {
     await $.store.set(HANDOFF_KEY, result.handoff)
   } catch {
     return stop('the hand-off could not be kept on disk')
   }
   try {
-    await update($, handoffAtom, () => result.handoff)
+    handoff = { ...result.handoff, createdAt: await $.clock.now() }
+    await $.store.set(HANDOFF_KEY, handoff)
+  } catch {
+    await dropHandoff($)
+    return stop('the hand-off could not be kept on disk')
+  }
+  try {
+    await update($, handoffAtom, () => handoff)
   } catch {
     // The new session would never see it (TR-11).
     await dropHandoff($)
@@ -638,7 +705,7 @@ async function runFresh($: EngineInterface, sid: string, since: number, gen: num
   const now = await $.clock.now()
   await setUi($, u => withBusy(u, 'fresh-clear', now))
   armBusyTimeout($, 'fresh-clear', now)
-  $.clock.after(0, () => void runClear($, now, result.handoff, sid, gen))
+  $.clock.after(0, () => void runClear($, now, handoff, sid, gen))
 }
 
 async function runClear($: EngineInterface, since: number, handoff: Handoff, sid: string, gen: number): Promise<void> {
@@ -659,9 +726,11 @@ async function runClear($: EngineInterface, since: number, handoff: Handoff, sid
     toast($, 'Start fresh stopped: the session changed.')
     return
   }
-  if (engineCall) return fail(`Start fresh stopped: ${engineCall === 'compact' ? 'the last clean-up is still running' : 'the last clear is still running'}. Nothing was cleared.`)
-  // Claimed with no await between the check and the call.
-  engineCall = 'clear'
+  const running = await runningCall($)
+  if (running || engineCall) return fail(`Start fresh stopped: ${(running ?? engineCall) === 'compact' ? 'the last clean-up is still running' : 'the last clear is still running'}. Nothing was cleared.`)
+  // Claimed with no await between the check and the claim; recorded before the call.
+  const mine = await claimCall($, 'clear')
+  if (!mine) return fail('Start fresh could not clear. Your conversation is unchanged.')
   let cleared = false
   try {
     await $.command.run({ command: 'clear' })
@@ -669,7 +738,7 @@ async function runClear($: EngineInterface, since: number, handoff: Handoff, sid
   } catch {
     // Reported below, once the call has settled.
   } finally {
-    engineCall = null
+    await releaseCall($, mine)
   }
   if (!cleared) return fail('Start fresh could not clear. Your conversation is unchanged.')
   // The hand-off now waits for the first prompt of a conversation started since the save (KTD10).
@@ -932,8 +1001,9 @@ export const register: Register = (on, options) => {
     sessionGen += 1
     if (e.transcript_path) transcriptPath = e.transcript_path
     const sid = cleanId(e.session_id)
-    // This conversation began now, whoever ran the clear.
-    const startedAt = await $.clock.now()
+    // The new conversation's own start, never this event's arrival; unknown
+    // means nothing is attached or announced until a prompt can read it.
+    const startedAt = await sessionStartedAt($)
     await feedClock($, { type: 'clear' })
     lastCold = false
     await feedPose($, { type: 'session-start' })
@@ -956,7 +1026,8 @@ export const register: Register = (on, options) => {
     if (!held) return next(e)
     const handoff = await handoffThatFits($, held)
     if (!handoff) return next(e)
-    await dropHandoff($)
+    // Taken only once it is deleted: a failed delete attaches nothing.
+    if (!(await dropHandoff($))) return next(e)
     try {
       return await next({ ...e, context: [...(e.context ?? []), handoff.text] })
     } catch (error) {

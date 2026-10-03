@@ -51,14 +51,21 @@ export type World = {
   themeDelayMs: number
   /** Band state (`$.state`, by atom key) as a reload finds it: served while nothing has been written. */
   seed: Record<string, unknown>
+  /** Every value the band wrote to each of its atoms, in order (by key). */
+  written: Record<string, unknown[]>
   /** How many of the next writes of a held hand-off to `$.state` fail. */
   handoffWriteFails: number
   /** What `$.store` holds at the start. */
   store: Record<string, unknown>
   /** The live session's project. */
   cwd: string
-  /** When the live session began (`$.session.usage().startedAt`, mocked-clock ms); a clear sets it to its own moment. */
-  startedAt: number
+  /** When the live session began (`$.session.usage().startedAt`, mocked-clock ms); a clear sets it to its own moment; null when the engine cannot say. */
+  startedAt: number | null
+  /** How many of the next `$.store.get` / `$.store.delete` calls throw. */
+  storeGetFails: number
+  storeDeleteFails: number
+  /** Mocked-clock delay before each `$.store.set` lands (ms). */
+  storeSetDelayMs: number
   /** How many of the next writes of the band's UI state hang (10 minutes on the mocked clock). */
   uiWriteHangs: number
   /** What a plugin-run `/clear` does beneath the band before its call resolves (the engine ends the old session inside it). */
@@ -116,10 +123,14 @@ export function stub(on: On, patch: Partial<Omit<World, 'clock' | 'runs' | 'toas
     themeDelayMs: 0,
     seed: {},
     handoffWriteFails: 0,
+    written: {},
     store: {},
     cwd: '/work/project',
     startedAt: NOW_MS - 3_600_000,
     uiWriteHangs: 0,
+    storeGetFails: 0,
+    storeDeleteFails: 0,
+    storeSetDelayMs: 0,
     clearBeneath: null,
     runs: [],
     toasts: [],
@@ -131,7 +142,27 @@ export function stub(on: On, patch: Partial<Omit<World, 'clock' | 'runs' | 'toas
   }
   const missing = (path: string) => new Error(`ENOENT: ${path}`)
 
-  mock.store(on, w.store)
+  // `$.store` answered from `w.store`, with failures and a slow save on demand.
+  on('store.get', (_, e) => {
+    if (w.storeGetFails > 0) {
+      w.storeGetFails -= 1
+      throw new Error('store read failed')
+    }
+    return { value: w.store[e.key] }
+  })
+  on('store.set', async (_, e) => {
+    if (w.storeSetDelayMs) await w.clock.sleep(w.storeSetDelayMs)
+    w.store[e.key] = e.value
+    return { value: undefined }
+  })
+  on('store.delete', (_, e) => {
+    if (w.storeDeleteFails > 0) {
+      w.storeDeleteFails -= 1
+      throw new Error('store delete failed')
+    }
+    delete w.store[e.key]
+    return { value: undefined }
+  })
   mock.env(on, { HOME })
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('classic.SessionStart', () => ({ additionalContext: ['Recovered notes', '[Token Optimizer] Cross-session checkpoint (abcd1234): /p.md. Not your session\'s work.'] }))
@@ -140,7 +171,7 @@ export function stub(on: On, patch: Partial<Omit<World, 'clock' | 'runs' | 'toas
   on('session.cwd', () => ({ value: w.cwd }))
   on('session.usage', () => ({
     value: {
-      startedAt: w.startedAt,
+      ...(w.startedAt === null ? {} : { startedAt: w.startedAt }),
       context: { window: 1_000_000, tokens: 620_000, percent: 62 },
       rateLimits: [
         { kind: 'five_hour', percentUsed: 40, resetsAt: '2026-10-03T12:00:00Z' },
@@ -162,7 +193,9 @@ export function stub(on: On, patch: Partial<Omit<World, 'clock' | 'runs' | 'toas
       w.handoffWriteFails -= 1
       return { value: { isSet: false as const, version: 999 } }
     }
-    return next(e)
+    const result = await next(e)
+    if (e.plugin === 'token-optimizer-desktop' && result.value?.isSet) (w.written[e.key] ??= []).push(e.value)
+    return result
   })
   on('config.list', async () => {
     if (w.themeDelayMs) await w.clock.sleep(w.themeDelayMs)

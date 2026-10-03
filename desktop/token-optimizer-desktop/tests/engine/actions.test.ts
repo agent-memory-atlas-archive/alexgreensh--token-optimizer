@@ -11,7 +11,7 @@ const has = async (ui: Parameters<typeof sentenceOf>[0], text: string) => (await
 
 const COMPOSER = { kind: 'composer' } as const
 
-type Live = { sessionId: string; startedAt: number; clearBeneath: (() => Promise<void>) | null; clock: { now: () => number; sleep: (ms: number) => Promise<void> } }
+type Live = { sessionId: string; startedAt: number | null; clearBeneath: (() => Promise<void>) | null; clock: { now: () => number; sleep: (ms: number) => Promise<void> } }
 
 let lastStart: unknown
 /** A clear lands: the old session ends with reason clear, then the classic SessionStart carries the new id. */
@@ -723,4 +723,136 @@ test('two quick presses start one engine call', async ($, on) => {
   await Promise.all([ui.press({ key: 'card-quality-clean' }), ui.press({ key: 'card-quality-clean' })])
   await w.clock.settle()
   expect(w.compacts - before).toBe(1)
+})
+
+const POINTER = 'Cross-session checkpoint'
+const startContext = () => ((lastStart as { additionalContext?: string[] }).additionalContext ?? []).join('\n')
+
+for (const kind of ['compact', 'clear'] as const) {
+  const refusal = kind === 'compact' ? 'Still finishing the last clean-up.' : 'Still clearing.'
+  test(`a reload while our ${kind} still runs keeps refusing a second compaction or clear for 10 minutes`, async ($, on) => {
+    // The band reloaded while its engine call was in flight: only the persisted record is left.
+    const w = stub(on, { seed: { engineCall: { kind, startedAt: NOW_MS - 60_000 } } })
+    await $.session.start(START)
+    const ui = await mountBand($)
+    await ui.press({ key: 'card-quality-clean' })
+    await w.clock.settle()
+    expect(w.compacts).toBe(0)
+    expect(w.toasts).toEqual([refusal])
+    w.toasts = []
+    await confirmFresh(ui)
+    await w.clock.settle()
+    expect(w.runs.some(r => r.argv.includes('compact-capture'))).toBe(false)
+    expect(w.commands).toEqual([])
+    expect(w.toasts).toEqual([refusal])
+  })
+}
+
+test('a persisted engine call older than 10 minutes is cleared and blocks nothing', async ($, on) => {
+  const w = stub(on, { seed: { engineCall: { kind: 'compact', startedAt: NOW_MS - 10 * 60_000 - 1 } } })
+  await $.session.start(START)
+  const ui = await mountBand($)
+  await ui.press({ key: 'card-quality-clean' })
+  await w.clock.settle()
+  expect(w.compacts).toBe(1)
+  expect(w.toasts.some(t => t.startsWith('Still'))).toBe(false)
+})
+
+test('our engine call is recorded before it runs and cleared when it settles', async ($, on) => {
+  const w = stub(on)
+  await $.session.start(START)
+  const ui = await mountBand($)
+  await ui.press({ key: 'card-quality-clean' })
+  await w.clock.settle()
+  expect(w.compacts).toBe(1)
+  expect(w.written.engineCall).toEqual([{ kind: 'compact', startedAt: NOW_MS }, null])
+})
+
+test('a store that cannot be read attaches nothing, even with a hand-off mirrored for drawing', async ($, on) => {
+  const handoff = { fromSessionId: 'sess-0', cwd: '/work/project', checkpointPath: '/cp.md', text: 'MIRROR ONLY', createdAt: NOW_MS - 1000 }
+  const w = stub(on, { store: { handoff }, seed: { handoff }, startedAt: NOW_MS - 500, storeGetFails: 1 })
+  await $.session.start(START)
+  w.storeGetFails = 1
+  const first = await $.prompt.submit({ text: 'go on', wait: false, origin: COMPOSER })
+  expect(first.context ?? []).toEqual([])
+})
+
+test('a hand-off whose delete fails is not attached and stays held', async ($, on) => {
+  const handoff = { fromSessionId: 'sess-0', cwd: '/work/project', checkpointPath: '/cp.md', text: 'HELD', createdAt: NOW_MS - 1000 }
+  const w = stub(on, { store: { handoff }, startedAt: NOW_MS - 500 })
+  await $.session.start(START)
+  w.storeDeleteFails = 1
+  const first = await $.prompt.submit({ text: 'go on', wait: false, origin: COMPOSER })
+  expect(first.context ?? []).toEqual([])
+  expect(w.store.handoff).toEqual(handoff)
+  // Once it can be deleted, it joins the next prompt, once.
+  const second = await $.prompt.submit({ text: 'go on', wait: false, origin: COMPOSER })
+  expect(second.context).toEqual(['HELD'])
+})
+
+test('the hand-off is stamped when its save lands: a session started during the save never takes it', async ($, on) => {
+  const w = stub(on, { storeSetDelayMs: 2000 })
+  await $.session.start(START)
+  const ui = await mountBand($)
+  w.clearBeneath = async () => {
+    await $.session.end({ reason: 'clear', sessionId: 'sess-1', resume: {} } as never)
+    w.sessionId = 'sess-2'
+    // This conversation began while the hand-off was still being saved.
+    w.startedAt = NOW_MS + 1000
+  }
+  await confirmFresh(ui)
+  await w.clock.settle()
+  await w.clock.advance(10_000)
+  await w.clock.settle()
+  expect(w.commands).toEqual(['clear'])
+  expect((w.store.handoff as { createdAt: number }).createdAt).toBe(NOW_MS + 2000)
+  await ourClearStarts($, 'sess-2')
+  expect(startContext().includes(POINTER)).toBe(true)
+  const first = await $.prompt.submit({ text: 'continue', wait: false, origin: COMPOSER })
+  expect(first.context ?? []).toEqual([])
+  // A conversation started after the save takes it.
+  await clearLands($, w, 'sess-2', 'sess-3')
+  const next = await $.prompt.submit({ text: 'continue', wait: false, origin: COMPOSER })
+  expect(next.context).toEqual(['LEAN HANDOFF TEXT'])
+})
+
+test('a clear whose new session cannot say when it started shows no "Checkpoint ready", keeps the pointer, attaches nothing', async ($, on) => {
+  const w = stub(on)
+  await $.session.start(START)
+  const ui = await mountBand($)
+  w.clearBeneath = async () => {
+    await $.session.end({ reason: 'clear', sessionId: 'sess-1', resume: {} } as never)
+    w.sessionId = 'sess-2'
+    w.startedAt = null
+  }
+  await confirmFresh(ui)
+  await w.clock.settle()
+  await w.clock.advance(1000)
+  await ourClearStarts($, 'sess-2')
+  expect(startContext().includes(POINTER)).toBe(true)
+  expect(await has(ui, 'Checkpoint ready')).toBe(false)
+  const first = await $.prompt.submit({ text: 'continue', wait: false, origin: COMPOSER })
+  expect(first.context ?? []).toEqual([])
+  // Once the engine can say, the first prompt after takes it.
+  w.startedAt = w.clock.now()
+  const next = await $.prompt.submit({ text: 'continue', wait: false, origin: COMPOSER })
+  expect(next.context).toEqual(['LEAN HANDOFF TEXT'])
+})
+
+test('a clear uses the new session\'s own start time, not when the event arrived', async ($, on) => {
+  const w = stub(on)
+  await $.session.start(START)
+  const ui = await mountBand($)
+  w.clearBeneath = async () => {
+    await $.session.end({ reason: 'clear', sessionId: 'sess-1', resume: {} } as never)
+    w.sessionId = 'sess-2'
+    // The engine reports a start before the hand-off was saved.
+    w.startedAt = NOW_MS - 1
+  }
+  await confirmFresh(ui)
+  await w.clock.settle()
+  await w.clock.advance(1000)
+  await ourClearStarts($, 'sess-2')
+  expect(startContext().includes(POINTER)).toBe(true)
+  expect(await has(ui, 'Checkpoint ready')).toBe(false)
 })
