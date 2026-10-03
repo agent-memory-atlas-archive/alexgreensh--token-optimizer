@@ -68,11 +68,55 @@ export type TokenOptimizerDesktopHandoff = {
   createdAt: number
 } | null
 
+/** The cache clock's reducer state (src/clock.ts ClockState, KTD8). */
+export type TokenOptimizerDesktopClock = {
+  anchor: number | null
+  lifetime: '1h' | '5m' | null
+  contextTokens: number | null
+  working: boolean
+  warming: boolean
+  lapsed: boolean
+}
+
+/** Clawd's pose reducer state (src/pose.ts PoseState, KTD7). */
+export type TokenOptimizerDesktopPose = {
+  pose: 'wake' | 'idle' | 'think' | 'read' | 'type' | 'lift' | 'ask' | 'write' | 'compact' | 'done' | 'stop' | 'error' | 'cold' | 'sleep'
+  since: number
+  now: number
+  working: boolean
+  rawSub: 'think' | 'read' | 'type' | 'write' | 'lift' | null
+  rawSince: number
+  sub: 'think' | 'read' | 'type' | 'write' | 'lift' | null
+  agents: Readonly<Record<string, boolean>>
+  permissions: number
+  questions: number
+  compacting: boolean
+  cold: boolean
+  lastActivity: number
+  until: Readonly<Record<'wake' | 'done' | 'stop' | 'error', number>>
+}
+
+/** What a button is doing, the last outcome, and the Start fresh arm (src/actions.ts UiState). */
+export type TokenOptimizerDesktopUi = {
+  busy: 'clean' | 'fresh-capture' | 'fresh-clear' | null
+  busySince: number | null
+  note: string | null
+  noteUntil: number
+  freshArmedAt: number | null
+}
+
 declare module 'claude-code' {
   interface PluginState {
     'token-optimizer-desktop': {
       session: TokenOptimizerDesktopState
       handoff: TokenOptimizerDesktopHandoff
+      clock: TokenOptimizerDesktopClock | null
+      pose: TokenOptimizerDesktopPose | null
+      ui: TokenOptimizerDesktopUi | null
+      /** The app theme's palette, from the `theme` config row. */
+      theme: 'light' | 'dark'
+      /** Bumped by the clock tick when the visible clock changes (KTD13). */
+      frame: number
     }
   }
 }

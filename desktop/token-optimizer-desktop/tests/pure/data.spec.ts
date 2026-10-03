@@ -10,6 +10,7 @@ import {
   gather,
   mergeStored,
   readQuality,
+  resetLauncher,
   shouldReset,
   type DataIo,
 } from '../../hooks/data.ts'
@@ -264,4 +265,36 @@ test('the skill install runs measure.py directly', async () => {
     '--transcript',
     '/t/s.jsonl',
   ])
+})
+
+test('without python3 the launcher falls back to python, then py -3, and remembers what worked', async () => {
+  resetLauncher()
+  const w = withTokenOptimizer(world())
+  const io = fakeIo(w)
+  const missing = new Set(['python3', 'python'])
+  const run = io.run
+  io.run = async (argv, init) => {
+    if (missing.has(argv[0] ?? '')) {
+      w.runs.push({ argv, timeoutMs: init.timeoutMs })
+      throw new Error(`spawn ${argv[0]} ENOENT`)
+    }
+    return run(argv, init)
+  }
+
+  const s = await gather(io, null, { savings: true })
+  assert.equal(s.savings?.sessionTokens, 41_000)
+  const tried = w.runs.filter(r => r.argv.includes('status-bar')).map(r => r.argv.slice(0, 2))
+  assert.deepEqual(tried, [['python3', RUNNER], ['python', RUNNER], ['py', '-3']])
+
+  w.runs = []
+  await gather(io, s, { savings: true })
+  assert.deepEqual(w.runs.filter(r => r.argv.includes('status-bar')).map(r => r.argv[0]), ['py'])
+  resetLauncher()
+})
+
+test('a timed-out status command is not retried with another launcher', async () => {
+  resetLauncher()
+  const w = withTokenOptimizer(world({ status: 'timeout' }))
+  await gather(fakeIo(w), null, { savings: true })
+  assert.equal(w.runs.filter(r => r.argv.includes('status-bar')).length, 1)
 })

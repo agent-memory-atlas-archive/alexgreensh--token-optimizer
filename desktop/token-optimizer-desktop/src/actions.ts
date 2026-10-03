@@ -1,0 +1,176 @@
+// The three buttons' pure parts (U9: KTD9, KTD10, KTD11). register.tsx owns
+// every `$` call; this file decides. Nothing here imports from 'claude-code'.
+import { tokens } from './format.ts'
+
+/** Start fresh waits this long for its second click (R14, K4). */
+export const FRESH_ARM_MS = 5_000
+/** A busy state ends by itself after this, so no step label outlives its work (R13). */
+export const BUSY_TIMEOUT_MS = 120_000
+/** How long an outcome note replaces "All clear." */
+export const NOTE_MS = 8_000
+/** Keep warm's one-line fork prompt (KTD11). */
+export const WARM_PROMPT = 'Reply with exactly: ok'
+/** The `$.store` key of a pending Start fresh hand-off (survives restarts, R14). */
+export const HANDOFF_KEY = 'handoff'
+/** compact-capture reads a transcript; generous, still bounded. */
+export const CAPTURE_TIMEOUT_MS = 30_000
+/** resume-lean is a token-free read of checkpoints and the session log. */
+export const RESUME_TIMEOUT_MS = 20_000
+
+export type Busy = 'clean' | 'fresh-capture' | 'fresh-clear' | null
+
+/** The band's own UI state: what a button is doing, the last outcome, the Start fresh arm. Plain JSON. */
+export type UiState = {
+  busy: Busy
+  /** When `busy` was set (ms); the timeout counts from here. */
+  busySince: number | null
+  note: string | null
+  /** The note shows until this time (ms). */
+  noteUntil: number
+  /** First Start fresh click (ms); null when disarmed. */
+  freshArmedAt: number | null
+}
+
+export type Handoff = { fromSessionId: string; checkpointPath: string; text: string; createdAt: number }
+
+export function initialUi(): UiState {
+  return { busy: null, busySince: null, note: null, noteUntil: 0, freshArmedAt: null }
+}
+
+export function isArmed(ui: UiState, now: number): boolean {
+  return ui.freshArmedAt !== null && now - ui.freshArmedAt < FRESH_ARM_MS
+}
+
+/** The busy state as it stands at `now`: a stale one has timed out. */
+export function busyNow(ui: UiState, now: number): Busy {
+  if (ui.busy === null || ui.busySince === null) return null
+  return now - ui.busySince < BUSY_TIMEOUT_MS ? ui.busy : null
+}
+
+export function withBusy(ui: UiState, busy: Busy, now: number): UiState {
+  return { ...ui, busy, busySince: busy === null ? null : now, freshArmedAt: null }
+}
+
+export function withNote(ui: UiState, note: string, now: number): UiState {
+  return { ...ui, note, noteUntil: now + NOTE_MS }
+}
+
+export function noteNow(ui: UiState, now: number): string | null {
+  return ui.note !== null && now < ui.noteUntil ? ui.note : null
+}
+
+/** The path compact-capture printed (`[Token Optimizer] Checkpoint saved: <path>`), or null. */
+export function checkpointPathFrom(stdout: string): string | null {
+  const match = /Checkpoint saved: (.+?)\s*$/m.exec(stdout)
+  return match?.[1] ? match[1] : null
+}
+
+/** compact_capture writes this note when it found no transcript to read. */
+export function isStubCheckpoint(contents: string): boolean {
+  return contents.includes('No transcript data available')
+}
+
+const POINTER = /^.*Cross-session checkpoint.*$/
+
+/**
+ * Removes Token Optimizer's "Cross-session checkpoint" pointer lines from a
+ * SessionStart's context: after Start fresh the held hand-off replaces it
+ * (KTD10). Every other line stays; an entry left empty is dropped.
+ */
+export function stripCrossSessionPointer(entries: readonly string[] | undefined): string[] | undefined {
+  if (!entries) return undefined
+  const out: string[] = []
+  for (const entry of entries) {
+    const kept = entry.split('\n').filter(line => !POINTER.test(line)).join('\n')
+    if (kept.trim() !== '') out.push(kept)
+  }
+  return out
+}
+
+type Json = Record<string, unknown>
+const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
+
+/**
+ * The lifetime one request's cache writes used, when its usage carries the
+ * 1h/5m split (transcript rows do; `TurnUsage` may not). Null when unknown.
+ */
+export function lifetimeFromUsage(usage: unknown): '1h' | '5m' | null {
+  if (!usage || typeof usage !== 'object') return null
+  const split = (usage as Json).cache_creation
+  if (!split || typeof split !== 'object') return null
+  if (num((split as Json).ephemeral_1h_input_tokens) > 0) return '1h'
+  if (num((split as Json).ephemeral_5m_input_tokens) > 0) return '5m'
+  return null
+}
+
+/** Prompt tokens one request carried: what the next request re-reads (per request, never the turn's sum). */
+export function requestContextTokens(usage: unknown): number {
+  if (!usage || typeof usage !== 'object') return 0
+  const u = usage as Json
+  return num(u.input_tokens) + num(u.cache_read_input_tokens) + num(u.cache_creation_input_tokens)
+}
+
+export type WarmOutcome = { ok: true; lapsed: boolean; contextTokens: number } | { ok: false; reason: string }
+
+/** One line for the Keep warm outcome; a lapsed cache names what the warm-up cost (KTD11). */
+export function warmToast(o: WarmOutcome): string {
+  if (!o.ok) return `Keep warm did not run: ${o.reason}.`
+  if (o.lapsed) return `The cache had already dropped, so the warm-up re-read ${tokens(o.contextTokens)} tokens at full price.`
+  return 'Cache kept warm.'
+}
+
+const TYPED = new Set(['composer', 'sdk', 'bridge', 'unclassified'])
+
+/** The hand-off joins a prompt the person sent, never a notification, peer or automatic one. */
+export function attachesHandoff(originKind: string | undefined): boolean {
+  return originKind === undefined || TYPED.has(originKind)
+}
+
+/** What Start fresh needs from the host: measure.py by arguments (stdin optional), and a file read. */
+export type HandoffPort = {
+  run: (args: string[], stdin?: string) => Promise<{ exitCode: number; stdout: string }>
+  read: (path: string) => Promise<string>
+}
+
+export type HandoffResult = { ok: true; handoff: Handoff } | { ok: false; reason: string }
+
+/**
+ * Start fresh up to the clear (KTD10): save a checkpoint, check it is real,
+ * build the lean resume text. Any failure returns a one-line reason and
+ * nothing is cleared.
+ */
+export async function prepareHandoff(
+  port: HandoffPort,
+  input: { sessionId: string; transcriptPath: string | null; now: number },
+): Promise<HandoffResult> {
+  const fail = (reason: string): HandoffResult => ({ ok: false, reason })
+  const stdin = JSON.stringify(input.transcriptPath ? { session_id: input.sessionId, transcript_path: input.transcriptPath } : { session_id: input.sessionId })
+
+  let captured: { exitCode: number; stdout: string }
+  try {
+    captured = await port.run(['compact-capture', '--trigger', 'start-fresh'], stdin)
+  } catch {
+    return fail('the checkpoint could not be saved')
+  }
+  const path = checkpointPathFrom(captured.stdout)
+  if (!path) return fail('the checkpoint could not be saved')
+
+  let contents: string
+  try {
+    contents = await port.read(path)
+  } catch {
+    return fail('the saved checkpoint could not be read')
+  }
+  if (isStubCheckpoint(contents)) return fail('the checkpoint came out empty')
+
+  let lean: { exitCode: number; stdout: string }
+  try {
+    lean = await port.run(['resume-lean', input.sessionId, '--print'])
+  } catch {
+    return fail('the hand-off text could not be built')
+  }
+  const text = lean.exitCode === 0 ? lean.stdout.trim() : ''
+  if (!text) return fail('the hand-off text came out empty')
+
+  return { ok: true, handoff: { fromSessionId: input.sessionId, checkpointPath: path, text, createdAt: input.now } }
+}

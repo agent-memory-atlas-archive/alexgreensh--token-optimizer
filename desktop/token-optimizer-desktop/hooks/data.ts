@@ -37,7 +37,23 @@ export const GIT_TIMEOUT_MS = 1_000
 /** Shown as the savings reason when no Token Optimizer install is found (R6). */
 export const NOT_FOUND = 'Token Optimizer not found'
 
-const PYTHON = 'python3'
+/**
+ * Python launchers in the order tried. The mod cannot see the host's OS, so a
+ * launcher that cannot start (or Windows' Store stub, exit 9009) moves on to
+ * the next: python3 on macOS and Linux, python or the `py -3` launcher on
+ * Windows. The first that starts is remembered for the module's life.
+ */
+export const PYTHON_LAUNCHERS: readonly (readonly string[])[] = [['python3'], ['python'], ['py', '-3']]
+
+/** Windows' "app execution alias" stub for a missing python exits with this. */
+const WINDOWS_NOT_FOUND = 9009
+
+let launcherIndex = 0
+
+/** Forgets which launcher worked (tests, and nothing else). */
+export function resetLauncher(): void {
+  launcherIndex = 0
+}
 
 /**
  * What the gatherer needs from the engine. register.tsx answers each member
@@ -63,7 +79,7 @@ export type DataIo = {
   /** `$.fs.read(path)` */
   read: (path: string) => Promise<string>
   /** `$.process.run(argv, init)` */
-  run: (argv: string[], init: { cwd?: string; timeoutMs: number }) => Promise<{ exitCode: number; stdout: string }>
+  run: (argv: string[], init: { cwd?: string; timeoutMs: number; stdin?: string }) => Promise<{ exitCode: number; stdout: string }>
 }
 
 async function attempt<T>(work: () => Promise<T>, fallback: T): Promise<T> {
@@ -149,11 +165,56 @@ export async function findTokenOptimizerRoot(io: DataIo, home: string): Promise<
   return null
 }
 
-/** The argv for `measure.py status-bar`, through module_runner when the install has it (bytecode reuse). */
-export function statusBarArgv(root: TokenOptimizerRoot, sid: string, transcript?: string): string[] {
-  const launch = root.runner ? [PYTHON, root.runner, root.scriptsDir, 'measure'] : [PYTHON, `${root.scriptsDir}/measure.py`]
+/** The argv for `measure.py <args>`, through module_runner when the install has it (bytecode reuse). */
+export function measureArgv(root: TokenOptimizerRoot, args: readonly string[], python: readonly string[] = PYTHON_LAUNCHERS[0] ?? ['python3']): string[] {
+  const launch = root.runner ? [...python, root.runner, root.scriptsDir, 'measure'] : [...python, `${root.scriptsDir}/measure.py`]
 
-  return [...launch, 'status-bar', '--session', sid, '--json', ...(transcript ? ['--transcript', transcript] : [])]
+  return [...launch, ...args]
+}
+
+/** The argv for `measure.py status-bar`. */
+export function statusBarArgv(root: TokenOptimizerRoot, sid: string, transcript?: string, python?: readonly string[]): string[] {
+  return measureArgv(root, ['status-bar', '--session', sid, '--json', ...(transcript ? ['--transcript', transcript] : [])], python)
+}
+
+function isTimeout(error: unknown): boolean {
+  return /timed? ?out/i.test(error instanceof Error ? error.message : String(error))
+}
+
+/**
+ * Runs `measure.py <args>` with the first Python launcher that starts. A
+ * timeout is the command's own answer and is never retried, so a slow read
+ * costs one timeout, not three. Rejects as the last attempt did.
+ */
+export async function runMeasure(
+  io: DataIo,
+  root: TokenOptimizerRoot,
+  args: readonly string[],
+  init: { timeoutMs: number; stdin?: string },
+): Promise<{ exitCode: number; stdout: string }> {
+  let lastError: unknown = new Error('no python launcher')
+
+  for (let i = launcherIndex; i < PYTHON_LAUNCHERS.length; i++) {
+    try {
+      const result = await io.run(measureArgv(root, args, PYTHON_LAUNCHERS[i]), init)
+
+      if (result.exitCode === WINDOWS_NOT_FOUND && i < PYTHON_LAUNCHERS.length - 1) {
+        lastError = new Error('python launcher not found')
+        continue
+      }
+
+      launcherIndex = i
+      return result
+    } catch (error) {
+      if (isTimeout(error)) {
+        throw error
+      }
+
+      lastError = error
+    }
+  }
+
+  throw lastError
 }
 
 /** `measure.py status-bar --json` (KTD5); null when it fails, times out or prints something else. */
@@ -163,7 +224,8 @@ export async function readStatusBar(
   sid: string,
   transcript?: string,
 ): Promise<StatusBar | null> {
-  const result = await attempt(() => io.run(statusBarArgv(root, sid, transcript), { timeoutMs: STATUS_TIMEOUT_MS }), null)
+  const args = ['status-bar', '--session', sid, '--json', ...(transcript ? ['--transcript', transcript] : [])]
+  const result = await attempt(() => runMeasure(io, root, args, { timeoutMs: STATUS_TIMEOUT_MS }), null)
 
   return result && result.exitCode === 0 ? parseStatusBar(result.stdout) : null
 }
