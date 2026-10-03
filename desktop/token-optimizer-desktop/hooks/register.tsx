@@ -843,11 +843,6 @@ function barsSvg(bars: number[], t: Tones): { source: string; alt: string; width
   return { source: themed(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="28" viewBox="0 0 ${width} 28" role="img" aria-label="${alt}"><title>${alt}</title>${body}</svg>`), alt, width }
 }
 
-function chevronSvg(open: boolean, ink: string): { source: string; alt: string } {
-  const alt = open ? 'Session details open' : 'Session details folded'
-  const svg = themed(iconSvg('chevron', ink, { alt }), 'k')
-  return { source: open ? svg.replace(ICONS.chevron, `<g transform="rotate(180 8 8)">${ICONS.chevron}</g>`) : svg, alt }
-}
 
 function runsOf(D: Desktop, runs: Run[], t: Tones) {
   const { Text } = D
@@ -876,6 +871,9 @@ type Model = {
   /** While watching: one picture per look, each shown while the pointer is over its part of the band. */
   gazes: (ClawdLayer & { gaze: Gaze })[]
 }
+
+/** Hovering Clawd lights the more/less arrow under him: the two read as one control. */
+const MORE_SCOPE = 'token-optimizer-more'
 
 /** The hover group that turns Clawd's eyes toward one part of the band. */
 const gazeScope = (g: Gaze): string => `token-optimizer-gaze-${g}`
@@ -946,7 +944,6 @@ function drawBand(D: Desktop, m: Model, on: Handlers) {
   const markList = marks(snap)
   const cardList = cards(snap)
   const detail = row(snap)
-  const chevron = chevronSvg(m.sheetOpen, t.ink)
   const bars = m.narrow ? detail.savings.bars.slice(-14) : detail.savings.bars
   // A card action joins the row only when the moment calls for it (quality sagging, the cache
   // about to drop) and the sentence's own button is not already offering it.
@@ -959,9 +956,10 @@ function drawBand(D: Desktop, m: Model, on: Handlers) {
 
   return (
     <Box flexDirection="row" alignItems="flex-start" columnGap={2} paddingX={1}>
-      <Box flexDirection="column" alignItems="flex-start" flexShrink={0}>
-        {/* Box sizes count text cells on desktop, so the bottom picture sizes the stack and the new one sits over it. */}
-        <Box position="relative">
+      <Box flexDirection="column" alignItems="center" flexShrink={0}>
+        {/* Box sizes count text cells on desktop, so the bottom picture sizes the stack and the new one sits over it.
+            Hovering Clawd lights the arrow beneath him: only a Button can be pressed, and its label is text. */}
+        <Box position="relative" hover={{ scope: MORE_SCOPE }}>
           {m.clawd.map((c, i) => (
             <Box key={c.key} {...(i === 0 ? {} : { position: 'absolute' as const, top: 0, left: 0 })}>
               {/* Not isInteractive: the desktop reloads an interactive picture on every redraw (a blank frame); a plain one keeps its animation. */}
@@ -975,9 +973,14 @@ function drawBand(D: Desktop, m: Model, on: Handlers) {
             </Box>
           ))}
         </Box>
-        <Box flexDirection="row" alignItems="center" columnGap={0} hover={{ scope: gazeScope('down') }}>
-          <Svg source={chevron.source} alt={chevron.alt} width={16} height={16} />
-          <Button key="details" plain label="Details" onPress={() => on.details()} />
+        <Box hover={{ scope: gazeScope('down') }}>
+          <Button
+            key="details"
+            plain
+            label={m.sheetOpen ? '▴' : '▾'}
+            hover={{ scope: MORE_SCOPE, bold: true, color: LIGHT.skin }}
+            onPress={() => on.details()}
+          />
         </Box>
       </Box>
       <Box flexDirection="column" flexGrow={1} flexShrink={1} rowGap={1}>

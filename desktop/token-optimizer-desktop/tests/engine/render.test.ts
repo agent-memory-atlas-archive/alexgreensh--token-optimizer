@@ -75,19 +75,17 @@ test('switched off, nothing is drawn on desktop', { options: { enabled: false } 
   expect(await passesOn($.ui.mount({ ...BAND, surface: 'desktop' }))).toBe(true)
 })
 
-test('pressing Clawd\'s details button unfolds the row, flips the chevron, and folds it again', async ($, on) => {
+test("the arrow under Clawd unfolds the row, points up while open, and folds it again", async ($, on) => {
   stub(on)
   await $.session.start(START)
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
-  const chevron = async () => (await ui.findAll({ type: 'Svg' })).map(s => String(s.props.alt)).find(alt => alt.startsWith('Session details'))
+  const arrow = async () => (await ui.find({ key: 'details' }))?.props
 
-  expect((await ui.find({ key: 'details' }))?.props.label).toBe('Details')
-  expect(await chevron()).toBe('Session details folded')
+  expect((await arrow())?.label).toBe('▾')
   expect(await ui.find({ key: 'row' })).toBeUndefined()
 
   await ui.press({ key: 'details' })
-  expect((await ui.find({ key: 'details' }))?.props.label).toBe('Details')
-  expect(await chevron()).toBe('Session details open')
+  expect((await arrow())?.label).toBe('▴')
   expect(await ui.find({ key: 'row' })).toBeDefined()
   expect((await exactly(ui, 'feat/band')).length).toBeGreaterThan(0)
   expect((await exactly(ui, '41k')).length).toBeGreaterThan(0)
@@ -95,7 +93,7 @@ test('pressing Clawd\'s details button unfolds the row, flips the chevron, and f
 
   await ui.press({ key: 'details' })
   expect(await ui.find({ key: 'row' })).toBeUndefined()
-  expect(await chevron()).toBe('Session details folded')
+  expect((await arrow())?.label).toBe('▾')
 })
 
 test('a cold cache draws the token count bold red, and Keep warm nowhere', async ($, on) => {
