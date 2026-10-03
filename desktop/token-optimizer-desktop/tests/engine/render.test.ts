@@ -71,13 +71,6 @@ test('a survey holds the band', async ($, on) => {
   expect(await passesOn($.ui.mount({ ...BAND, props: { ...BAND.props, hasSurvey: true }, surface: 'desktop' }))).toBe(true)
 })
 
-test('switched off, nothing is drawn on desktop', { options: { enabled: false } }, async ($, on) => {
-  const w = stub(on)
-  await $.session.start(START)
-  await w.clock.settle() // the status read runs just after the start
-  expect(await passesOn($.ui.mount({ ...BAND, surface: 'desktop' }))).toBe(true)
-})
-
 test('TOKEN_OPTIMIZER_STATUS_BAR=0 hides the band on desktop', async ($, on) => {
   const w = stub(on, { env: { TOKEN_OPTIMIZER_STATUS_BAR: '0' } })
   await $.session.start(START)

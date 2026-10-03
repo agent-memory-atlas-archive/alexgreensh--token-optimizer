@@ -357,7 +357,7 @@ test('shipped inside Token Optimizer, its own scripts are used before any regist
   w.files[`${other}/skills/token-optimizer/scripts/measure.py`] = [1, '#']
   w.files[`${SCRIPTS}/measure.py`] = [1, '#']
   w.files[RUNNER] = [1, '#']
-  const found = await findTokenOptimizerRoot({ ...fakeIo(w), pluginRoot: async () => TO_ROOT }, HOME)
+  const found = await findTokenOptimizerRoot({ ...fakeIo(w), pluginRoot: () => TO_ROOT }, HOME)
   assert.deepEqual(found, { scriptsDir: SCRIPTS, runner: RUNNER })
 })
 
@@ -365,7 +365,7 @@ test('loaded on its own from a checkout, the scripts two folders up are used', a
   const w = world()
   const repo = '/work/token-optimizer'
   w.files[`${repo}/skills/token-optimizer/scripts/measure.py`] = [1, '#']
-  const found = await findTokenOptimizerRoot({ ...fakeIo(w), pluginRoot: async () => `${repo}/desktop/token-optimizer-desktop` }, HOME)
+  const found = await findTokenOptimizerRoot({ ...fakeIo(w), pluginRoot: () => `${repo}/desktop/token-optimizer-desktop` }, HOME)
   assert.equal(found?.scriptsDir, `${repo}/skills/token-optimizer/scripts`)
 })
 
@@ -379,11 +379,11 @@ test('a separately installed copy stays hidden only when Token Optimizer carries
     return w
   }
   const carries = at(JSON.stringify({ modules: ['../desktop/token-optimizer-desktop/hooks/register.tsx'], hooks: {} }))
-  assert.equal(await supersededByBundled({ ...fakeIo(carries), pluginRoot: async () => standalone }, HOME), true)
+  assert.equal(await supersededByBundled({ ...fakeIo(carries), pluginRoot: () => standalone }, HOME), true)
   // An older Token Optimizer without the band: the separate copy keeps drawing it.
   const older = at(JSON.stringify({ hooks: {} }))
-  assert.equal(await supersededByBundled({ ...fakeIo(older), pluginRoot: async () => standalone }, HOME), false)
+  assert.equal(await supersededByBundled({ ...fakeIo(older), pluginRoot: () => standalone }, HOME), false)
   // The copy inside Token Optimizer is the one that draws.
   carries.files[`${SCRIPTS}/measure.py`] = [1, '#']
-  assert.equal(await supersededByBundled({ ...fakeIo(carries), pluginRoot: async () => TO_ROOT }, HOME), false)
+  assert.equal(await supersededByBundled({ ...fakeIo(carries), pluginRoot: () => TO_ROOT }, HOME), false)
 })

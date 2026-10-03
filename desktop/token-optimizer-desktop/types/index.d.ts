@@ -1,4 +1,4 @@
-// The token-optimizer-desktop contract. Plain JSON only, and
+// The status bar's state contract. Plain JSON only, and
 // self-contained: the engine ships this file to other plugins as is.
 //
 // `session` is one atom keyed by the session it describes. Readers compare its
@@ -138,7 +138,7 @@ export type TokenOptimizerDesktopEngineCall = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'token-optimizer-desktop': {
+    'token-optimizer': {
       session: TokenOptimizerDesktopState
       handoff: TokenOptimizerDesktopHandoff
       clock: TokenOptimizerDesktopClock | null

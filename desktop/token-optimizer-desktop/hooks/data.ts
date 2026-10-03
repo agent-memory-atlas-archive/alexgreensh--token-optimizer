@@ -314,7 +314,7 @@ export async function readStatusBar(
   if (!result) return null
   if (result.exitCode !== 0 && io.log) {
     // Why the status read failed, where `claude --debug` shows it.
-    void attempt(() => io.log!(`token-optimizer-desktop: status-bar exited ${result.exitCode}: ${(result.stderr ?? '').trim().slice(0, 300)}`), undefined)
+    void attempt(() => io.log!(`token-optimizer status bar: status-bar exited ${result.exitCode}: ${(result.stderr ?? '').trim().slice(0, 300)}`), undefined)
   }
   // The JSON is the last line that is one (a stray line printed before it is not a reason to fail).
   const json = result.stdout.split(/\r?\n/).map(l => l.trim()).filter(l => l.startsWith('{')).pop()

@@ -66,7 +66,9 @@ def test_installing_token_optimizer_asks_for_no_settings():
 
 def test_desktop_folder_still_loads_on_its_own_for_its_tests():
     manifest = _load(DESKTOP_MANIFEST)
-    assert manifest["name"] == DESKTOP_NAME
+    # The same name as the shipped plugin: the bar's state lives under it.
+    assert manifest["name"] == _load(ROOT_MANIFEST)["name"]
+    assert "userConfig" not in manifest
     assert manifest["license"] == _load(ROOT_MANIFEST)["license"]
     assert manifest["types"] == "./types/index.d.ts"
     assert (DESKTOP_DIR / "types" / "index.d.ts").is_file()

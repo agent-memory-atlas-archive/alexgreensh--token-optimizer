@@ -61,13 +61,13 @@ import {
   type GatherOptions,
 } from './data.ts'
 
-const sessionAtom = atom({ plugin: 'token-optimizer-desktop', key: 'session' } as const, null)
-const handoffAtom = atom({ plugin: 'token-optimizer-desktop', key: 'handoff' } as const, null)
-const clockAtom = atom({ plugin: 'token-optimizer-desktop', key: 'clock' } as const, null)
-const poseAtom = atom({ plugin: 'token-optimizer-desktop', key: 'pose' } as const, null)
-const engineCallAtom = atom({ plugin: 'token-optimizer-desktop', key: 'engineCall' } as const, null)
-const uiAtom = atom({ plugin: 'token-optimizer-desktop', key: 'ui' } as const, null)
-const frameAtom = atom({ plugin: 'token-optimizer-desktop', key: 'frame' } as const, 0)
+const sessionAtom = atom({ plugin: 'token-optimizer', key: 'session' } as const, null)
+const handoffAtom = atom({ plugin: 'token-optimizer', key: 'handoff' } as const, null)
+const clockAtom = atom({ plugin: 'token-optimizer', key: 'clock' } as const, null)
+const poseAtom = atom({ plugin: 'token-optimizer', key: 'pose' } as const, null)
+const engineCallAtom = atom({ plugin: 'token-optimizer', key: 'engineCall' } as const, null)
+const uiAtom = atom({ plugin: 'token-optimizer', key: 'ui' } as const, null)
+const frameAtom = atom({ plugin: 'token-optimizer', key: 'frame' } as const, 0)
 
 type Desktop = Elements['desktop']
 type Tones = { good: string; caution: string; bad: string; cold: string; ink: string; track: string; card: string; line: string }
@@ -1171,9 +1171,9 @@ async function standsDown($: EngineInterface): Promise<boolean> {
 
 // ---- hooks ----
 
-export const register: Register = (on, options) => {
-  enabled = options.enabled !== false
-  animate = options.animate !== false
+export const register: Register = on => {
+  enabled = true
+  animate = true
 
   on('session.start', async ($, e, next) => {
     const result = await next(e)

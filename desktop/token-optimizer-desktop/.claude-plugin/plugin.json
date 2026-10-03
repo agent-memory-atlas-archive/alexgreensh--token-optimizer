@@ -1,7 +1,7 @@
 {
-  "name": "token-optimizer-desktop",
+  "name": "token-optimizer",
   "version": "0.1.0",
-  "description": "Token Optimizer status bar for the Claude desktop app: session quality, context, cache and limits above the prompt. Needs Claude Code 2.1.287+ and the token-optimizer plugin.",
+  "description": "The Token Optimizer status bar on its own, for its tests. It ships inside the token-optimizer plugin.",
   "author": {
     "name": "Alex Greenshpun",
     "url": "https://linkedin.com/in/alexgreensh"
@@ -15,19 +15,5 @@
     "desktop",
     "status-bar"
   ],
-  "types": "./types/index.d.ts",
-  "userConfig": {
-    "enabled": {
-      "type": "boolean",
-      "title": "Show the status bar",
-      "description": "Show the Token Optimizer band above the prompt.",
-      "default": true
-    },
-    "animate": {
-      "type": "boolean",
-      "title": "Animate Clawd",
-      "description": "Play Clawd's animations. Off shows a still pose.",
-      "default": true
-    }
-  }
+  "types": "./types/index.d.ts"
 }

@@ -13,3 +13,15 @@ test('plugin name matches the manifest', () => {
   ) as { name: string }
   assert.equal(PLUGIN_NAME, manifest.name)
 })
+
+test('the state belongs to the plugin the bar ships in, never a name Claude Code would refuse', () => {
+  const shipped = JSON.parse(
+    readFileSync(new URL('../../../../.claude-plugin/plugin.json', import.meta.url), 'utf8'),
+  ) as { name: string }
+  assert.equal(PLUGIN_NAME, shipped.name)
+  const source = readFileSync(new URL('../../hooks/register.tsx', import.meta.url), 'utf8')
+  const owners = [...source.matchAll(/atom\(\{ plugin: ([^,]+),/g)].map(m => m[1])
+  assert.ok(owners.length > 0)
+  // Claude Code needs literal names here and refuses writes under another plugin's.
+  assert.deepEqual([...new Set(owners)], [`'${PLUGIN_NAME}'`])
+})

@@ -1,5 +1,9 @@
 # Changelog
 
+## [5.13.31] - 2026-10-04
+
+- The desktop status bar comes alive again: Clawd follows what your session is doing, and the arrow, Clean up, Start fresh and Keep warm respond to a click.
+
 ## [5.13.30] - 2026-10-03
 
 - The desktop status bar now comes with Token Optimizer itself: install or update the plugin and it appears above your prompt, nothing extra to add.

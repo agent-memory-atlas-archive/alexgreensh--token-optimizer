@@ -11,7 +11,7 @@ export const SCRIPTS = `${TO_ROOT}/skills/token-optimizer/scripts`
 export const RUNNER = `${TO_ROOT}/hooks/module_runner.py`
 
 export const BAND = {
-  plugin: 'token-optimizer-desktop',
+  plugin: 'token-optimizer',
   component: 'AbovePrompt',
   props: { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 120, scroll: { offset: 0, bodyRows: 10 }, view: {} },
 } as const
@@ -213,20 +213,20 @@ export function stub(on: On, patch: Partial<Omit<World, 'clock' | 'runs' | 'toas
   }))
   on('state.get', async (_, e, next) => {
     const held = await next(e)
-    const seeded = e.plugin === 'token-optimizer-desktop' ? w.seed[e.key] : undefined
+    const seeded = e.plugin === 'token-optimizer' ? w.seed[e.key] : undefined
     return held.value?.version === 0 && held.value.value === undefined && seeded !== undefined ? { value: { value: seeded, version: 0 } } : held
   })
   on('state.set', async (_, e, next) => {
-    if (e.plugin === 'token-optimizer-desktop' && e.key === 'ui' && w.uiWriteHangs > 0) {
+    if (e.plugin === 'token-optimizer' && e.key === 'ui' && w.uiWriteHangs > 0) {
       w.uiWriteHangs -= 1
       await w.clock.sleep(10 * 60_000)
     }
-    if (e.plugin === 'token-optimizer-desktop' && e.key === 'handoff' && e.value !== null && w.handoffWriteFails > 0) {
+    if (e.plugin === 'token-optimizer' && e.key === 'handoff' && e.value !== null && w.handoffWriteFails > 0) {
       w.handoffWriteFails -= 1
       return { value: { isSet: false as const, version: 999 } }
     }
     const result = await next(e)
-    if (e.plugin === 'token-optimizer-desktop' && result.value?.isSet) (w.written[e.key] ??= []).push(e.value)
+    if (e.plugin === 'token-optimizer' && result.value?.isSet) (w.written[e.key] ??= []).push(e.value)
     return result
   })
   on('config.list', async () => {

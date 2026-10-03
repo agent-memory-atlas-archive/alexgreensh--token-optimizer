@@ -77,7 +77,7 @@ const withTokenOptimizer = (w: World): World => {
   return w
 }
 
-const stored = (w: World) => (w.state.get('token-optimizer-desktop/session')?.value ?? null) as Stored | null
+const stored = (w: World) => (w.state.get('token-optimizer/session')?.value ?? null) as Stored | null
 
 const ok = (stdout: string, exitCode = 0) => ({ value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
 
