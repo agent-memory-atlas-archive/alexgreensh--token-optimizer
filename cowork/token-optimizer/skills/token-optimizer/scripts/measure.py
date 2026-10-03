@@ -12640,6 +12640,26 @@ def _log_compression_event(feature, original_text="", compressed_text="",
         pass
 
 
+def _compression_row_rate(model, fallback_rate, tier_data):
+    """USD per million input tokens for one compression_events row.
+
+    Per-model rate from the row's stored event-time model, else the
+    current-session fallback. Shared by _get_compression_summary and the
+    status-bar buckets so both price a row identically.
+    """
+    if detect_runtime() == 'codex':
+        model_rates = _input_and_cached_read_rates(model)
+        return model_rates[0] if model_rates else 0.0
+    if model:
+        norm_m = _claude_price_key(model, tier_data["claude_models"]) or "sonnet"
+        return (
+            tier_data["claude_models"]
+            .get(norm_m, tier_data["claude_models"].get("sonnet", {}))
+            .get("input", fallback_rate)
+        )
+    return fallback_rate
+
+
 def _get_compression_summary(days=30, since=None):
     """Query compression events and return a summary dict.
 
@@ -12695,19 +12715,7 @@ def _get_compression_summary(days=30, since=None):
             orig = orig or 0
             comp = comp or 0
             cnt = cnt or 0
-            # Per-model rate: use stored model if available, else current-session fallback.
-            if detect_runtime() == 'codex':
-                model_rates = _input_and_cached_read_rates(model)
-                rate = model_rates[0] if model_rates else 0.0
-            elif model:
-                norm_m = _claude_price_key(model, tier_data["claude_models"]) or "sonnet"
-                rate = (
-                    tier_data["claude_models"]
-                    .get(norm_m, tier_data["claude_models"].get("sonnet", {}))
-                    .get("input", fallback_rate)
-                )
-            else:
-                rate = fallback_rate
+            rate = _compression_row_rate(model, fallback_rate, tier_data)
             tokens_saved = orig - comp
             cost_saved = round(tokens_saved * rate / 1_000_000, 6)
 
@@ -18835,10 +18843,11 @@ def _session_mix_input_terms(*model_usage_blobs):
 _REPRICE_SKIP_EVENT_TYPES = frozenset({"resume_lean"})
 
 
-def _session_model_reprice(conn, cutoff):
+def _session_model_reprice(conn, cutoff, session_uuid=None, by_day=False):
     """Per-event_type USD correction from repricing savings_events at each event's
     OWN session model mix. Returns (deltas_by_event_type, repriced_tokens,
-    unmeasured_tokens).
+    unmeasured_tokens). With *session_uuid* only that session's rows count; with
+    *by_day* the deltas are keyed (local YYYY-MM-DD, event_type).
 
     THE DEFECT THIS REPAIRS. _log_savings_event stamps every row with
     _resolve_session_model(), which falls back to "sonnet" whenever the session
@@ -18880,18 +18889,27 @@ def _session_model_reprice(conn, cutoff):
             return {}, 0, 0
         mu = "s.model_usage_json" if "model_usage_json" in sl_cols else "NULL"
         amu = "s.all_model_usage_json" if "all_model_usage_json" in sl_cols else "NULL"
+        # by_day / session_uuid serve the status-bar buckets. The delta is linear
+        # in (tokens, cost) per session, so splitting by local day sums back to
+        # exactly the window delta.
+        day_col = "substr(e.timestamp, 1, 10)" if by_day else "NULL"
+        where = "WHERE e.timestamp >= ? "
+        params = [cutoff]
+        if session_uuid is not None:
+            where += "AND e.session_uuid = ? "
+            params.append(session_uuid)
         rows = conn.execute(
-            "SELECT e.event_type, SUM(e.tokens_saved), SUM(e.cost_saved_usd), "
+            "SELECT " + day_col + ", e.event_type, SUM(e.tokens_saved), SUM(e.cost_saved_usd), "
             + mu + ", " + amu + " "
             "FROM savings_events e "
             "LEFT JOIN session_log s ON e.session_uuid = s.session_uuid "
-            "WHERE e.timestamp >= ? "
-            "GROUP BY e.event_type, e.session_uuid",
-            (cutoff,),
+            + where +
+            "GROUP BY " + ("1, " if by_day else "") + "e.event_type, e.session_uuid",
+            tuple(params),
         ).fetchall()
     except (sqlite3.Error, TypeError, ValueError):
         return {}, 0, 0
-    for event_type, tok, cost, mu_json, amu_json in rows:
+    for day, event_type, tok, cost, mu_json, amu_json in rows:
         if event_type in _REPRICE_SKIP_EVENT_TYPES:
             continue  # non-input-rate class; keep the event-time price verbatim
         try:
@@ -18910,7 +18928,8 @@ def _session_model_reprice(conn, cutoff):
         # rate, so a fully-unpriced session yields a zero delta by construction.
         delta = sum(sh * (rate - event_rate) for sh, rate in terms) * tok / 1_000_000.0
         if delta:
-            deltas[event_type] = deltas.get(event_type, 0.0) + delta
+            key = (day, event_type) if by_day else event_type
+            deltas[key] = deltas.get(key, 0.0) + delta
         repriced_tokens += tok
     return deltas, repriced_tokens, unmeasured_tokens
 
@@ -19559,6 +19578,141 @@ def _dashboard_savings_data(days=30, include_billing_mode=False, fail_open=False
 
 
 
+def _net_realized_savings(rows, reprice_deltas):
+    """Net savings_events aggregates into the REALIZED figure.
+
+    The one netting rule shared by the window headline (_get_savings_summary)
+    and the status-bar per-session / per-day buckets (_realized_savings_buckets),
+    so the two can never drift. *rows* is an iterable of
+    (event_type, events, tokens_saved, cost_saved_usd); *reprice_deltas* maps
+    event_type -> USD correction from _session_model_reprice for the SAME rows.
+
+    Returns (by_category, total_tokens, total_cost, total_events, popped,
+    repriced_to_session_mix) where *popped* holds the entries relocated out of
+    the realized total (setup_optimization, mcp_cap, hint_followed,
+    verbosity_steer, resume_lean), each an entry dict or None.
+    """
+    by_category = {}
+    total_tokens = 0
+    total_cost = 0.0
+    total_events = 0
+    for event_type, cnt, tok, cost in rows:
+        by_category[event_type] = {
+            "events": cnt,
+            "tokens_saved": tok or 0,
+            "cost_saved_usd": round(cost or 0.0, 4),
+        }
+        total_tokens += tok or 0
+        total_cost += cost or 0.0
+        total_events += cnt
+
+    # Apply the model-mix repair BEFORE every relocation and netting rule
+    # below, so the pops (setup_optimization, mcp_cap, hint_followed,
+    # verbosity_steer) and the tool_archive re-expand netting all operate on
+    # corrected dollars and the realized total stays internally consistent.
+    # Token COUNTS are never touched -- this is a rate correction only.
+    repriced_to_session_mix = False
+    for _event_type, _delta in reprice_deltas.items():
+        _entry = by_category.get(_event_type)
+        if not _entry:
+            continue
+        _entry["cost_saved_usd"] = round(
+            float(_entry.get("cost_saved_usd", 0.0) or 0.0) + _delta, 4)
+        total_cost += _delta
+        repriced_to_session_mix = True
+
+    # A1: setup_optimization (the one-time prefix trim credited by `compare`)
+    # double-counts with structural_savings, which credits the SAME trim as a
+    # perpetual cache annuity. Structural is the correct ongoing model, so the
+    # one-time event is relocated OUT of the realized total into a separate
+    # one_time_setup line (clearly a one-shot, never summed with the annuity).
+    one_time = by_category.pop("setup_optimization", None)
+    if one_time:
+        total_tokens -= int(one_time.get("tokens_saved", 0) or 0)
+        total_cost -= float(one_time.get("cost_saved_usd", 0.0) or 0.0)
+        total_events -= int(one_time.get("events", 0) or 0)
+
+    # A3: mcp_cap is a hardcoded-ratio ESTIMATE of Claude Code's own MCP-output
+    # truncation (the pre-cap size is invisible to us). It must not sit inside
+    # the measured realized total. Relocate it to the estimated tier; the
+    # three-tier rule keeps it from ever being summed with realized tool_archive.
+    mcp_cap_est = by_category.pop("mcp_cap", None)
+    if mcp_cap_est:
+        total_tokens -= int(mcp_cap_est.get("tokens_saved", 0) or 0)
+        total_cost -= float(mcp_cap_est.get("cost_saved_usd", 0.0) or 0.0)
+        total_events -= int(mcp_cap_est.get("events", 0) or 0)
+
+    # U-G: hint_followed is a DETERMINISTICALLY-TRIGGERED event (a proactive
+    # hint surfaced a file and the agent then read it) but its avoided-search
+    # MAGNITUDE is a conservative estimate. The trigger is observed; the size
+    # is not metered. So it belongs in the estimated tier, never the realized
+    # counted total. Relocate it exactly like mcp_cap.
+    hint_followed_est = by_category.pop("hint_followed", None)
+    if hint_followed_est:
+        total_tokens -= int(hint_followed_est.get("tokens_saved", 0) or 0)
+        total_cost -= float(hint_followed_est.get("cost_saved_usd", 0.0) or 0.0)
+        total_events -= int(hint_followed_est.get("events", 0) or 0)
+
+    # verbosity_steer: the UserPromptSubmit nudge is a deterministic trigger
+    # but the output-token reduction is an ESTIMATE (we can't measure the
+    # counterfactual output). Relocate to estimated tier, same as mcp_cap /
+    # hint_followed. The trigger is observed; the magnitude is not metered.
+    verbosity_steer_est = by_category.pop("verbosity_steer", None)
+    if verbosity_steer_est:
+        total_tokens -= int(verbosity_steer_est.get("tokens_saved", 0) or 0)
+        total_cost -= float(verbosity_steer_est.get("cost_saved_usd", 0.0) or 0.0)
+        total_events -= int(verbosity_steer_est.get("events", 0) or 0)
+
+    # resume_lean is a COUNTERFACTUAL --
+    # the cold `claude --resume` the user would otherwise have run -- not a
+    # removal of tokens already in flight (260/370 real events fired on the
+    # best-guess "continue" path). v5.13.1 fixed its magnitude (target's
+    # real last-turn context) and rate (cache-read when the cache is still
+    # warm, 1h cache-write when cold), but the trigger stays counterfactual,
+    # so it must not sit inside the measured counted total. Relocate to the
+    # estimated tier exactly like mcp_cap. savings_events has no tier
+    # column: this pop IS the tier=estimated stamp.
+    resume_lean_est = by_category.pop("resume_lean", None)
+    if resume_lean_est:
+        total_tokens -= int(resume_lean_est.get("tokens_saved", 0) or 0)
+        total_cost -= float(resume_lean_est.get("cost_saved_usd", 0.0) or 0.0)
+        total_events -= int(resume_lean_est.get("events", 0) or 0)
+
+    # B6: net tool-archive re-expansions out of the tool_archive credit. A
+    # re-popped result didn't stay collapsed, so its eager credit is reversed
+    # (floored at 0). tool_archive_reexpand is a DEBIT, never its own savings
+    # line, so it is removed from by_category and its spurious positive
+    # contribution backed out of the totals. The remaining tool_archive figure
+    # IS the measured progressive-disclosure win (collapsed and stayed so).
+    reexpand = by_category.pop("tool_archive_reexpand", None)
+    if reexpand:
+        r_tok = int(reexpand.get("tokens_saved", 0) or 0)
+        r_cost = float(reexpand.get("cost_saved_usd", 0.0) or 0.0)
+        r_events = int(reexpand.get("events", 0) or 0)
+        ta = by_category.get("tool_archive")
+        c_tok = int(ta["tokens_saved"]) if ta else 0
+        c_cost = float(ta["cost_saved_usd"]) if ta else 0.0
+        net_tok = max(0, c_tok - r_tok)
+        net_cost = max(0.0, c_cost - r_cost)
+        if ta:
+            ta["tokens_saved"] = net_tok
+            ta["cost_saved_usd"] = round(net_cost, 4)
+        # Back out the debit's own positive AND the reversed over-credit.
+        total_tokens += (net_tok - c_tok) - r_tok
+        total_cost += (net_cost - c_cost) - r_cost
+        total_events -= r_events  # re-expand rows are not savings events
+
+    popped = {
+        "setup_optimization": one_time,
+        "mcp_cap": mcp_cap_est,
+        "hint_followed": hint_followed_est,
+        "verbosity_steer": verbosity_steer_est,
+        "resume_lean": resume_lean_est,
+    }
+    return (by_category, total_tokens, total_cost, total_events, popped,
+            repriced_to_session_mix)
+
+
 def _get_savings_summary(days=30, since=None):
     """Query savings events and return a summary dict.
 
@@ -19588,115 +19742,13 @@ def _get_savings_summary(days=30, since=None):
         finally:
             conn.close()
 
-        by_category = {}
-        total_tokens = 0
-        total_cost = 0.0
-        total_events = 0
-        for event_type, cnt, tok, cost in rows:
-            by_category[event_type] = {
-                "events": cnt,
-                "tokens_saved": tok or 0,
-                "cost_saved_usd": round(cost or 0.0, 4),
-            }
-            total_tokens += tok or 0
-            total_cost += cost or 0.0
-            total_events += cnt
-
-        # Apply the model-mix repair BEFORE every relocation and netting rule
-        # below, so the pops (setup_optimization, mcp_cap, hint_followed,
-        # verbosity_steer) and the tool_archive re-expand netting all operate on
-        # corrected dollars and the realized total stays internally consistent.
-        # Token COUNTS are never touched -- this is a rate correction only.
-        repriced_to_session_mix = False
-        for _event_type, _delta in reprice_deltas.items():
-            _entry = by_category.get(_event_type)
-            if not _entry:
-                continue
-            _entry["cost_saved_usd"] = round(
-                float(_entry.get("cost_saved_usd", 0.0) or 0.0) + _delta, 4)
-            total_cost += _delta
-            repriced_to_session_mix = True
-
-        # A1: setup_optimization (the one-time prefix trim credited by `compare`)
-        # double-counts with structural_savings, which credits the SAME trim as a
-        # perpetual cache annuity. Structural is the correct ongoing model, so the
-        # one-time event is relocated OUT of the realized total into a separate
-        # one_time_setup line (clearly a one-shot, never summed with the annuity).
-        one_time = by_category.pop("setup_optimization", None)
-        if one_time:
-            total_tokens -= int(one_time.get("tokens_saved", 0) or 0)
-            total_cost -= float(one_time.get("cost_saved_usd", 0.0) or 0.0)
-            total_events -= int(one_time.get("events", 0) or 0)
-
-        # A3: mcp_cap is a hardcoded-ratio ESTIMATE of Claude Code's own MCP-output
-        # truncation (the pre-cap size is invisible to us). It must not sit inside
-        # the measured realized total. Relocate it to the estimated tier; the
-        # three-tier rule keeps it from ever being summed with realized tool_archive.
-        mcp_cap_est = by_category.pop("mcp_cap", None)
-        if mcp_cap_est:
-            total_tokens -= int(mcp_cap_est.get("tokens_saved", 0) or 0)
-            total_cost -= float(mcp_cap_est.get("cost_saved_usd", 0.0) or 0.0)
-            total_events -= int(mcp_cap_est.get("events", 0) or 0)
-
-        # U-G: hint_followed is a DETERMINISTICALLY-TRIGGERED event (a proactive
-        # hint surfaced a file and the agent then read it) but its avoided-search
-        # MAGNITUDE is a conservative estimate. The trigger is observed; the size
-        # is not metered. So it belongs in the estimated tier, never the realized
-        # counted total. Relocate it exactly like mcp_cap.
-        hint_followed_est = by_category.pop("hint_followed", None)
-        if hint_followed_est:
-            total_tokens -= int(hint_followed_est.get("tokens_saved", 0) or 0)
-            total_cost -= float(hint_followed_est.get("cost_saved_usd", 0.0) or 0.0)
-            total_events -= int(hint_followed_est.get("events", 0) or 0)
-
-        # verbosity_steer: the UserPromptSubmit nudge is a deterministic trigger
-        # but the output-token reduction is an ESTIMATE (we can't measure the
-        # counterfactual output). Relocate to estimated tier, same as mcp_cap /
-        # hint_followed. The trigger is observed; the magnitude is not metered.
-        verbosity_steer_est = by_category.pop("verbosity_steer", None)
-        if verbosity_steer_est:
-            total_tokens -= int(verbosity_steer_est.get("tokens_saved", 0) or 0)
-            total_cost -= float(verbosity_steer_est.get("cost_saved_usd", 0.0) or 0.0)
-            total_events -= int(verbosity_steer_est.get("events", 0) or 0)
-
-        # resume_lean is a COUNTERFACTUAL --
-        # the cold `claude --resume` the user would otherwise have run -- not a
-        # removal of tokens already in flight (260/370 real events fired on the
-        # best-guess "continue" path). v5.13.1 fixed its magnitude (target's
-        # real last-turn context) and rate (cache-read when the cache is still
-        # warm, 1h cache-write when cold), but the trigger stays counterfactual,
-        # so it must not sit inside the measured counted total. Relocate to the
-        # estimated tier exactly like mcp_cap. savings_events has no tier
-        # column: this pop IS the tier=estimated stamp.
-        resume_lean_est = by_category.pop("resume_lean", None)
-        if resume_lean_est:
-            total_tokens -= int(resume_lean_est.get("tokens_saved", 0) or 0)
-            total_cost -= float(resume_lean_est.get("cost_saved_usd", 0.0) or 0.0)
-            total_events -= int(resume_lean_est.get("events", 0) or 0)
-
-        # B6: net tool-archive re-expansions out of the tool_archive credit. A
-        # re-popped result didn't stay collapsed, so its eager credit is reversed
-        # (floored at 0). tool_archive_reexpand is a DEBIT, never its own savings
-        # line, so it is removed from by_category and its spurious positive
-        # contribution backed out of the totals. The remaining tool_archive figure
-        # IS the measured progressive-disclosure win (collapsed and stayed so).
-        reexpand = by_category.pop("tool_archive_reexpand", None)
-        if reexpand:
-            r_tok = int(reexpand.get("tokens_saved", 0) or 0)
-            r_cost = float(reexpand.get("cost_saved_usd", 0.0) or 0.0)
-            r_events = int(reexpand.get("events", 0) or 0)
-            ta = by_category.get("tool_archive")
-            c_tok = int(ta["tokens_saved"]) if ta else 0
-            c_cost = float(ta["cost_saved_usd"]) if ta else 0.0
-            net_tok = max(0, c_tok - r_tok)
-            net_cost = max(0.0, c_cost - r_cost)
-            if ta:
-                ta["tokens_saved"] = net_tok
-                ta["cost_saved_usd"] = round(net_cost, 4)
-            # Back out the debit's own positive AND the reversed over-credit.
-            total_tokens += (net_tok - c_tok) - r_tok
-            total_cost += (net_cost - c_cost) - r_cost
-            total_events -= r_events  # re-expand rows are not savings events
+        (by_category, total_tokens, total_cost, total_events, popped,
+         repriced_to_session_mix) = _net_realized_savings(rows, reprice_deltas)
+        one_time = popped["setup_optimization"]
+        mcp_cap_est = popped["mcp_cap"]
+        hint_followed_est = popped["hint_followed"]
+        verbosity_steer_est = popped["verbosity_steer"]
+        resume_lean_est = popped["resume_lean"]
 
         daily_avg = total_cost / days if days > 0 else 0.0
 
@@ -45723,6 +45775,40 @@ def _progressive_disclosure_summary(days=30):
     return out
 
 
+def _merge_v5_compression(by_category, by_feature, fallback_cost_per_mtok):
+    """Merge realized v5 compression_events features into *by_category* in place.
+
+    Shared by _get_merged_savings and the status-bar buckets. Only known v5
+    features merge; a key savings_events already owns is skipped (dedup).
+    Returns the (tokens, cost_usd, events) added.
+    """
+    add_tok, add_cost, add_events = 0, 0.0, 0
+    for feature, fdata in by_feature.items():
+        if feature not in _V5_COMPRESSION_CATEGORIES:
+            continue  # only merge known v5 features; experimental keys stay out
+        if feature in by_category:
+            continue  # dedup: savings_events already owns this key
+        tokens_saved = int(fdata.get("tokens_saved", 0) or 0)
+        events = int(fdata.get("events", 0) or 0)
+        if tokens_saved <= 0 and events <= 0:
+            continue
+        # Prefer cost_saved_usd from _get_compression_summary (per-model pricing);
+        # fall back to the current-session rate for legacy NULL-model rows.
+        if "cost_saved_usd" in fdata and fdata["cost_saved_usd"] is not None:
+            cost_saved = round(float(fdata["cost_saved_usd"]), 4)
+        else:
+            cost_saved = round(tokens_saved * fallback_cost_per_mtok / 1_000_000, 4)
+        by_category[feature] = {
+            "events": events,
+            "tokens_saved": tokens_saved,
+            "cost_saved_usd": cost_saved,
+        }
+        add_tok += tokens_saved
+        add_cost += cost_saved
+        add_events += events
+    return add_tok, add_cost, add_events
+
+
 def _get_merged_savings(days=30, since=None):
     """Merge savings_events and compression_events into one unified savings view.
 
@@ -45751,29 +45837,11 @@ def _get_merged_savings(days=30, since=None):
     # is already priced correctly by _get_compression_summary's per-row rate.
     fallback_cost_per_mtok = _estimate_compression_cost_per_mtok()
 
-    for feature, fdata in compression.get("by_feature", {}).items():
-        if feature not in _V5_COMPRESSION_CATEGORIES:
-            continue  # only merge known v5 features; experimental keys stay out
-        if feature in by_category:
-            continue  # dedup: savings_events already owns this key
-        tokens_saved = int(fdata.get("tokens_saved", 0) or 0)
-        events = int(fdata.get("events", 0) or 0)
-        if tokens_saved <= 0 and events <= 0:
-            continue
-        # Prefer cost_saved_usd from _get_compression_summary (per-model pricing);
-        # fall back to the current-session rate for legacy NULL-model rows.
-        if "cost_saved_usd" in fdata and fdata["cost_saved_usd"] is not None:
-            cost_saved = round(float(fdata["cost_saved_usd"]), 4)
-        else:
-            cost_saved = round(tokens_saved * fallback_cost_per_mtok / 1_000_000, 4)
-        by_category[feature] = {
-            "events": events,
-            "tokens_saved": tokens_saved,
-            "cost_saved_usd": cost_saved,
-        }
-        total_tokens += tokens_saved
-        total_cost += cost_saved
-        total_events += events
+    _add_tok, _add_cost, _add_events = _merge_v5_compression(
+        by_category, compression.get("by_feature", {}), fallback_cost_per_mtok)
+    total_tokens += _add_tok
+    total_cost += _add_cost
+    total_events += _add_events
 
     # Structural (cumulative) savings — baseline delta × context loads since.
     structural = _compute_structural_savings(days=days)
@@ -45890,6 +45958,471 @@ def _get_merged_savings(days=30, since=None):
         # rates). Estimated tier, never in the realized total.
         "resume_lean_estimated": savings.get("resume_lean_estimated"),
     }
+
+
+# ---------------------------------------------------------------------------
+# status-bar: the desktop band's single read (plan U2 / KTD5).
+#
+# One spawn answers everything the band needs from Token Optimizer's stores.
+# Savings are the slow part (~0.5 s warm, ~10 s cold on a large trends.db), so
+# they are served from a per-session JSON cache under SNAPSHOT_DIR/status-bar/
+# and refreshed by ONE detached child when the cache is older than 60 s. The
+# transcript and quality-cache fields are cheap and always read live.
+# ---------------------------------------------------------------------------
+
+_STATUS_BAR_SCHEMA = 1
+_STATUS_BAR_DAYS = 30
+_STATUS_BAR_CACHE_MAX_AGE_S = 60
+_STATUS_BAR_LOCK_STALE_S = 120
+_STATUS_BAR_CACHE_RETENTION_S = 30 * 86400
+_STATUS_BAR_TAIL_CHUNK = 1 << 20
+_STATUS_BAR_TAIL_MAX_BYTES = 16 << 20
+
+STATUS_BAR_HELP = """\
+measure.py status-bar --session <id> --json [--transcript PATH]
+
+One JSON read for the desktop status band. Always exits 0 with a JSON object;
+a missing or busy trends.db, or a missing transcript, gives nulls, not errors.
+
+Fields:
+  schema                 1
+  session_id             the sanitized session id
+  savings                null, or the object below (realized, metered savings)
+    unit                 "tokens": the band shows tokens saved
+    session_tokens       this session's realized tokens saved (all time)
+    session_usd          the same in USD
+    daily                30 entries, oldest first, one per LOCAL day ending
+                         today: {"date": "YYYY-MM-DD", "tokens": int, "usd": float};
+                         zeros on days with no savings
+    total_30d_usd        exactly _get_merged_savings(days=30)["total_cost_usd"],
+                         the realized metered headline (rolling 30 x 24 h)
+    total_30d_tokens     _get_merged_savings(days=30)["total_tokens"], same window
+    computed_at          epoch seconds the savings were computed
+    The session figure and the bars are savings_events + realized
+    compression_events rows, netted by the same helpers as the headline
+    (model-mix reprice, estimated-tier relocations, tool_archive re-expand
+    netting, v5 dedup). The headline also carries structural savings, which
+    cannot be split by session or day, so the 30 bars need not add up to the
+    30-day total. The band should show total_30d_tokens beside the bars.
+  savings_state          "fresh" (cache <= 60 s old), "stale" (served from an
+                         older cache while a refresh runs), "loading" (no cache
+                         yet, refresh started), or "unavailable"
+  savings_age_s          age of the served savings in seconds, or null
+  savings_reason         one short reason when savings is null, else null
+  refresh_started        true when this call started the one detached refresh
+  last_request_epoch     epoch seconds of the last MAIN-thread assistant
+                         request in the transcript (subagent rows ignored)
+  cache_lifetime         "1h" | "5m" | null: the last measured cache-write
+                         lifetime on the main thread (null = unmeasured)
+  last_checkpoint_epoch  last_checkpoint_epoch from the freshest quality cache
+                         for this session across Token Optimizer's storage dirs
+
+Options:
+  --session ID     required: the Claude Code session id
+  --json           accepted for convention; output is always JSON
+  --transcript P   read this transcript instead of looking it up by id
+  --sync           compute savings now and rewrite the cache (the refresh child)
+"""
+
+
+def _status_bar_dir():
+    return SNAPSHOT_DIR / "status-bar"
+
+
+def _status_bar_cache_path(session_id):
+    return _status_bar_dir() / f"{session_id}.json"
+
+
+def _status_bar_lock_path(session_id):
+    return _status_bar_dir() / f"{session_id}.refresh.lock"
+
+
+def _realized_savings_buckets(conn, cutoff, session_uuid=None, by_day=False):
+    """Realized savings per bucket, netted exactly like the window headline.
+
+    Buckets are local days (savings_events / compression_events timestamps are
+    naive local ISO) when *by_day*, else one bucket keyed "". With
+    *session_uuid* only that session's rows count. Each bucket is
+    {"tokens": int, "usd": float, "events": int}. Raises sqlite3.Error so the
+    caller can tell a busy or broken DB from an empty one.
+    """
+    day_col = "substr(timestamp, 1, 10)" if by_day else "''"
+    where = "WHERE timestamp >= ? "
+    params = [cutoff]
+    if session_uuid is not None:
+        where += "AND session_uuid = ? "
+        params.append(session_uuid)
+    se_rows = conn.execute(
+        "SELECT " + day_col + ", event_type, COUNT(*), SUM(tokens_saved), "
+        "SUM(cost_saved_usd) FROM savings_events " + where +
+        "GROUP BY 1, event_type ORDER BY 4 DESC",
+        tuple(params),
+    ).fetchall()
+    ce_rows = conn.execute(
+        "SELECT " + day_col + ", feature, COUNT(*), SUM(original_tokens), "
+        "SUM(compressed_tokens), model FROM compression_events " + where +
+        "AND (tier IS NULL OR tier = 'measured') "
+        "GROUP BY 1, feature, model",
+        tuple(params),
+    ).fetchall()
+    deltas, _rt, _ut = _session_model_reprice(
+        conn, cutoff, session_uuid=session_uuid, by_day=True)
+
+    se_by_bucket = {}
+    for bucket, event_type, cnt, tok, cost in se_rows:
+        se_by_bucket.setdefault(bucket or "", []).append((event_type, cnt, tok, cost))
+    deltas_by_bucket = {}
+    for (day, event_type), delta in deltas.items():
+        key = (day or "") if by_day else ""
+        per = deltas_by_bucket.setdefault(key, {})
+        per[event_type] = per.get(event_type, 0.0) + delta
+
+    fallback_rate = _estimate_compression_cost_per_mtok()
+    tier_data = PRICING_TIERS.get(_load_pricing_tier(), PRICING_TIERS["anthropic"])
+    ce_by_bucket = {}
+    for bucket, feature, cnt, orig, comp, model in ce_rows:
+        tokens_saved = (orig or 0) - (comp or 0)
+        rate = _compression_row_rate(model, fallback_rate, tier_data)
+        feats = ce_by_bucket.setdefault(bucket or "", {})
+        entry = feats.setdefault(feature, {"events": 0, "tokens_saved": 0, "cost_saved_usd": 0.0})
+        entry["events"] += cnt or 0
+        entry["tokens_saved"] += tokens_saved
+        entry["cost_saved_usd"] = round(
+            entry["cost_saved_usd"] + round(tokens_saved * rate / 1_000_000, 6), 6)
+
+    out = {}
+    for bucket in set(se_by_bucket) | set(ce_by_bucket):
+        by_category, tok, cost, events, _popped, _rp = _net_realized_savings(
+            se_by_bucket.get(bucket, []), deltas_by_bucket.get(bucket, {}))
+        a_tok, a_cost, a_events = _merge_v5_compression(
+            by_category, ce_by_bucket.get(bucket, {}), fallback_rate)
+        out[bucket] = {
+            "tokens": int(tok + a_tok),
+            "usd": round(cost + a_cost, 4),
+            "events": int(events + a_events),
+        }
+    return out
+
+
+def _open_trends_db_readonly(timeout=2.0):
+    """Read-only connection to trends.db; never creates or migrates it."""
+    uri = Path(TRENDS_DB).resolve().as_uri() + "?mode=ro"
+    conn = sqlite3.connect(uri, uri=True, timeout=timeout)
+    conn.execute(f"PRAGMA busy_timeout={int(timeout * 1000)}")
+    return conn
+
+
+def _status_bar_savings_or_reason(session_id):
+    """Compute the savings object. Returns (savings_dict, None) or (None, reason)."""
+    if not Path(TRENDS_DB).exists():
+        return None, "no savings recorded yet"
+    today = datetime.now().date()
+    first_day = today - timedelta(days=_STATUS_BAR_DAYS - 1)
+    cutoff = datetime(first_day.year, first_day.month, first_day.day).isoformat()
+    try:
+        conn = _open_trends_db_readonly()
+        try:
+            days = _realized_savings_buckets(conn, cutoff, by_day=True)
+            sess = _realized_savings_buckets(conn, "", session_uuid=session_id).get(
+                "", {"tokens": 0, "usd": 0.0})
+        finally:
+            conn.close()
+    except sqlite3.OperationalError as e:
+        if "locked" in str(e).lower() or "busy" in str(e).lower():
+            return None, "savings database busy"
+        return None, "savings database unreadable"
+    except (sqlite3.Error, OSError, ValueError):
+        return None, "savings database unreadable"
+    daily = []
+    for i in range(_STATUS_BAR_DAYS):
+        d = (first_day + timedelta(days=i)).isoformat()
+        b = days.get(d, {})
+        daily.append({"date": d, "tokens": int(b.get("tokens", 0)),
+                      "usd": float(b.get("usd", 0.0))})
+    headline = _get_merged_savings(days=_STATUS_BAR_DAYS)
+    return {
+        "unit": "tokens",
+        "session_tokens": int(sess.get("tokens", 0)),
+        "session_usd": float(sess.get("usd", 0.0)),
+        "daily": daily,
+        "total_30d_usd": headline["total_cost_usd"],
+        "total_30d_tokens": int(headline["total_tokens"]),
+        "computed_at": time.time(),
+    }, None
+
+
+def _status_bar_compute_savings(session_id):
+    return _status_bar_savings_or_reason(session_id)[0]
+
+
+def _status_bar_write_cache(session_id, savings, reason):
+    d = _status_bar_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    path = _status_bar_cache_path(session_id)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps({
+        "schema": _STATUS_BAR_SCHEMA,
+        "computed_at": time.time(),
+        "savings": savings,
+        "reason": reason,
+    }), encoding="utf-8")
+    os.replace(tmp, path)
+    # Bound the directory: drop caches for sessions untouched for 30 days.
+    cutoff = time.time() - _STATUS_BAR_CACHE_RETENTION_S
+    try:
+        for f in d.glob("*.json"):
+            try:
+                if f.stat().st_mtime < cutoff:
+                    f.unlink()
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
+def _status_bar_read_cache(session_id):
+    try:
+        data = json.loads(_status_bar_cache_path(session_id).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or not isinstance(data.get("computed_at"), (int, float)):
+        return None
+    return data
+
+
+def _status_bar_start_refresh(session_id):
+    """Start ONE detached `status-bar --sync` child. Returns True if started.
+
+    A lock file (O_EXCL) makes concurrent callers start at most one child; the
+    child removes it when done, and a lock older than 120 s counts as abandoned.
+    """
+    lock = _status_bar_lock_path(session_id)
+    try:
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            if time.time() - lock.stat().st_mtime < _STATUS_BAR_LOCK_STALE_S:
+                return False
+            lock.unlink()
+            fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.write(fd, str(os.getpid()).encode("ascii"))
+        os.close(fd)
+    except OSError:
+        return False
+    proc = spawn_detached(
+        [_detached_python_exe(), str(MEASURE_PY_PATH), "status-bar",
+         "--session", session_id, "--sync", "--release-lock"],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if proc is None:
+        try:
+            lock.unlink()
+        except OSError:
+            pass
+        return False
+    return True
+
+
+def _status_bar_transcript_state(path):
+    """(last_request_epoch, cache_lifetime) from a transcript, read from the end.
+
+    last_request_epoch: timestamp of the newest MAIN-thread assistant row that
+    carries usage (isSidechain / agentId rows and <synthetic> rows skipped).
+    cache_lifetime: the newest non-unknown _keepwarm_ttl_kind on main-thread rows,
+    so read-only turns after a 1h write still report "1h". Scans at most 16 MB
+    backwards. Returns (None, None) when the file is missing or unreadable.
+    """
+    last_ts = None
+    lifetime = None
+
+    def _take(raw):
+        nonlocal last_ts, lifetime
+        raw = raw.strip()
+        if not raw or b'"assistant"' not in raw:
+            return
+        try:
+            rec = json.loads(raw)
+        except (ValueError, UnicodeDecodeError):
+            return
+        if not isinstance(rec, dict) or rec.get("type") != "assistant":
+            return
+        if rec.get("isSidechain") is True or rec.get("agentId"):
+            return
+        msg = rec.get("message")
+        if not isinstance(msg, dict) or msg.get("model") == "<synthetic>":
+            return
+        usage = msg.get("usage")
+        if not isinstance(usage, dict) or not usage:
+            return
+        if last_ts is None:
+            last_ts = _keepwarm_iso_to_epoch(rec.get("timestamp"))
+        if lifetime is None:
+            kind = _keepwarm_ttl_kind(usage)
+            if kind != "unknown":
+                lifetime = kind
+
+    try:
+        with open(path, "rb") as fh:
+            pos = fh.seek(0, os.SEEK_END)
+            carry = b""
+            scanned = 0
+            while pos > 0 and scanned < _STATUS_BAR_TAIL_MAX_BYTES:
+                step = min(_STATUS_BAR_TAIL_CHUNK, pos)
+                pos -= step
+                fh.seek(pos)
+                buf = fh.read(step) + carry
+                scanned += step
+                parts = buf.split(b"\n")
+                carry = parts[0]
+                for raw in reversed(parts[1:]):
+                    _take(raw)
+                    if last_ts is not None and lifetime is not None:
+                        return last_ts, lifetime
+            if pos == 0 and carry:
+                _take(carry)
+    except (OSError, TypeError, ValueError):
+        return None, None
+    return last_ts, lifetime
+
+
+def _status_bar_quality_cache_dirs():
+    dirs = [QUALITY_CACHE_DIR, RUNTIME_DIR / "token-optimizer"]
+    env_pd = os.environ.get("CLAUDE_PLUGIN_DATA", "").strip()
+    if env_pd:
+        dirs.append(Path(env_pd) / "token-optimizer")
+    try:
+        for d in (RUNTIME_DIR / "plugins" / "data").iterdir():
+            if "token-optimizer" in d.name:
+                dirs.append(d / "token-optimizer")
+    except OSError:
+        pass
+    seen, out = set(), []
+    for d in dirs:
+        key = str(d)
+        if key not in seen:
+            seen.add(key)
+            out.append(d)
+    return out
+
+
+def _status_bar_checkpoint_epoch(session_id):
+    """last_checkpoint_epoch from the freshest quality-cache-<sid>.json, or None."""
+    best, best_mtime = None, -1.0
+    for d in _status_bar_quality_cache_dirs():
+        f = d / f"quality-cache-{session_id}.json"
+        try:
+            mt = f.stat().st_mtime
+        except OSError:
+            continue
+        if mt > best_mtime:
+            best, best_mtime = f, mt
+    if best is None:
+        return None
+    try:
+        val = json.loads(best.read_text(encoding="utf-8")).get("last_checkpoint_epoch")
+    except (OSError, ValueError, AttributeError):
+        return None
+    if isinstance(val, bool) or not isinstance(val, (int, float)):
+        return None
+    return val
+
+
+def status_bar_payload(session_id, transcript=None, sync=False):
+    """Build the status-bar JSON object (see STATUS_BAR_HELP). Never raises."""
+    sid = sanitize_session_id(session_id)
+    out = {
+        "schema": _STATUS_BAR_SCHEMA,
+        "session_id": sid,
+        "savings": None,
+        "savings_state": "unavailable",
+        "savings_age_s": None,
+        "savings_reason": None,
+        "refresh_started": False,
+        "last_request_epoch": None,
+        "cache_lifetime": None,
+        "last_checkpoint_epoch": None,
+    }
+    if sid == "unknown":
+        out["savings_reason"] = "no session id"
+        return out
+
+    try:
+        path = Path(transcript) if transcript else _find_session_jsonl_by_id(sid)
+        if path is not None:
+            out["last_request_epoch"], out["cache_lifetime"] = _status_bar_transcript_state(path)
+    except Exception:
+        pass
+    try:
+        out["last_checkpoint_epoch"] = _status_bar_checkpoint_epoch(sid)
+    except Exception:
+        pass
+
+    try:
+        if sync:
+            savings, reason = _status_bar_savings_or_reason(sid)
+            try:
+                _status_bar_write_cache(sid, savings, reason)
+            except OSError:
+                pass
+            out["savings"], out["savings_reason"] = savings, reason
+            out["savings_age_s"] = 0.0
+            out["savings_state"] = "fresh" if savings is not None else "unavailable"
+            return out
+        if not Path(TRENDS_DB).exists():
+            out["savings_reason"] = "no savings recorded yet"
+            return out
+        cached = _status_bar_read_cache(sid)
+        if cached is None:
+            out["savings_state"] = "loading"
+            out["savings_reason"] = "computing savings"
+            out["refresh_started"] = _status_bar_start_refresh(sid)
+            return out
+        age = max(0.0, time.time() - float(cached["computed_at"]))
+        out["savings"] = cached.get("savings")
+        out["savings_reason"] = cached.get("reason") if out["savings"] is None else None
+        out["savings_age_s"] = round(age, 1)
+        stale = age > _STATUS_BAR_CACHE_MAX_AGE_S
+        if out["savings"] is None:
+            out["savings_state"] = "unavailable"
+        else:
+            out["savings_state"] = "stale" if stale else "fresh"
+        if stale:
+            out["refresh_started"] = _status_bar_start_refresh(sid)
+    except Exception:
+        out["savings"] = None
+        out["savings_state"] = "unavailable"
+        out["savings_reason"] = "savings unavailable"
+    return out
+
+
+def _status_bar_cli(args):
+    """`status-bar` subcommand. Prints one JSON object; exit 0 (2 on bad usage)."""
+    if "--help" in args or "-h" in args:
+        print(STATUS_BAR_HELP)
+        sys.exit(0)
+
+    def _opt(name):
+        if name in args:
+            i = args.index(name)
+            if i + 1 < len(args):
+                return args[i + 1]
+        return None
+
+    session = _opt("--session")
+    if not session:
+        print(STATUS_BAR_HELP, file=sys.stderr)
+        sys.exit(2)
+    sync = "--sync" in args
+    try:
+        payload = status_bar_payload(session, transcript=_opt("--transcript"), sync=sync)
+    finally:
+        if sync and "--release-lock" in args:
+            try:
+                _status_bar_lock_path(sanitize_session_id(session)).unlink()
+            except OSError:
+                pass
+    print(json.dumps(payload))
+    sys.exit(0)
 
 
 def _install_date():
@@ -48869,6 +49402,9 @@ if __name__ == "__main__":
         compare_snapshots()
     elif args[0] == "dashboard":
         _dispatch_dashboard(args)
+    elif args[0] == "status-bar":
+        # Desktop status band: one JSON read (plan U2). See STATUS_BAR_HELP.
+        _status_bar_cli(args[1:])
     elif args[0] == "runway-json":
         # Machine-readable runway snapshot so a non-Python dashboard (the OpenClaw
         # / OpenCode TypeScript surfaces) can render the "Your plan goes further"
@@ -51036,6 +51572,7 @@ if __name__ == "__main__":
         print("  python3 measure.py setup-smart-compact --status     # Check which hooks are installed")
         print("  python3 measure.py setup-smart-compact --uninstall  # Remove Smart Compaction hooks")
         print("  python3 measure.py quality-cache                    # Update quality cache (for status line)")
+        print("  python3 measure.py status-bar --session ID --json   # Desktop status band data (status-bar --help)")
         print("  python3 measure.py quality-cache --warn             # Update cache + warn Claude if low")
         print("  python3 measure.py quality-cache --quiet            # Silent mode (for hooks)")
         print("  python3 measure.py setup-quality-bar                # Install quality bar (status line + hook)")
