@@ -21,6 +21,7 @@ import {
   WARM_PROMPT,
   attachesHandoff,
   busyNow,
+  handoffMisfit,
   initialUi,
   isArmed,
   lifetimeFromUsage,
@@ -90,6 +91,13 @@ let frameText = ''
 let frameAt = 0
 let transcriptPath: string | null = null
 let warmInFlight = false
+/**
+ * Which session the band is serving: bumped when one starts, is cleared or is
+ * swapped in. Work begun under one generation drops its result in the next.
+ */
+let sessionGen = 0
+/** A press is being claimed: a second press meanwhile is ignored (no double compaction). */
+let claiming = false
 
 const attempt = async <T,>(work: () => Promise<T>, fallback: T): Promise<T> => {
   try {
@@ -125,9 +133,20 @@ function dataIo($: EngineInterface): DataIo {
 
 /** Gather and store the session's figures, then let the cache clock learn from them (KTD12, KTD13). */
 async function refresh($: EngineInterface, options: GatherOptions = {}): Promise<void> {
+  const gen = sessionGen
   const current = await attempt(() => read($, sessionAtom), null)
   const transcript = options.transcript ?? transcriptPath ?? undefined
   const fresh = await gather(dataIo($), current, transcript ? { ...options, transcript } : options)
+  // Begun before a clear or a session change: its figures belong to the old session.
+  if (gen !== sessionGen) return
+  if (!options.reset && current !== null && fresh.sessionId !== '' && current.sessionId !== fresh.sessionId) {
+    // Another session (a new one, or a resume): nothing of the last one carries over (R15, KTD12).
+    sessionGen += 1
+    await feedClock($, { type: 'clear' })
+    await setUi($, () => initialUi())
+    lastCold = false
+    await feedPose($, { type: 'session-start' })
+  }
   await update($, sessionAtom, cur => mergeStored(cur, fresh, options.reset))
   await syncClock($, fresh)
 }
@@ -186,6 +205,8 @@ async function feedPose($: EngineInterface, event: PoseEvent): Promise<void> {
 
 /** Permission prompts and questions have no closing event of their own: close them on the next sign of life. */
 async function closeAsks($: EngineInterface): Promise<void> {
+  // After a reload the module copy is empty until the first pose event: read the stored one.
+  if (!poseLive) poseLive = await attempt(() => read($, poseAtom), null)
   for (let i = poseLive?.permissions ?? 0; i > 0; i--) await feedPose($, { type: 'permission-closed' })
   for (let i = poseLive?.questions ?? 0; i > 0; i--) await feedPose($, { type: 'question-closed' })
 }
@@ -244,9 +265,13 @@ function startCadence($: EngineInterface): void {
 
 /** Everything a desktop session needs once: theme, a pending hand-off from disk, figures, the cadence. */
 async function start($: EngineInterface): Promise<void> {
+  sessionGen += 1
   await refreshTheme($)
   const stored = await attempt(() => $.store.get(HANDOFF_KEY), undefined)
   if (isHandoff(stored)) await attempt(() => update($, handoffAtom, cur => cur ?? stored), undefined)
+  else if (stored !== undefined && stored !== null) await attempt(() => $.store.delete(HANDOFF_KEY), undefined)
+  const held = await attempt(() => read($, handoffAtom), null)
+  if (held) await handoffThatFits($, held)
   await feedPose($, { type: 'session-start' })
   await attempt(() => refresh($, { savings: true }), undefined)
   startCadence($)
@@ -255,7 +280,23 @@ async function start($: EngineInterface): Promise<void> {
 function isHandoff(v: unknown): v is Handoff {
   if (!v || typeof v !== 'object') return false
   const h = v as Record<string, unknown>
-  return typeof h.fromSessionId === 'string' && typeof h.text === 'string' && h.text !== '' && typeof h.checkpointPath === 'string' && typeof h.createdAt === 'number'
+  return typeof h.fromSessionId === 'string' && typeof h.cwd === 'string' && typeof h.text === 'string' && h.text !== '' && typeof h.checkpointPath === 'string' && typeof h.createdAt === 'number'
+}
+
+/**
+ * A held hand-off joins only a session in the project it was saved in, within
+ * 30 minutes (TR-05). One that does not fit is dropped with a one-line note.
+ */
+async function handoffThatFits($: EngineInterface, h: Handoff): Promise<Handoff | null> {
+  const cwd = await attempt(() => $.session.cwd(), '')
+  const now = await $.clock.now()
+  const misfit = handoffMisfit(h, { cwd, now })
+  if (misfit === null) return h
+  await dropHandoff($)
+  const line = `Start fresh's saved hand-off was discarded: ${misfit}.`
+  await setUi($, u => withNote(u, line, now))
+  toast($, line)
+  return null
 }
 
 // ---- buttons (U9) ----
@@ -296,12 +337,11 @@ async function expireBusy($: EngineInterface, busy: Exclude<Busy, null>, since: 
   const ui = await attempt(() => read($, uiAtom), null)
   if (!ui || ui.busy !== busy || ui.busySince !== since) return
   const now = await $.clock.now()
-  await setUi($, u => withNote(withBusy(u, null, now), `${BUSY_WORDS[busy]} timed out.`, now))
-  if (busy === 'fresh-clear') {
-    // The clear never came: the hand-off belongs to no new session.
-    await dropHandoff($)
-  }
-  toast($, `${BUSY_WORDS[busy]} timed out.`)
+  // The clear waits for the turn to end and can still land: the hand-off stays
+  // for it, until the clear lands or 30 minutes pass (TR-06).
+  const line = busy === 'fresh-clear' ? 'Start fresh clears when the current turn ends.' : `${BUSY_WORDS[busy]} timed out.`
+  await setUi($, u => withNote(withBusy(u, null, now), line, now))
+  toast($, line)
 }
 
 async function dropHandoff($: EngineInterface): Promise<void> {
@@ -330,6 +370,15 @@ async function cleanUp($: EngineInterface): Promise<void> {
 }
 
 async function runCompact($: EngineInterface, since: number): Promise<void> {
+  // A turn that started since the press would be cut short.
+  if (await isTurnRunning($)) {
+    const ui = await attempt(() => read($, uiAtom), null)
+    if (!ui || ui.busy !== 'clean' || ui.busySince !== since) return
+    const now = await $.clock.now()
+    await setUi($, u => withBusy(u, null, now))
+    toast($, 'Clean up waits until the turn finishes.')
+    return
+  }
   let skip: string | null = null
   try {
     const result = await $.session.compact()
@@ -365,17 +414,48 @@ async function keepWarm($: EngineInterface): Promise<void> {
     return
   }
   warmInFlight = true
+  const gen = sessionGen
   await feedClock($, { type: 'warm-start' }, now)
-  $.clock.after(0, () => void runWarm($, clock.contextTokens))
+  $.clock.after(0, () => void runWarm($, clock.contextTokens, gen))
 }
 
-async function runWarm($: EngineInterface, known: number | null): Promise<void> {
+type ForkReply = Awaited<ReturnType<EngineInterface['model']['fork']>>
+
+/** The warm-up fork, or null once `ms` pass without an answer; a late answer is then ignored (TR-10). */
+function forkWithin($: EngineInterface, ms: number): Promise<ForkReply | null> {
+  return new Promise<ForkReply | null>((resolve, reject) => {
+    let timer: { cancel: () => void } | null = null
+    try {
+      timer = $.clock.after(ms, () => resolve(null))
+    } catch {
+      // No timer: the fork alone decides.
+    }
+    $.model.fork({ prompt: WARM_PROMPT }).then(
+      reply => {
+        timer?.cancel()
+        resolve(reply)
+      },
+      error => {
+        timer?.cancel()
+        reject(error)
+      },
+    )
+  })
+}
+
+async function runWarm($: EngineInterface, known: number | null, gen: number): Promise<void> {
   try {
     const session = await attempt(() => read($, sessionAtom), null)
-    const contextTokens = known ?? session?.contextTokens ?? 0
-    const reply = await $.model.fork({ prompt: WARM_PROMPT })
+    // A recorded 0 is no size at all: fall back to the session's own (TR-21).
+    const contextTokens = known || session?.contextTokens || 0
+    const reply = await forkWithin($, BUSY_TIMEOUT_MS)
+    // Cleared meanwhile: this warm-up says nothing about the new session (TR-09).
+    if (gen !== sessionGen) return
     const at = await $.clock.now()
-    if (reply.isAnswered) {
+    if (reply === null) {
+      await feedClock($, { type: 'warm-failed' })
+      toast($, warmToast({ ok: false, reason: 'the request failed' }))
+    } else if (reply.isAnswered) {
       await feedClock($, { type: 'warm-done', at, cacheReadTokens: reply.usage.cache_read_input_tokens, contextTokens })
       const after = await attempt(() => read($, clockAtom), null)
       toast($, warmToast({ ok: true, lapsed: Boolean(after?.lapsed), contextTokens }))
@@ -384,6 +464,7 @@ async function runWarm($: EngineInterface, known: number | null): Promise<void> 
       toast($, warmToast({ ok: false, reason: reply.reason }))
     }
   } catch {
+    if (gen !== sessionGen) return
     await feedClock($, { type: 'warm-failed' })
     toast($, warmToast({ ok: false, reason: 'the request failed' }))
   } finally {
@@ -411,12 +492,18 @@ async function startFresh($: EngineInterface): Promise<void> {
     toast($, 'Start fresh stopped: no session to save. Nothing was cleared.')
     return
   }
+  const gen = sessionGen
   await setUi($, u => withBusy(u, 'fresh-capture', now))
   armBusyTimeout($, 'fresh-capture', now)
-  $.clock.after(0, () => void runFresh($, sid, now))
+  $.clock.after(0, () => void runFresh($, sid, now, gen))
 }
 
-async function runFresh($: EngineInterface, sid: string, since: number): Promise<void> {
+/** Still the session Start fresh was pressed in (TR-01): a typed /clear meanwhile means stand down. */
+async function stillSession($: EngineInterface, sid: string, gen: number): Promise<boolean> {
+  return gen === sessionGen && cleanId(await attempt(() => $.session.id(), '')) === sid
+}
+
+async function runFresh($: EngineInterface, sid: string, since: number, gen: number): Promise<void> {
   const io = dataIo($)
   const stop = async (reason: string): Promise<void> => {
     const ui = await attempt(() => read($, uiAtom), null)
@@ -437,34 +524,61 @@ async function runFresh($: EngineInterface, sid: string, since: number): Promise
       }),
     read: path => io.read(path),
   }
-  const result = await prepareHandoff(port, { sessionId: sid, transcriptPath, now: since })
+  const cwd = await attempt(() => $.session.cwd(), '')
+  const result = await prepareHandoff(port, { sessionId: sid, transcriptPath, cwd, now: since })
   const ui = await attempt(() => read($, uiAtom), null)
-  // Timed out meanwhile: the person was told; clear nothing.
+  // Timed out or cleared meanwhile: the person was told, or moved on; clear nothing.
   if (!ui || ui.busy !== 'fresh-capture' || ui.busySince !== since) return
+  const standDown = async (): Promise<void> => {
+    const now = await $.clock.now()
+    await setUi($, u => (u.busySince === since ? withBusy(u, null, now) : u))
+  }
+  if (!(await stillSession($, sid, gen))) return standDown()
   if (!result.ok) return stop(result.reason)
+  // A turn started during the capture: a queued clear would wipe it (TR-02).
+  if (await isTurnRunning($)) {
+    await standDown()
+    toast($, 'Start fresh waits until the turn finishes.')
+    return
+  }
 
   try {
     await $.store.set(HANDOFF_KEY, result.handoff)
   } catch {
     return stop('the hand-off could not be kept on disk')
   }
-  await attempt(() => update($, handoffAtom, () => result.handoff), undefined)
+  try {
+    await update($, handoffAtom, () => result.handoff)
+  } catch {
+    // The new session would never see it (TR-11).
+    await dropHandoff($)
+    return stop('the hand-off could not be kept on disk')
+  }
+  if (!(await stillSession($, sid, gen))) {
+    await dropHandoff($)
+    return standDown()
+  }
   const now = await $.clock.now()
   await setUi($, u => withBusy(u, 'fresh-clear', now))
   armBusyTimeout($, 'fresh-clear', now)
-  $.clock.after(0, () => void runClear($, now))
+  $.clock.after(0, () => void runClear($, now, result.handoff))
 }
 
-async function runClear($: EngineInterface, since: number): Promise<void> {
+async function runClear($: EngineInterface, since: number, handoff: Handoff): Promise<void> {
   try {
     await $.command.run({ command: 'clear' })
   } catch {
+    const held = await attempt(() => read($, handoffAtom), null)
+    const ours = held !== null && held.fromSessionId === handoff.fromSessionId && held.createdAt === handoff.createdAt
     const ui = await attempt(() => read($, uiAtom), null)
-    if (!ui || ui.busy !== 'fresh-clear' || ui.busySince !== since) return
+    const waiting = ui !== null && ui.busy === 'fresh-clear' && ui.busySince === since
+    // Still ours to report: the step is on show, or the hand-off still waits for this clear (TR-06).
+    if (!ours && !waiting) return
+    if (ours) await dropHandoff($)
     const now = await $.clock.now()
-    await dropHandoff($)
-    await setUi($, u => withNote(withBusy(u, null, now), 'Start fresh could not clear. Your conversation is unchanged.', now))
-    toast($, 'Start fresh could not clear. Your conversation is unchanged.')
+    const line = 'Start fresh could not clear. Your conversation is unchanged.'
+    await setUi($, u => withNote(waiting ? withBusy(u, null, now) : u, line, now))
+    toast($, line)
   }
 }
 
@@ -479,12 +593,17 @@ async function toggleDetails($: EngineInterface): Promise<void> {
 }
 
 async function act($: EngineInterface, id: ActionId): Promise<void> {
+  // Guards read, then write, across awaits: one press at a time (TR-02).
+  if (claiming) return
+  claiming = true
   try {
     if (id === 'clean' || id === 'clean-first') await cleanUp($)
     else if (id === 'fresh') await startFresh($)
     else await keepWarm($)
   } catch {
     toast($, 'That did not work. Try again in a moment.')
+  } finally {
+    claiming = false
   }
 }
 
@@ -555,6 +674,8 @@ type Model = {
   sheetOpen: boolean
   savingsReason: string | null
   narrow: boolean
+  /** Keep warm can run now (the one guard, R12): only then does the row offer it. */
+  canWarm: boolean
 }
 
 type Handlers = { act: (id: ActionId) => void; details: () => void }
@@ -602,6 +723,11 @@ function drawBand(D: Desktop, m: Model, on: Handlers) {
   const clawd = clawdSvg(m.pose, moodOf(snap), { animate, palette: m.palette })
   const clawdAlt = /aria-label="([^"]*)"/.exec(clawd)?.[1] ?? 'Clawd'
   const bars = m.narrow ? detail.savings.bars.slice(-14) : detail.savings.bars
+  // Every card action that can run now, for a keyboard (R5): the quality card's two, and Keep warm.
+  const rowActions = [
+    ...(cardList.find(c => c.id === 'quality')?.actions ?? []),
+    ...(m.canWarm ? [{ id: 'warm' as const, label: 'Keep warm' }] : []),
+  ]
 
   return (
     <Box flexDirection="row" alignItems="flex-start" columnGap={2} paddingX={1}>
@@ -609,7 +735,7 @@ function drawBand(D: Desktop, m: Model, on: Handlers) {
         <Svg source={clawd} alt={clawdAlt} width={72} height={57} isInteractive />
         <Box flexDirection="row" alignItems="center" columnGap={0}>
           <Svg source={chevron.source} alt={chevron.alt} width={16} height={16} />
-          <Button key="details" plain label={m.sheetOpen ? 'Hide session details' : 'Show session details'} onPress={() => on.details()} />
+          <Button key="details" plain label="Session details" onPress={() => on.details()} />
         </Box>
       </Box>
       <Box flexDirection="column" flexGrow={1} flexShrink={1} rowGap={1}>
@@ -654,6 +780,11 @@ function drawBand(D: Desktop, m: Model, on: Handlers) {
                 {detail.savings.state === 'unavailable' ? <Text>{m.savingsReason ?? detail.savings.reason ?? ''}</Text> : ''}
               </Box>
             </Box>
+            <Box flexDirection="row" alignItems="center" columnGap={1}>
+              {rowActions.map(a => (
+                <Button key={`row-${a.id}`} label={a.label} onPress={() => on.act(a.id)} />
+              ))}
+            </Box>
           </Box>
         ) : (
           ''
@@ -661,6 +792,26 @@ function drawBand(D: Desktop, m: Model, on: Handlers) {
       </Box>
     </Box>
   )
+}
+
+/** The band's side of a finished turn: Clawd, the clock, and the refreshes after it (KTD13). */
+async function endTurn($: EngineInterface, reason: Extract<PoseEvent, { type: 'turn-complete' }>['reason'], agentId: string | undefined): Promise<void> {
+  try {
+    if (agentId !== undefined) {
+      await feedPose($, { type: 'turn-complete', reason, agentId })
+      return
+    }
+    await closeAsks($)
+    await feedClock($, { type: 'working-changed', working: false })
+    await feedPose($, { type: 'turn-complete', reason })
+    await feedPose($, { type: 'working-changed', working: false })
+    // Quality after each turn now; savings and the clock facts a little later.
+    $.clock.after(0, () => void attempt(() => refresh($), undefined))
+    statusTimer?.cancel()
+    statusTimer = $.clock.after(STATUS_AFTER_TURN_MS, () => void attempt(() => refresh($, { savings: true }), undefined))
+  } catch {
+    // The band never breaks the turn it watched.
+  }
 }
 
 // ---- hooks ----
@@ -680,14 +831,17 @@ export const register: Register = (on, options) => {
   on('classic.SessionStart', async ($, e, next) => {
     const result = await next(e)
     if (!active || e.source !== 'clear') return result
+    // Work begun in the old session drops its result from here on.
+    sessionGen += 1
     if (e.transcript_path) transcriptPath = e.transcript_path
     const sid = cleanId(e.session_id)
     await feedClock($, { type: 'clear' })
     lastCold = false
     await feedPose($, { type: 'session-start' })
-    const handoff = await attempt(() => read($, handoffAtom), null)
-    const now = await $.clock.now()
-    await setUi($, u => (u.busy === 'fresh-clear' ? withBusy(u, null, now) : u))
+    // Every step, note and Start fresh arm belonged to the old session (TR-01, TR-07).
+    await setUi($, () => initialUi())
+    const held = await attempt(() => read($, handoffAtom), null)
+    const handoff = held && held.fromSessionId !== sid ? await handoffThatFits($, held) : held
     await attempt(() => refresh($, { sessionId: e.session_id, reset: true, savings: true, transcript: e.transcript_path || undefined }), undefined)
     // The held hand-off replaces Token Optimizer's cross-session pointer (KTD10).
     if (handoff && handoff.fromSessionId !== sid && result.additionalContext) {
@@ -699,12 +853,21 @@ export const register: Register = (on, options) => {
   // The hand-off joins the first prompt the person sends, once (KTD10).
   on('prompt.submit', async ($, e, next) => {
     if (!active) return next(e)
-    const handoff = await attempt(() => read($, handoffAtom), null)
-    if (!handoff || !attachesHandoff(e.origin?.kind)) return next(e)
+    const held = await attempt(() => read($, handoffAtom), null)
+    if (!held || !attachesHandoff(e.origin?.kind)) return next(e)
     const sid = cleanId(await attempt(() => $.session.id(), ''))
-    if (!sid || sid === handoff.fromSessionId) return next(e)
+    if (!sid || sid === held.fromSessionId) return next(e)
+    const handoff = await handoffThatFits($, held)
+    if (!handoff) return next(e)
     await dropHandoff($)
-    return next({ ...e, context: [...(e.context ?? []), handoff.text] })
+    try {
+      return await next({ ...e, context: [...(e.context ?? []), handoff.text] })
+    } catch (error) {
+      // Not accepted: the hand-off waits for the next prompt (TR-08).
+      await attempt(() => $.store.set(HANDOFF_KEY, handoff), undefined)
+      await attempt(() => update($, handoffAtom, () => handoff), undefined)
+      throw error
+    }
   })
 
   // compact-capture wants the transcript; these classic events carry its path.
@@ -793,21 +956,12 @@ export const register: Register = (on, options) => {
   })
 
   on('turn.complete', async ($, e, next) => {
-    const result = await next(e)
-    if (!active) return result
-    if (e.agentId !== undefined) {
-      await feedPose($, { type: 'turn-complete', reason: e.reason, agentId: e.agentId })
-      return result
+    // The turn is over even when a hook beneath rejects: the band says so either way (TR-18).
+    try {
+      return await next(e)
+    } finally {
+      if (active) await endTurn($, e.reason, e.agentId)
     }
-    await closeAsks($)
-    await feedClock($, { type: 'working-changed', working: false })
-    await feedPose($, { type: 'turn-complete', reason: e.reason })
-    await feedPose($, { type: 'working-changed', working: false })
-    // Quality after each turn now; savings and the clock facts a little later (KTD13).
-    $.clock.after(0, () => void attempt(() => refresh($), undefined))
-    statusTimer?.cancel()
-    statusTimer = $.clock.after(STATUS_AFTER_TURN_MS, () => void attempt(() => refresh($, { savings: true }), undefined))
-    return result
   })
 
   on('config.set', async ($, e, next) => {
@@ -868,6 +1022,7 @@ export const register: Register = (on, options) => {
         sheetOpen: s?.sheetOpen ?? false,
         savingsReason: s?.savingsReason ?? null,
         narrow: e.props.bodyColumns < 90,
+        canWarm: canKeepWarm({ ...clock, working }, now),
       },
       {
         act: id => void act($, id),

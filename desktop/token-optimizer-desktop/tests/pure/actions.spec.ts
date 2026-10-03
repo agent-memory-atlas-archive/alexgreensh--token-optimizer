@@ -7,8 +7,11 @@ import assert from 'node:assert/strict'
 
 import {
   BUSY_TIMEOUT_MS,
+  CAPTURE_TIMEOUT_MS,
   FRESH_ARM_MS,
+  HANDOFF_TTL_MS,
   attachesHandoff,
+  handoffMisfit,
   busyNow,
   checkpointPathFrom,
   initialUi,
@@ -89,8 +92,8 @@ test('the hand-off joins prompts the person typed, not notifications or peers', 
 
 type Calls = { args: string[]; stdin?: string }[]
 
-function port(over: Partial<{ capture: string; file: string | null; lean: string; captureFails: boolean; leanExit: number }> = {}): { port: HandoffPort; calls: Calls } {
-  const o = { capture: '[Token Optimizer] Checkpoint saved: /cp/a.md\n', file: '# Checkpoint\nreal content', lean: 'LEAN BLOCK', captureFails: false, leanExit: 0, ...over }
+function port(over: Partial<{ capture: string; file: string | null; lean: string; captureFails: boolean; captureExit: number; leanExit: number }> = {}): { port: HandoffPort; calls: Calls } {
+  const o = { capture: '[Token Optimizer] Checkpoint saved: /cp/a.md\n', file: '# Checkpoint\nreal content', lean: 'LEAN BLOCK', captureFails: false, captureExit: 0, leanExit: 0, ...over }
   const calls: Calls = []
   return {
     calls,
@@ -99,7 +102,7 @@ function port(over: Partial<{ capture: string; file: string | null; lean: string
         calls.push({ args, stdin })
         if (args[0] === 'compact-capture') {
           if (o.captureFails) throw new Error('spawn failed')
-          return { exitCode: 0, stdout: o.capture }
+          return { exitCode: o.captureExit, stdout: o.capture }
         }
         return { exitCode: o.leanExit, stdout: o.lean }
       },
@@ -113,9 +116,9 @@ function port(over: Partial<{ capture: string; file: string | null; lean: string
 
 test('Start fresh captures with the session on stdin, checks the file, then builds the lean text', async () => {
   const { port: p, calls } = port()
-  const r = await prepareHandoff(p, { sessionId: 'old-1', transcriptPath: '/t/old-1.jsonl', now: T })
-  assert.deepEqual(r, { ok: true, handoff: { fromSessionId: 'old-1', checkpointPath: '/cp/a.md', text: 'LEAN BLOCK', createdAt: T } })
-  assert.deepEqual(calls[0], { args: ['compact-capture', '--trigger', 'start-fresh'], stdin: JSON.stringify({ session_id: 'old-1', transcript_path: '/t/old-1.jsonl' }) })
+  const r = await prepareHandoff(p, { sessionId: 'old-1', transcriptPath: '/t/old-1.jsonl', cwd: '/work/a', now: T })
+  assert.deepEqual(r, { ok: true, handoff: { fromSessionId: 'old-1', cwd: '/work/a', checkpointPath: '/cp/a.md', text: 'LEAN BLOCK', createdAt: T } })
+  assert.deepEqual(calls[0], { args: ['compact-capture', '--trigger', 'start-fresh', '--budget-seconds', '25'], stdin: JSON.stringify({ session_id: 'old-1', transcript_path: '/t/old-1.jsonl' }) })
   assert.deepEqual(calls[1]?.args, ['resume-lean', 'old-1', '--print'])
 })
 
@@ -129,8 +132,32 @@ test('Start fresh aborts on a failed capture, a missing or stub checkpoint, or a
     port({ leanExit: 1 }),
   ]
   for (const { port: p } of cases) {
-    const r = await prepareHandoff(p, { sessionId: 'old-1', transcriptPath: null, now: T })
+    const r = await prepareHandoff(p, { sessionId: 'old-1', transcriptPath: null, cwd: '/work/a', now: T })
     assert.equal(r.ok, false)
     if (!r.ok) assert.ok(r.reason.length > 0 && !r.reason.includes('\n'))
   }
+})
+
+test('a capture that exits non-zero aborts before resume-lean, even with a path printed (TR-12)', async () => {
+  const { port: p, calls } = port({ captureExit: 1 })
+  const r = await prepareHandoff(p, { sessionId: 'old-1', transcriptPath: null, cwd: '/work/a', now: T })
+  assert.deepEqual(r, { ok: false, reason: 'the checkpoint could not be saved' })
+  assert.equal(calls.some(c => c.args[0] === 'resume-lean'), false)
+})
+
+test('the capture budget it asks for stays under the time Start fresh waits for it (O1)', async () => {
+  const { port: p, calls } = port()
+  await prepareHandoff(p, { sessionId: 'old-1', transcriptPath: null, cwd: '/work/a', now: T })
+  const args = calls[0]?.args ?? []
+  const budget = Number(args[args.indexOf('--budget-seconds') + 1])
+  assert.equal(budget, 25)
+  assert.ok(budget * 1000 < CAPTURE_TIMEOUT_MS)
+})
+
+test('a hand-off fits only the same project within 30 minutes of being saved (TR-05)', () => {
+  const h = { fromSessionId: 'old-1', cwd: '/work/a', checkpointPath: '/cp/a.md', text: 'LEAN', createdAt: T }
+  assert.equal(handoffMisfit(h, { cwd: '/work/a', now: T + HANDOFF_TTL_MS }), null)
+  assert.match(handoffMisfit(h, { cwd: '/work/b', now: T + 1000 }) ?? '', /another project/)
+  assert.match(handoffMisfit(h, { cwd: '/work/a', now: T + HANDOFF_TTL_MS + 1 }) ?? '', /30 minutes/)
+  assert.equal(HANDOFF_TTL_MS, 30 * 60_000)
 })

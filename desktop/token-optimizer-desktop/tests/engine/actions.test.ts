@@ -1,6 +1,6 @@
 // The three buttons (U9): Clean up, Start fresh and Keep warm through
 // register.tsx inside the engine, every guard on the mocked clock.
-import { expect, test } from 'claude-code/testing'
+import { expect, test, type Engine } from 'claude-code/testing'
 
 import { BAND, NOW_MS, START, stub } from './world.ts'
 
@@ -138,7 +138,7 @@ test('Start fresh confirmed: capture, clear, then the held text joins the first 
   await w.clock.advance(1000)
   await w.clock.settle()
   const capture = w.runs.find(r => r.argv.includes('compact-capture'))
-  expect(capture?.argv.slice(-3)).toEqual(['compact-capture', '--trigger', 'start-fresh'])
+  expect(capture?.argv.slice(-5)).toEqual(['compact-capture', '--trigger', 'start-fresh', '--budget-seconds', '25'])
   expect(JSON.parse(capture?.stdin ?? '{}').session_id).toBe('sess-1')
   expect(w.runs.find(r => r.argv.includes('resume-lean'))?.argv.slice(-3)).toEqual(['resume-lean', 'sess-1', '--print'])
   expect(w.commands).toEqual(['clear'])
@@ -176,7 +176,7 @@ test('a failed capture, a stub checkpoint, or an empty resume queues no clear', 
 })
 
 test('a pending hand-off on disk survives a restart and joins the first prompt', async ($, on) => {
-  const handoff = { fromSessionId: 'sess-0', checkpointPath: '/cp.md', text: 'HELD FROM BEFORE', createdAt: NOW_MS - 1000 }
+  const handoff = { fromSessionId: 'sess-0', cwd: '/work/project', checkpointPath: '/cp.md', text: 'HELD FROM BEFORE', createdAt: NOW_MS - 1000 }
   const w = stub(on, { store: { handoff } })
   await $.session.start(START)
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
@@ -187,4 +187,236 @@ test('a pending hand-off on disk survives a restart and joins the first prompt',
   expect(w.toasts.length).toBe(0)
   const again = await $.prompt.submit({ text: 'more', wait: false, origin: COMPOSER })
   expect(again.context ?? []).toEqual([])
+})
+
+type Mount = Awaited<ReturnType<typeof mountBand>>
+const mountBand = ($: Engine) => $.ui.mount({ ...BAND, surface: 'desktop' })
+const cacheAlt = async (ui: Mount) => (await ui.findAll({ type: 'Svg' })).map(s => String(s.props.alt)).find(alt => alt.startsWith('Cache'))
+const turnEnd = (reason: 'answer' | 'error') => ({ turnId: 't1', answer: '', durationMs: 1000, isAborted: false, reason }) as never
+const confirmFresh = async (ui: Mount) => {
+  await ui.press({ key: 'card-quality-fresh' })
+  await ui.press({ key: 'action' })
+}
+
+test('a /clear typed while Start fresh saves its checkpoint queues no second clear (TR-01)', async ($, on) => {
+  const w = stub(on, { captureDelayMs: 1000 })
+  await $.session.start(START)
+  const ui = await mountBand($)
+  await confirmFresh(ui)
+  await w.clock.settle()
+  expect(await has(ui, 'Saving checkpoint.')).toBe(true)
+
+  w.sessionId = 'sess-2'
+  await $.classic.SessionStart({ source: 'clear', session_id: 'sess-2' } as never)
+  await w.clock.advance(1000)
+  await w.clock.settle()
+  expect(w.commands).toEqual([])
+  const first = await $.prompt.submit({ text: 'new work', wait: false, origin: COMPOSER })
+  expect(first.context ?? []).toEqual([])
+})
+
+test('a turn started while Start fresh saves its checkpoint stops it before the clear (TR-02)', async ($, on) => {
+  const w = stub(on, { captureDelayMs: 1000 })
+  await $.session.start(START)
+  const ui = await mountBand($)
+  await confirmFresh(ui)
+  await w.clock.settle()
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await w.clock.advance(1000)
+  await w.clock.settle()
+  expect(w.commands).toEqual([])
+  expect(w.toasts).toEqual(['Start fresh waits until the turn finishes.'])
+})
+
+test('two presses of Clean up at once start one compaction (TR-02)', async ($, on) => {
+  const w = stub(on)
+  await $.session.start(START)
+  const ui = await mountBand($)
+  await Promise.all([ui.press({ key: 'card-quality-clean' }), ui.press({ key: 'card-quality-clean' })])
+  await w.clock.settle()
+  expect(w.compacts).toBe(1)
+})
+
+test('a /clear disarms Start fresh: one press in the new session arms again, never clears (TR-07)', async ($, on) => {
+  const w = stub(on)
+  await $.session.start(START)
+  const ui = await mountBand($)
+  await ui.press({ key: 'card-quality-fresh' })
+  w.sessionId = 'sess-2'
+  await $.classic.SessionStart({ source: 'clear', session_id: 'sess-2' } as never)
+  await ui.press({ key: 'card-quality-fresh' })
+  await w.clock.settle()
+  expect(w.runs.some(r => r.argv.includes('compact-capture'))).toBe(false)
+  expect((await ui.find({ key: 'action' }))?.props.label).toBe('Click again to clear')
+})
+
+for (const [why, held] of [
+  ['saved in another project', { fromSessionId: 'sess-0', cwd: '/work/other', checkpointPath: '/cp.md', text: 'OTHER PROJECT', createdAt: NOW_MS - 1000 }],
+  ['saved more than 30 minutes ago', { fromSessionId: 'sess-0', cwd: '/work/project', checkpointPath: '/cp.md', text: 'TOO OLD', createdAt: NOW_MS - 31 * 60_000 }],
+] as const) {
+  test(`a hand-off ${why} is discarded with a one-line note, never joined (TR-05)`, async ($, on) => {
+    const w = stub(on, { store: { handoff: held } })
+    await $.session.start(START)
+    const ui = await mountBand($)
+    expect(await has(ui, 'Checkpoint ready')).toBe(false)
+    const first = await $.prompt.submit({ text: 'go on', wait: false, origin: COMPOSER })
+    expect(first.context ?? []).toEqual([])
+    expect(w.toasts.length).toBe(1)
+    expect(w.toasts[0]).toMatch(/^Start fresh's saved hand-off was discarded: .*\.$/)
+  })
+}
+
+test('a clear still queued after 120 s keeps the hand-off and says when it will clear (TR-06)', async ($, on) => {
+  const w = stub(on)
+  await $.session.start(START)
+  const ui = await mountBand($)
+  await confirmFresh(ui)
+  await w.clock.settle()
+  expect(w.commands).toEqual(['clear'])
+
+  await w.clock.advance(120_000)
+  expect(w.toasts.at(-1)).toBe('Start fresh clears when the current turn ends.')
+  expect(await has(ui, 'Clearing.')).toBe(false)
+
+  w.sessionId = 'sess-2'
+  await $.classic.SessionStart({ source: 'clear', session_id: 'sess-2' } as never)
+  const first = await $.prompt.submit({ text: 'continue', wait: false, origin: COMPOSER })
+  expect(first.context).toEqual(['LEAN HANDOFF TEXT'])
+})
+
+test('a prompt rejected beneath the band keeps the hand-off for the next one (TR-08)', async ($, on) => {
+  const handoff = { fromSessionId: 'sess-0', cwd: '/work/project', checkpointPath: '/cp.md', text: 'LEAN HANDOFF TEXT', createdAt: NOW_MS - 1000 }
+  const w = stub(on, { store: { handoff }, submitFails: 1 })
+  await $.session.start(START)
+  await expect($.prompt.submit({ text: 'go on', wait: false, origin: COMPOSER })).rejects.toBeDefined()
+  const retry = await $.prompt.submit({ text: 'go on', wait: false, origin: COMPOSER })
+  expect(retry.context).toEqual(['LEAN HANDOFF TEXT'])
+})
+
+test('a Keep warm that lands after a clear leaves the new session\'s clock alone (TR-09)', async ($, on) => {
+  const w = stub(on, { forkDelayMs: 2000 })
+  w.status = { ...w.status, requestAgoS: 3400 }
+  await $.session.start(START)
+  const ui = await mountBand($)
+  await ui.press({ key: 'action' })
+  await w.clock.settle()
+  expect(w.forks).toBe(1)
+
+  w.sessionId = 'sess-2'
+  w.status = { ...w.status, requestAgoS: null, cache_lifetime: null }
+  await $.classic.SessionStart({ source: 'clear', session_id: 'sess-2' } as never)
+  await w.clock.advance(2000)
+  await w.clock.settle()
+  expect(await cacheAlt(ui)).toBe('Cache clock starts after the first reply')
+  expect(w.toasts).toEqual([])
+})
+
+test('a Keep warm fork that never answers gives up after 120 s and can be pressed again (TR-10)', async ($, on) => {
+  const w = stub(on, { forkDelayMs: 10 * 60_000 })
+  w.status = { ...w.status, requestAgoS: 3400 }
+  await $.session.start(START)
+  const ui = await mountBand($)
+  await ui.press({ key: 'action' })
+  await w.clock.settle()
+  expect(await has(ui, 'Keeping the cache warm.')).toBe(true)
+
+  await w.clock.advance(120_000)
+  expect(await has(ui, 'Keeping the cache warm.')).toBe(false)
+  expect(w.toasts).toEqual(['Keep warm did not run: the request failed.'])
+  expect((await ui.find({ key: 'action' }))?.props.label).toBe('Keep warm')
+})
+
+test('a hand-off the band cannot hold stops Start fresh before the clear (TR-11)', async ($, on) => {
+  const w = stub(on, { handoffWriteFails: 100 })
+  await $.session.start(START)
+  const ui = await mountBand($)
+  await confirmFresh(ui)
+  await w.clock.settle()
+  expect(w.commands).toEqual([])
+  expect(w.toasts.length).toBe(1)
+  expect(w.toasts[0]?.startsWith('Start fresh stopped:')).toBe(true)
+  // Nothing was left on disk for a later session to pick up.
+  w.sessionId = 'sess-3'
+  await $.session.start(START)
+  const first = await $.prompt.submit({ text: 'go', wait: false, origin: COMPOSER })
+  expect(first.context ?? []).toEqual([])
+})
+
+test('a turn that fails beneath the band still ends the turn on the band (TR-18)', async ($, on) => {
+  const w = stub(on, { completeFails: 1 })
+  await $.session.start(START)
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await expect($.turn.complete(turnEnd('error'))).rejects.toBeDefined()
+  await w.clock.settle()
+  // The turn is over: Clean up runs instead of waiting for it.
+  const ui = await mountBand($)
+  await ui.press({ key: 'card-quality-clean' })
+  await w.clock.settle()
+  expect(w.toasts.includes('Clean up waits until the turn finishes.')).toBe(false)
+  expect(w.compacts).toBe(1)
+})
+
+test('an open question from before a reload closes at the end of the turn (TR-19)', async ($, on) => {
+  // A reload finds Clawd asking; the band is live but has not run a pose event yet (the theme read is slow).
+  const asking = { pose: 'ask', since: NOW_MS, now: NOW_MS, working: true, rawSub: null, rawSince: NOW_MS, sub: null, agents: {}, permissions: 1, questions: 0, compacting: false, cold: false, lastActivity: NOW_MS, until: { wake: 0, done: 0, stop: 0, error: 0 } }
+  const w = stub(on, { themeDelayMs: 1000, seed: { pose: asking } })
+  const starting = $.session.start(START)
+  await $.turn.complete(turnEnd('answer'))
+  const ui = await mountBand($)
+  const clawd = (await ui.findAll({ type: 'Svg' })).map(s => String(s.props.alt)).find(alt => alt.startsWith('Clawd: '))
+  expect(clawd).toBeDefined()
+  expect(clawd).not.toBe('Clawd: needs you')
+  await w.clock.advance(1000)
+  await starting
+})
+
+test('Keep warm with no recorded context size names the session\'s own size when the cache lapsed (TR-21)', async ($, on) => {
+  const w = stub(on, { fork: { read: 0 }, seed: { clock: { anchor: NOW_MS - 3400_000, lifetime: '1h', contextTokens: 0, working: false, warming: false, lapsed: false } } })
+  w.status = { ...w.status, requestAgoS: 3400 }
+  await $.session.start(START)
+  const ui = await mountBand($)
+  await ui.press({ key: 'action' })
+  await w.clock.settle()
+  expect(w.forks).toBe(1)
+  expect(w.toasts.at(-1)).toMatch(/620k tokens at full price/)
+})
+
+test('a new session starts with its own clock, not the last one\'s (TR-04)', async ($, on) => {
+  const w = stub(on)
+  await $.session.start(START)
+  w.sessionId = 'sess-9'
+  w.status = { ...w.status, requestAgoS: null, cache_lifetime: null }
+  await $.session.start(START)
+  const ui = await mountBand($)
+  expect(await cacheAlt(ui)).toBe('Cache clock starts after the first reply')
+  const labels = (await ui.findAll({ type: 'Button' })).map(b => b.props.label)
+  expect(labels.includes('Keep warm')).toBe(false)
+})
+
+test('resuming an older session shows that session\'s own cache clock (TR-04)', async ($, on) => {
+  const w = stub(on)
+  await $.session.start(START)
+  w.sessionId = 'sess-old'
+  w.status = { ...w.status, requestAgoS: 2 * 3600 }
+  await $.session.start(START)
+  const ui = await mountBand($)
+  expect((await cacheAlt(ui))?.startsWith('Cache cold')).toBe(true)
+})
+
+test('a refresh that started before a clear never brings the old clock into the new session (TR-03)', async ($, on) => {
+  const w = stub(on)
+  await $.session.start(START)
+  // The savings refresh a few seconds after a turn is still waiting on the status command when /clear lands.
+  w.statusDelayMs = 5000
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await $.turn.complete(turnEnd('answer'))
+  await w.clock.advance(5000)
+  w.statusDelayMs = 0
+  w.sessionId = 'sess-2'
+  w.status = { ...w.status, requestAgoS: null, cache_lifetime: null }
+  await $.classic.SessionStart({ source: 'clear', session_id: 'sess-2' } as never)
+  await w.clock.advance(5000)
+  await w.clock.settle()
+  const ui = await mountBand($)
+  expect(await cacheAlt(ui)).toBe('Cache clock starts after the first reply')
 })

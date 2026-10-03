@@ -42,6 +42,17 @@ export type World = {
   /** Mocked-clock delay before compact-capture answers, and before a fork answers (ms). */
   captureDelayMs: number
   forkDelayMs: number
+  /** Mocked-clock delay before the status command answers, with the figures as they stood when it was asked. */
+  statusDelayMs: number
+  /** How many of the next prompt submissions / turn completions beneath the band reject. */
+  submitFails: number
+  completeFails: number
+  /** Mocked-clock delay before the theme read answers: the band is active but has not started yet. */
+  themeDelayMs: number
+  /** Band state (`$.state`, by atom key) as a reload finds it: served while nothing has been written. */
+  seed: Record<string, unknown>
+  /** How many of the next writes of a held hand-off to `$.state` fail. */
+  handoffWriteFails: number
   /** What `$.store` holds at the start. */
   store: Record<string, unknown>
   runs: { argv: string[]; stdin?: string }[]
@@ -91,6 +102,12 @@ export function stub(on: On, patch: Partial<Omit<World, 'clock' | 'runs' | 'toas
     theme: 'light',
     captureDelayMs: 0,
     forkDelayMs: 0,
+    statusDelayMs: 0,
+    submitFails: 0,
+    completeFails: 0,
+    themeDelayMs: 0,
+    seed: {},
+    handoffWriteFails: 0,
     store: {},
     runs: [],
     toasts: [],
@@ -118,7 +135,22 @@ export function stub(on: On, patch: Partial<Omit<World, 'clock' | 'runs' | 'toas
       ],
     },
   }))
-  on('config.list', () => ({ value: [{ key: 'theme', label: 'Theme', kind: 'choice', value: w.theme, provider: { plugin: 'engine', tier: 'core' } }] as never }))
+  on('state.get', async (_, e, next) => {
+    const held = await next(e)
+    const seeded = e.plugin === 'token-optimizer-desktop' ? w.seed[e.key] : undefined
+    return held.value?.version === 0 && held.value.value === undefined && seeded !== undefined ? { value: { value: seeded, version: 0 } } : held
+  })
+  on('state.set', (_, e, next) => {
+    if (e.plugin === 'token-optimizer-desktop' && e.key === 'handoff' && e.value !== null && w.handoffWriteFails > 0) {
+      w.handoffWriteFails -= 1
+      return { value: { isSet: false as const, version: 999 } }
+    }
+    return next(e)
+  })
+  on('config.list', async () => {
+    if (w.themeDelayMs) await w.clock.sleep(w.themeDelayMs)
+    return { value: [{ key: 'theme', label: 'Theme', kind: 'choice', value: w.theme, provider: { plugin: 'engine', tier: 'core' } }] as never }
+  })
   on('fs.list', () => ({ value: [] }))
   on('fs.stat', (_, e) => {
     const file = w.files[e.path]
@@ -131,15 +163,27 @@ export function stub(on: On, patch: Partial<Omit<World, 'clock' | 'runs' | 'toas
     return { value: file[1] }
   })
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
-  on('turn.complete', () => ({ text: '' }))
-  on('prompt.submit', (_, e) => ({ text: e.text, context: e.context, origin: e.origin }))
+  on('turn.complete', () => {
+    if (w.completeFails > 0) {
+      w.completeFails -= 1
+      throw new Error('turn.complete failed beneath the band')
+    }
+    return { text: '' }
+  })
+  on('prompt.submit', (_, e) => {
+    if (w.submitFails > 0) {
+      w.submitFails -= 1
+      throw new Error('prompt rejected beneath the band')
+    }
+    return { text: e.text, context: e.context, origin: e.origin }
+  })
   on('process.run', async (_, e) => {
     const argv = [...e.argv]
     w.runs.push({ argv, stdin: e.init?.stdin })
     if (argv[0] === 'git') return ok('feat/band\n')
     if (argv.includes('status-bar')) {
       const s = w.status
-      return ok(
+      const answer = ok(
         JSON.stringify({
           schema: 1,
           savings: s.savings ? { unit: 'tokens', ...s.savings } : null,
@@ -150,6 +194,8 @@ export function stub(on: On, patch: Partial<Omit<World, 'clock' | 'runs' | 'toas
           last_checkpoint_epoch: NOW_MS / 1000 - 120,
         }),
       )
+      if (w.statusDelayMs) await w.clock.sleep(w.statusDelayMs)
+      return answer
     }
     if (argv.includes('compact-capture')) {
       if (w.captureDelayMs) await w.clock.sleep(w.captureDelayMs)

@@ -75,12 +75,12 @@ test('pressing Clawd\'s details button unfolds the row, flips the chevron, and f
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const chevron = async () => (await ui.findAll({ type: 'Svg' })).map(s => String(s.props.alt)).find(alt => alt.startsWith('Session details'))
 
-  expect((await ui.find({ key: 'details' }))?.props.label).toBe('Show session details')
+  expect((await ui.find({ key: 'details' }))?.props.label).toBe('Session details')
   expect(await chevron()).toBe('Session details folded')
   expect(await ui.find({ key: 'row' })).toBeUndefined()
 
   await ui.press({ key: 'details' })
-  expect((await ui.find({ key: 'details' }))?.props.label).toBe('Hide session details')
+  expect((await ui.find({ key: 'details' }))?.props.label).toBe('Session details')
   expect(await chevron()).toBe('Session details open')
   expect(await ui.find({ key: 'row' })).toBeDefined()
   expect((await exactly(ui, 'feat/band')).length).toBeGreaterThan(0)
@@ -129,4 +129,32 @@ test('the dark theme draws Clawd from the dark palette', async ($, on) => {
   const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
   const clawd = (await ui.findAll({ type: 'Svg' })).find(s => String(s.props.alt).startsWith('Clawd: '))
   expect(String(clawd?.props.source)).toContain('#e08a6c') // DARK.skin
+})
+
+test('the unfolded row carries every card action that can run now, with no pointer needed (R5, TR-13)', async ($, on) => {
+  const w = stub(on)
+  await $.session.start(START)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  expect(await ui.find({ key: 'row-clean' })).toBeUndefined()
+  await ui.press({ key: 'details' })
+
+  expect((await ui.find({ key: 'row-clean' }))?.props.label).toBe('Clean up')
+  expect((await ui.find({ key: 'row-fresh' }))?.props.label).toBe('Start fresh')
+  expect((await ui.find({ key: 'row-warm' }))?.props.label).toBe('Keep warm')
+
+  await ui.press({ key: 'row-fresh' })
+  expect((await ui.find({ key: 'row-fresh' }))?.props.label).toBe('Click again to clear')
+  await ui.press({ key: 'row-fresh' })
+  await w.clock.settle()
+  expect(w.runs.some(r => r.argv.includes('compact-capture'))).toBe(true)
+})
+
+test('the row offers Keep warm only while it can run: never on a cold cache', async ($, on) => {
+  const w = stub(on)
+  w.status = { ...w.status, requestAgoS: 2 * 3600 }
+  await $.session.start(START)
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  await ui.press({ key: 'details' })
+  expect(await ui.find({ key: 'row-clean' })).toBeDefined()
+  expect(await ui.find({ key: 'row-warm' })).toBeUndefined()
 })

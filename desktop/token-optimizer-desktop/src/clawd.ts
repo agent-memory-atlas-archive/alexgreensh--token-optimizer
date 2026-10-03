@@ -132,7 +132,12 @@ export function clawdSvg(pose: Pose, mood: Mood, opts: ClawdOptions): string {
       rect(5.8, 5, 0.5, 0.5, '#ffffff', ' opacity="0.9"') + rect(9.8, 5, 0.5, 0.5, '#ffffff', ' opacity="0.9"'),
   }
   const look = pose === 'think' ? ' transform="translate(0.5 -0.45)"' : pose === 'write' ? ' transform="translate(0.2 0.5)"' : ''
-  const scan = pose === 'type' ? a.move('translate', '-0.5 0.55;0.5 0.55;-0.5 0.55', { dur: 2.6 }) : ''
+  // Watching with no pointer to follow: centred eyes that glance left, then right, about every 7 s (R9).
+  const scan = pose === 'type'
+    ? a.move('translate', '-0.5 0.55;0.5 0.55;-0.5 0.55', { dur: 2.6 })
+    : pose === 'idle'
+      ? a.move('translate', '0 0;0 0;-0.6 0;-0.6 0;0.6 0;0.6 0;0 0;0 0', { dur: 7, keyTimes: '0;0.7;0.74;0.8;0.85;0.91;0.95;1' })
+      : ''
   const eyes = `<g${look}>${scan}${eyesFor[pose] ?? openEyes}</g>`
 
   // Arms.

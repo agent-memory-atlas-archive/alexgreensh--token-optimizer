@@ -247,3 +247,12 @@ test('tick changes nothing in the state; time lives in view and canKeepWarm', ()
   const s = turnEndedAt(T, '1h')
   assert.deepEqual(reduceClock(s, { type: 'tick', now: T + 59 * MIN }), s)
 })
+
+test('an older request changes neither the lifetime nor the tokens at stake (TR-20)', () => {
+  let s = turnEndedAt(T, '1h', 800_000)
+  s = reduceClock(s, { type: 'request-done', at: T - 30 * MIN, lifetime: '5m', contextTokens: 70_000 }, T + MIN)
+  const v = view(s, T + 59 * MIN, 3600)
+  assert.equal(v.state, 'warning')
+  assert.equal(v.secondsLeft, 60)
+  assert.equal(v.tokensAtStake, 800_000)
+})

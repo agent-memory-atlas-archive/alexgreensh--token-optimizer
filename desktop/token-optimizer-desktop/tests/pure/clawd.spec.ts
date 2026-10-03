@@ -63,3 +63,20 @@ test('a worried session sweats; a calm idle one does not', () => {
   assert.ok(clawdSvg('idle', 'worried', { animate: true, palette: LIGHT }).includes('#5aa9e6'))
   assert.ok(!clawdSvg('idle', 'calm', { animate: true, palette: LIGHT }).includes('#5aa9e6'))
 })
+
+test('watching, the eyes glance left and right every few seconds; the still frame keeps them centred (R9, TR-15)', () => {
+  const live = clawdSvg('idle', 'calm', { animate: true, palette: LIGHT })
+  const glance = /<animateTransform attributeName="transform" type="translate" values="([^"]+)" dur="([\d.]+)s"[^>]*\/>/g
+  const found = [...live.matchAll(glance)].find(m => (m[1] ?? '').includes('-0.6 0') && (m[1] ?? '').includes('0.6 0'))
+  assert.ok(found, 'no left-right eye glance in the watching pose')
+  const values = (found[1] ?? '').split(';')
+  assert.equal(values[0], '0 0')
+  assert.equal(values.at(-1), '0 0')
+  const dur = Number(found[2])
+  assert.ok(dur >= 6 && dur <= 8, `glance every ${dur}s`)
+  const still = clawdSvg('idle', 'calm', { animate: false, palette: LIGHT })
+  assert.ok(!still.includes('<animate'))
+  assert.ok(still.includes('<g><g><rect x="6" y="5.2"') || still.includes('<g><rect x="6" y="5.2"'), 'still eyes are not centred')
+  // Only the watching pose glances.
+  assert.ok(![...clawdSvg('think', 'calm', { animate: true, palette: LIGHT }).matchAll(glance)].some(m => (m[1] ?? '').includes('-0.6 0;-0.6 0')))
+})

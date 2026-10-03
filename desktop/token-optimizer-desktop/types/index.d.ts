@@ -62,6 +62,8 @@ export type TokenOptimizerDesktopState = TokenOptimizerDesktopSession | null
 /** Start fresh's hand-off, waiting for the new session's first prompt (KTD10). */
 export type TokenOptimizerDesktopHandoff = {
   fromSessionId: string
+  /** The project it was saved in; it joins a new session in that project only, within 30 minutes. */
+  cwd: string
   checkpointPath: string
   text: string
   /** `$.clock.now()` when it was recorded (ms). */

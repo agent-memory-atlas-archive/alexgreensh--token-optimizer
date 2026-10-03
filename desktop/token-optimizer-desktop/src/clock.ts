@@ -47,9 +47,11 @@ const seconds = (l: Lifetime): number => (l === '1h' ? 3600 : 300)
 export function reduceClock(state: ClockState, event: ClockEvent, now?: number): ClockState {
   switch (event.type) {
     case 'request-done':
+      // An older request than the anchor says nothing about the cache now (TR-20).
+      if (state.anchor !== null && event.at < state.anchor) return state
       return {
         ...state,
-        anchor: state.anchor === null ? event.at : Math.max(state.anchor, event.at),
+        anchor: event.at,
         lifetime: event.lifetime ?? state.lifetime,
         contextTokens: event.contextTokens,
         lapsed: false,

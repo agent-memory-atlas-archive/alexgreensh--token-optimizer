@@ -14,6 +14,10 @@ export const WARM_PROMPT = 'Reply with exactly: ok'
 export const HANDOFF_KEY = 'handoff'
 /** compact-capture reads a transcript; generous, still bounded. */
 export const CAPTURE_TIMEOUT_MS = 30_000
+/** The budget compact-capture is given (`--budget-seconds`), under CAPTURE_TIMEOUT_MS so it answers first. */
+export const CAPTURE_BUDGET_SECONDS = 25
+/** A saved hand-off joins a new session only this soon after it was saved (Token Optimizer's resumable window). */
+export const HANDOFF_TTL_MS = 30 * 60_000
 /** resume-lean is a token-free read of checkpoints and the session log. */
 export const RESUME_TIMEOUT_MS = 20_000
 
@@ -31,7 +35,18 @@ export type UiState = {
   freshArmedAt: number | null
 }
 
-export type Handoff = { fromSessionId: string; checkpointPath: string; text: string; createdAt: number }
+/** `cwd` is the project the hand-off was saved in: it joins a new session there only (TR-05). */
+export type Handoff = { fromSessionId: string; cwd: string; checkpointPath: string; text: string; createdAt: number }
+
+/**
+ * Why a saved hand-off must not join a session in `cwd` at `now`, as the end
+ * of a one-line note; null when it fits: same project, within HANDOFF_TTL_MS.
+ */
+export function handoffMisfit(h: Handoff, at: { cwd: string; now: number }): string | null {
+  if (h.cwd !== at.cwd) return 'it was saved in another project'
+  if (at.now - h.createdAt > HANDOFF_TTL_MS) return 'it is more than 30 minutes old'
+  return null
+}
 
 export function initialUi(): UiState {
   return { busy: null, busySince: null, note: null, noteUntil: 0, freshArmedAt: null }
@@ -141,17 +156,18 @@ export type HandoffResult = { ok: true; handoff: Handoff } | { ok: false; reason
  */
 export async function prepareHandoff(
   port: HandoffPort,
-  input: { sessionId: string; transcriptPath: string | null; now: number },
+  input: { sessionId: string; transcriptPath: string | null; cwd: string; now: number },
 ): Promise<HandoffResult> {
   const fail = (reason: string): HandoffResult => ({ ok: false, reason })
   const stdin = JSON.stringify(input.transcriptPath ? { session_id: input.sessionId, transcript_path: input.transcriptPath } : { session_id: input.sessionId })
 
   let captured: { exitCode: number; stdout: string }
   try {
-    captured = await port.run(['compact-capture', '--trigger', 'start-fresh'], stdin)
+    captured = await port.run(['compact-capture', '--trigger', 'start-fresh', '--budget-seconds', String(CAPTURE_BUDGET_SECONDS)], stdin)
   } catch {
     return fail('the checkpoint could not be saved')
   }
+  if (captured.exitCode !== 0) return fail('the checkpoint could not be saved')
   const path = checkpointPathFrom(captured.stdout)
   if (!path) return fail('the checkpoint could not be saved')
 
@@ -172,5 +188,5 @@ export async function prepareHandoff(
   const text = lean.exitCode === 0 ? lean.stdout.trim() : ''
   if (!text) return fail('the hand-off text came out empty')
 
-  return { ok: true, handoff: { fromSessionId: input.sessionId, checkpointPath: path, text, createdAt: input.now } }
+  return { ok: true, handoff: { fromSessionId: input.sessionId, cwd: input.cwd, checkpointPath: path, text, createdAt: input.now } }
 }
