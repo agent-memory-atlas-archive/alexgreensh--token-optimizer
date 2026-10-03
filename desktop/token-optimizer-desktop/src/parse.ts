@@ -152,6 +152,10 @@ export function parseQualityCache(json: unknown, nowEpoch: number): Quality | nu
     compactions: count(cache.compactions) ?? 0,
     checkpointEpoch: epoch(cache.last_checkpoint_epoch, nowEpoch),
     sessionStartEpoch: epoch(cache.session_start_ts, nowEpoch),
+    fillPct: (() => {
+      const f = num(cache.fill_pct)
+      return f !== null && f >= 0 && f <= 100 ? f : null
+    })(),
   }
 }
 

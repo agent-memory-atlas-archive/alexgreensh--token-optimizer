@@ -23,7 +23,7 @@ test('five marks for a healthy subscriber, each with an icon and alt text', () =
   assert.equal(q!.tone, 'good')
   assert.equal(ctx!.value, '34%')
   assert.equal(ctx!.ringPercent, 34)
-  assert.equal(cache!.value, '41:23')
+  assert.equal(cache!.value, '42m') // minutes: the band redraws once a minute, never per second
   assert.equal(cache!.tone, 'good')
   assert.equal(five!.value, '41%')
   assert.equal(five!.label, '5 hours')
@@ -56,7 +56,7 @@ test('cache mark per state', () => {
   const unknown = marks(snap({ cache: { state: 'unknown', secondsLeft: null, lifetime: 300, measured: false, tokensAtStake: null } }), TZ)[2]!
   assert.equal(unknown.value, '--')
   const warn = marks(snap({ cache: { state: 'warning', secondsLeft: 42, lifetime: 300, measured: false, tokensAtStake: 1 } }), TZ)[2]!
-  assert.equal(warn.value, '0:42')
+  assert.equal(warn.value, '1m')
   assert.equal(warn.tone, 'caution')
   assert.equal(warn.ringPercent, 14)
   assert.match(warn.alt, /estimate/)
@@ -88,7 +88,7 @@ test('cache card offers Keep warm only when warm or warning and measured', () =>
 
 test('warning cache card flags the tokens at stake', () => {
   const c = cacheCard({ state: 'warning', secondsLeft: 40, lifetime: 3600, measured: true, tokensAtStake: 720_000 })
-  assert.equal(c.title, 'Drops in 0:40')
+  assert.equal(c.title, 'Drops in 1m')
   assert.deepEqual(c.body.filter((r) => r.lose), [{ text: '720k tokens', lose: true }])
 })
 

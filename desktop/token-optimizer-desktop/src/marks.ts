@@ -71,7 +71,7 @@ function cacheMark(c: CacheView): Mark {
       const left = c.secondsLeft ?? 0
       const tone: Tone = c.state === 'warm' ? 'good' : 'caution'
       const word = c.state === 'warm' ? 'warm' : 'about to drop'
-      return { ...base, icon: 'hourglass', value: clock(left), tone, ringPercent: clamp((left / c.lifetime) * 100), alt: `Cache ${word}, ${clock(left)} left, ${est}` }
+      return { ...base, icon: 'hourglass', value: minutes(left), tone, ringPercent: clamp((left / c.lifetime) * 100), alt: `Cache ${word}, ${minutes(left)} left, ${est}` }
     }
     case 'cold':
       return { ...base, icon: 'cold', value: 'cold', tone: 'cold', ringPercent: 0, alt: `Cache cold, ${est}` }
@@ -141,14 +141,14 @@ function cacheCard(c: CacheView): Card {
     case 'warm':
       return {
         id: 'cache',
-        title: `Warm for ${clock(c.secondsLeft ?? 0)}`,
+        title: `Warm for ${minutes(c.secondsLeft ?? 0)}`,
         body: [plain(stake != null ? `Messages re-read ${tokens(stake)} tokens at a tenth of the price.` : 'Messages re-read the context at a tenth of the price.'), plain(est)],
         actions: warm,
       }
     case 'warning':
       return {
         id: 'cache',
-        title: c.secondsLeft != null ? `Drops in ${clock(c.secondsLeft)}` : 'Drops soon',
+        title: c.secondsLeft != null ? `Drops in ${minutes(c.secondsLeft)}` : 'Drops soon',
         body: [
           ...(stake != null ? [plain('Then the next message re-reads '), loseRun(stake), plain(' at full price.')] : [plain('Then the next message re-reads the whole context at full price.')]),
           plain(est),

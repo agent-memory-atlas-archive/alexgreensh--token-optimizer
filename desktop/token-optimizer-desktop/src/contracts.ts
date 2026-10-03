@@ -49,6 +49,8 @@ export type Quality = {
   compactions: number
   checkpointEpoch: number | null
   sessionStartEpoch: number | null
+  /** Token Optimizer's own context fill, %; known right after a compact, before the next reply. */
+  fillPct?: number | null
 }
 
 /** What `measure.py status-bar` returns, reduced to what the band shows. */

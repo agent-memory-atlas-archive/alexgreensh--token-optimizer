@@ -258,8 +258,9 @@ async function tick($: EngineInterface): Promise<void> {
       lastCold = cold
       await feedPose($, { type: 'cache-cold-changed', cold })
     }
-    // Only a change the band shows redraws it: the cache clock counts seconds, as the design does.
-    const shown = v.secondsLeft ?? ''
+    // Only a change the band shows redraws it, at most once a minute: the desktop restarts
+    // Clawd's picture on every redraw, so a per-second countdown made him blink each second.
+    const shown = v.secondsLeft != null ? Math.ceil(v.secondsLeft / 60) : ''
     const text = [v.state, shown, Math.floor(now / TICK_IDLE_MS), busyNow(ui, now), noteNow(ui, now), isArmed(ui, now)].join('|')
     if (text !== frameText) {
       frameText = text
@@ -827,22 +828,6 @@ function toneColor(tone: MarkTone, t: Tones): string {
   return tone === 'none' ? t.track : t[tone]
 }
 
-/** The savings bars as one small picture: today in the good colour, the rest on the track. */
-function barsSvg(bars: number[], t: Tones): { source: string; alt: string; width: number } {
-  const width = bars.length * 6
-  const alt = `Tokens saved by Token Optimizer on each of the past ${bars.length} days`
-  const body = bars
-    .map((h, i) => {
-      const height = Math.max(2, Math.round((h / 100) * 28))
-      return i === bars.length - 1
-        ? `<rect x="${i * 6}" y="${28 - height}" width="4" height="${height}" rx="1.5" fill="${t.good}"/>`
-        : `<rect class="tf" x="${i * 6}" y="${28 - height}" width="4" height="${height}" rx="1.5" fill="${t.track}"/>`
-    })
-    .join('')
-  return { source: themed(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="28" viewBox="0 0 ${width} 28" role="img" aria-label="${alt}"><title>${alt}</title>${body}</svg>`), alt, width }
-}
-
-
 function runsOf(D: Desktop, runs: Run[], t: Tones) {
   const { Text } = D
   return runs.map(r => (r.lose ? <Text bold color={t.bad}>{r.text}</Text> : r.strong ? <Text bold>{r.text}</Text> : r.text))
@@ -870,9 +855,6 @@ type Model = {
   /** While watching: one picture per look, each shown while the pointer is over its part of the band. */
   gazes: (ClawdLayer & { gaze: Gaze })[]
 }
-
-/** Hovering Clawd lights the more/less arrow under him: the two read as one control. */
-const MORE_SCOPE = 'token-optimizer-more'
 
 /** The hover group that turns Clawd's eyes toward one part of the band. */
 const gazeScope = (g: Gaze): string => `token-optimizer-gaze-${g}`
@@ -943,7 +925,6 @@ function drawBand(D: Desktop, m: Model, on: Handlers) {
   const markList = marks(snap)
   const cardList = cards(snap)
   const detail = row(snap)
-  const bars = m.narrow ? detail.savings.bars.slice(-14) : detail.savings.bars
   // A card action joins the row only when the moment calls for it (quality sagging, the cache
   // about to drop) and the sentence's own button is not already offering it.
   const q = snap.quality
@@ -953,27 +934,30 @@ function drawBand(D: Desktop, m: Model, on: Handlers) {
     ...(m.canWarm && snap.cache.state === 'warning' ? [{ id: 'warm' as const, label: 'Keep warm' }] : []),
   ].filter(a => a.id !== say.action?.id && !(a.id === 'clean' && say.action?.id === 'clean-first'))
 
-  const savingsBlock = (
-    <Box flexDirection="row" alignItems="center" columnGap={2}>
-      {bars.length > 0 ? (() => {
-        const b = barsSvg(bars, t)
-        return <Svg source={b.source} alt={b.alt} width={b.width} height={28} />
-      })() : icon(D, 'bookmark', t.ink, 'Savings')}
-      <Box flexDirection="column">
-        {(detail.savings.sessionTokens ?? 0) >= SESSION_SAVED_MIN ? (
-          <Text>
-            <Text bold>{detail.savings.sessionText}</Text> saved this session
-          </Text>
-        ) : (
-          ''
-        )}
-        <Text>
-          <Text bold>{detail.savings.last30Text}</Text> past 30 days
-        </Text>
-        {detail.savings.state === 'unavailable' ? <Text>{m.savingsReason ?? detail.savings.reason ?? ''}</Text> : ''}
+  // Said as a sentence: a bare "47M past 30 days" reads like tokens spent, and a 30-bar
+  // chart ruled by one big day said nothing. The total is the dashboard's own.
+  const sessionSaved = (detail.savings.sessionTokens ?? 0) >= SESSION_SAVED_MIN
+  const savingsBlock =
+    detail.savings.state === 'unavailable' && detail.savings.last30Tokens == null ? (
+      <Box flexDirection="row" alignItems="center" columnGap={1}>
+        {icon(D, 'saved', t.ink)}
+        <Text>{m.savingsReason ?? detail.savings.reason ?? ''}</Text>
       </Box>
-    </Box>
-  )
+    ) : (
+      <Box flexDirection="row" alignItems="center" columnGap={1}>
+        {icon(D, 'saved', t.good)}
+        <Text>
+          Token Optimizer saved you <Text bold>{detail.savings.last30Text}</Text> tokens in the last 30 days
+          {sessionSaved ? (
+            <Text>
+              , <Text bold>{detail.savings.sessionText}</Text> of them this session
+            </Text>
+          ) : (
+            ''
+          )}
+        </Text>
+      </Box>
+    )
 
   // The artifact's layout: Clawd and his arrow beside the sentence and the marks; the
   // unfolded row under all of it, from Clawd's left edge, savings on the right.
@@ -982,8 +966,9 @@ function drawBand(D: Desktop, m: Model, on: Handlers) {
       <Box flexDirection="row" alignItems="center" columnGap={2}>
         <Box flexDirection="row" alignItems="center" columnGap={1} flexShrink={0}>
           {/* Box sizes count text cells on desktop, so the bottom picture sizes the stack and the new one sits over it.
-              Hovering Clawd lights the arrow beside him: only a Button can be pressed, and its label is text. */}
-          <Box position="relative" hover={{ scope: MORE_SCOPE }}>
+              Only a Button can be pressed, and its label is text, so the arrow beside him opens the row. */}
+          {/* No hover on this Box: the desktop rebuilds a hover box's pictures on every redraw (Clawd blanked once a second). */}
+          <Box position="relative">
             {m.clawd.map((c, i) => (
               <Box key={c.key} {...(i === 0 ? {} : { position: 'absolute' as const, top: 0, left: 0 })}>
                 {/* Not isInteractive: the desktop reloads an interactive picture on every redraw (a blank frame); a plain one keeps its animation. */}
@@ -1002,7 +987,6 @@ function drawBand(D: Desktop, m: Model, on: Handlers) {
             <Button
               key="details"
               label={m.sheetOpen ? '▴' : '▾'}
-              hover={{ scope: MORE_SCOPE, bold: true, color: LIGHT.skin }}
               onPress={() => on.details()}
             />
           </Box>
@@ -1273,7 +1257,7 @@ export const register: Register = (on, options) => {
       now,
       working,
       quality: s?.quality ?? null,
-      contextPercent: s?.contextPercent ?? null,
+      contextPercent: s?.contextPercent ?? s?.quality?.fillPct ?? null,
       contextTokens: s?.contextTokens ?? null,
       contextWindow: s?.contextWindow ?? null,
       fiveHour: s?.fiveHour ?? null,
@@ -1293,7 +1277,9 @@ export const register: Register = (on, options) => {
     const palette = LIGHT
     const poseNow = pose?.pose ?? 'idle'
     const mood = moodOf(snap)
-    const clawdSource = clawdSvg(poseNow, mood, { animate, palette })
+    // A fade only for a pose change; a steady Clawd redraws with none, or every redraw would replay it.
+    const changing = clawdTop !== null && clawdTop.key !== `clawd-${poseNow}-${mood}-${animate ? 'a' : 's'}`
+    const clawdSource = clawdSvg(poseNow, mood, { animate, palette, fadeIn: changing || (clawdUnder !== null && clawdUnder.until > now) })
     const clawd = clawdLayers(
       $,
       { key: `clawd-${poseNow}-${mood}-${animate ? 'a' : 's'}`, source: clawdSource, alt: /aria-label="([^"]*)"/.exec(clawdSource)?.[1] ?? 'Clawd' },

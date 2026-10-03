@@ -44,7 +44,7 @@ test('desktop draws Clawd, "Token Optimizer", the sentence and five marks', asyn
   }
   expect((await exactly(ui, '62%')).length).toBeGreaterThan(0)
   expect((await exactly(ui, '88')).length).toBeGreaterThan(0)
-  expect((await exactly(ui, '59:30')).length).toBeGreaterThan(0)
+  expect((await exactly(ui, '60m')).length).toBeGreaterThan(0)
 
   // Every Svg names its state (R18).
   for (const svg of svgs) {
@@ -89,7 +89,7 @@ test("the arrow under Clawd unfolds the row, points up while open, and folds it 
   expect(await ui.find({ key: 'row' })).toBeDefined()
   expect((await exactly(ui, 'feat/band')).length).toBeGreaterThan(0)
   expect((await exactly(ui, '41k')).length).toBeGreaterThan(0)
-  expect((await ui.findAll({ type: 'Svg' })).some(s => String(s.props.alt).startsWith('Tokens saved'))).toBe(true)
+  expect(await ui.find({ type: 'Text', text: /Token Optimizer saved you/ })).toBeDefined()
 
   await ui.press({ key: 'details' })
   expect(await ui.find({ key: 'row' })).toBeUndefined()
@@ -119,9 +119,9 @@ test('without savings the row shows "--" totals and the reason, and every other 
   await ui.press({ key: 'details' })
 
   // Only the 30-day total: "saved this session" stays off below 1K.
-  expect((await exactly(ui, '--')).length).toBe(1)
+  // No figures to state: the reason stands alone, never a "saved you --" sentence.
+  expect(await ui.find({ type: 'Text', text: /saved you/ })).toBeUndefined()
   expect((await exactly(ui, 'Savings database not found.')).length).toBeGreaterThan(0)
-  expect((await ui.findAll({ type: 'Svg' })).some(s => String(s.props.alt).startsWith('Tokens saved'))).toBe(false)
   expect((await exactly(ui, 'feat/band')).length).toBeGreaterThan(0)
   expect((await exactly(ui, '1h 0m')).length).toBeGreaterThan(0)
   expect(await ui.find({ type: 'Text', text: /12 tool calls/ })).toBeDefined()

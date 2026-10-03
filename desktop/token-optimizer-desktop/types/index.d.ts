@@ -21,6 +21,8 @@ export type TokenOptimizerDesktopQuality = {
   checkpointEpoch: number | null
   /** Epoch seconds. */
   sessionStartEpoch: number | null
+  /** Token Optimizer's own context fill, %. */
+  fillPct?: number | null
 }
 
 export type TokenOptimizerDesktopSavings = {

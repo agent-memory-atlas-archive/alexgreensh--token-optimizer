@@ -40,7 +40,14 @@ test('quality: resource health wins over the legacy score, with its own grade', 
     compactions: 2,
     checkpointEpoch: 1_790_985_684,
     sessionStartEpoch: 1_790_879_584,
+    fillPct: q!.fillPct, // whatever the fixture's fill_pct holds, checked on its own below
   })
+})
+
+test('quality: fill_pct comes through as a percent; out-of-range is dropped', () => {
+  const base = JSON.parse(JSON.stringify(QUALITY))
+  assert.equal(parseQualityCache(JSON.stringify({ ...base, fill_pct: 0.4 }), NOW)!.fillPct, 0.4)
+  assert.equal(parseQualityCache(JSON.stringify({ ...base, fill_pct: 140 }), NOW)!.fillPct, null)
 })
 
 test('quality: an older cache without resource health falls back to score and grade', () => {
