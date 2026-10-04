@@ -39474,10 +39474,17 @@ def _maybe_fresh_session_nudge(result, cache_path, quality_data, quiet=False):
     if not (score < _FRESH_NUDGE_QUALITY_THRESHOLD and fill_pct >= _FRESH_NUDGE_MIN_FILL):
         return None
 
+    session_id = Path(cache_path).stem.replace("quality-cache-", "", 1) if cache_path else None
+    # The flag above lives in the quality cache, which other writes can replace
+    # (a lost race, an unreadable transcript). A marker file claimed with
+    # O_EXCL keeps "once per session" true whatever happens to the cache, and
+    # only one of two racing processes can claim it.
+    if _ran_once_this_session("fresh-nudge", session_id):
+        result["_fresh_nudge_fired"] = True
+        return None
     saved, _window = _fresh_session_savings_estimate(
         fill_pct, window=result.get("model_context_window"))
     result["_fresh_nudge_fired"] = True
-    session_id = Path(cache_path).stem.replace("quality-cache-", "", 1) if cache_path else None
     _log_compression_event(
         feature="fresh_session_nudge",
         session_id=session_id,
@@ -39869,6 +39876,11 @@ def quality_cache(throttle_seconds=120, warn_threshold=70, quiet=False, session_
             # Same bump bookkeeping as the full path: one count per compaction.
             if (_prev_empty or {}).get("_compact_bumped_at"):
                 result["_compact_bumped_at"] = _prev_empty["_compact_bumped_at"]
+            # Keep the nudge and warning state too: dropping it re-arms nudges
+            # that already fired once the transcript parses again.
+            for carry_key in _CARRY_KEYS:
+                if carry_key in (_prev_empty or {}):
+                    result[carry_key] = _prev_empty[carry_key]
             try:
                 _prev_n = int((_prev_empty or {}).get("compactions", 0) or 0)
             except (TypeError, ValueError, OverflowError):
