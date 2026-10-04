@@ -30445,7 +30445,12 @@ _CHECKPOINT_MAX_FILES = _int_env("TOKEN_OPTIMIZER_CHECKPOINT_FILES", 10)
 # common stop/end triggers and produced 0 restores; checkpoint freshness for
 # fire-cooldown is handled separately by _CHECKPOINT_COOLDOWN_SECONDS.
 _CHECKPOINT_RETENTION_DAYS = _int_env("TOKEN_OPTIMIZER_CHECKPOINT_RETENTION_DAYS", 7)
-_CHECKPOINT_RETENTION_MAX = _int_env("TOKEN_OPTIMIZER_CHECKPOINT_RETENTION_MAX", 50)
+# Retention is per session: each session keeps its newest few checkpoints plus
+# the newest of each trigger, so one busy session can never push another
+# session's checkpoints out. RETENTION_MAX is only a disk ceiling across all
+# sessions; under it, every session's newest checkpoint is the last to go.
+_CHECKPOINT_RETENTION_MAX = _int_env("TOKEN_OPTIMIZER_CHECKPOINT_RETENTION_MAX", 400)
+_CHECKPOINT_PER_SESSION = _int_env("TOKEN_OPTIMIZER_CHECKPOINT_PER_SESSION", 5)
 # Relevance gating: the lightweight prompt-continuity hint used to
 # inject a full multi-line `[RECOVERED DATA ...]` block for any prior session
 # scoring as low as 0.30, even when the prior session was on a DIFFERENT topic.
@@ -37846,8 +37851,70 @@ def list_checkpoints(max_age_minutes=None):
     return checkpoints
 
 
+_CHECKPOINT_NAME_RE = re.compile(r"^(?P<sid>.+)-\d{8}-\d{6}(?:-(?P<trigger>[^.]+))?\.md$")
+
+
+def _checkpoint_session(filename):
+    """The session id a checkpoint filename belongs to, or the filename itself."""
+    match = _CHECKPOINT_NAME_RE.match(filename)
+    return match.group("sid") if match else filename
+
+
+def _checkpoints_to_prune(checkpoints, now=None, days=None, total_max=None, per_session=None):
+    """The checkpoints retention removes, from a newest-first list_checkpoints() list.
+
+    Pure, so every concurrent writer reaches the same answer from what it sees:
+    - older than the retention window: removed;
+    - per session: the newest `per_session`, plus the newest of each trigger
+      (restore prefers earlier, richer saves over late stop saves), are kept;
+    - over the disk ceiling: extra saves go oldest first, then sessions' newest
+      saves oldest first, so a session's newest checkpoint is the last to go.
+    A session's newest checkpoint is removed only by age or the ceiling, never
+    by another session's activity. A file a writer has not seen yet is never in
+    its list, so it cannot be removed by that writer.
+    """
+    now = now or datetime.now()
+    days = _CHECKPOINT_RETENTION_DAYS if days is None else days
+    total_max = max(1, _CHECKPOINT_RETENTION_MAX if total_max is None else total_max)
+    per_session = max(1, _CHECKPOINT_PER_SESSION if per_session is None else per_session)
+    cutoff = now - timedelta(days=days)
+
+    prune = [cp for cp in checkpoints if cp["created"] < cutoff]
+    newest, extra = [], []
+    seen = {}
+    for cp in checkpoints:
+        if cp["created"] < cutoff:
+            continue
+        sid = _checkpoint_session(cp["filename"])
+        kept = seen.setdefault(sid, {"count": 0, "triggers": set()})
+        trigger = cp.get("trigger") or "auto"
+        if kept["count"] == 0:
+            newest.append(cp)
+        elif kept["count"] < per_session or trigger not in kept["triggers"]:
+            extra.append(cp)
+        else:
+            prune.append(cp)
+            continue
+        kept["count"] += 1
+        kept["triggers"].add(trigger)
+
+    over = len(newest) + len(extra) - total_max
+    if over > 0:
+        drop_extra = extra[::-1][:over]
+        prune.extend(drop_extra)
+        over -= len(drop_extra)
+    if over > 0:
+        prune.extend(newest[::-1][:over])
+    return prune
+
+
 def _cleanup_checkpoints():
-    """Remove old checkpoints beyond retention limits."""
+    """Remove checkpoints beyond retention limits (see _checkpoints_to_prune).
+
+    One bounded pass with no retries. Concurrent runs are safe: each removes
+    only files it listed, a missing file is skipped, and every run keeps the
+    newest checkpoint of each session it sees.
+    """
     if not CHECKPOINT_DIR.exists():
         return
 
@@ -37855,24 +37922,16 @@ def _cleanup_checkpoints():
     if not checkpoints:
         return
 
-    cutoff = datetime.now() - timedelta(days=_CHECKPOINT_RETENTION_DAYS)
-    removed = 0
-
-    for i, cp in enumerate(checkpoints):
-        # Keep up to max, remove if beyond max OR older than retention
-        if i >= _CHECKPOINT_RETENTION_MAX or cp["created"] < cutoff:
-            try:
-                cp["path"].unlink()
-                # Also delete sibling JSON sidecar if present.
-                sidecar = cp["path"].with_suffix(".json")
-                if sidecar.exists():
-                    try:
-                        sidecar.unlink()
-                    except OSError:
-                        pass
-                removed += 1
-            except OSError:
-                pass
+    for cp in _checkpoints_to_prune(checkpoints):
+        try:
+            cp["path"].unlink()
+        except OSError:
+            continue
+        # Also delete the sibling JSON sidecar if present.
+        try:
+            cp["path"].with_suffix(".json").unlink()
+        except OSError:
+            pass
 
 
 def _cleanup_quality_cache():
@@ -46737,15 +46796,28 @@ def _status_bar_checkpoint_epoch(session_id):
 
 
 def _status_bar_cached_checkpoint_epoch(session_id):
-    """last_checkpoint_epoch from the freshest quality-cache-<sid>.json, or None."""
+    """last_checkpoint_epoch from the freshest quality-cache-<sid>.json, or None.
+
+    None when the checkpoint it names is no longer on disk (retention removed
+    it), so the band never reports a save that cannot be restored.
+    """
     best = _status_bar_freshest(f"quality-cache-{session_id}.json")
     if best is None:
         return None
     try:
-        val = json.loads(best.read_text(encoding="utf-8")).get("last_checkpoint_epoch")
+        cache = json.loads(best.read_text(encoding="utf-8"))
+        val = cache.get("last_checkpoint_epoch")
+        saved = cache.get("last_checkpoint_path")
     except (OSError, ValueError, AttributeError):
         return None
     if isinstance(val, bool) or not isinstance(val, (int, float)):
+        return None
+    if not isinstance(saved, str) or not saved:
+        return None
+    try:
+        if not Path(saved).is_file():
+            return None
+    except (OSError, ValueError):
         return None
     return val
 

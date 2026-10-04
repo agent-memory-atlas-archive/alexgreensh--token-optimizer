@@ -242,16 +242,38 @@ def test_command_reads_transcript_by_session_id(sb):
 # Checkpoint saved time: freshest quality cache across storage dirs
 # --------------------------------------------------------------------------
 
+def _saved(sb, name):
+    cp = sb._sb_claude / "elsewhere" / name
+    cp.parent.mkdir(parents=True, exist_ok=True)
+    cp.write_text("# checkpoint", encoding="utf-8")
+    os.utime(cp, (10, 10))
+    return str(cp)
+
+
 def test_checkpoint_epoch_from_freshest_quality_cache(sb):
     old = sb._sb_claude / "token-optimizer" / f"quality-cache-{SID_A}.json"
-    old.write_text(json.dumps({"last_checkpoint_epoch": 1000}), encoding="utf-8")
+    old.write_text(json.dumps({"last_checkpoint_epoch": 1000,
+                               "last_checkpoint_path": _saved(sb, "old.md")}), encoding="utf-8")
     os.utime(old, (time.time() - 600, time.time() - 600))
     plugin_dir = (sb._sb_claude / "plugins" / "data"
                   / "token-optimizer-alexgreensh-token-optimizer" / "token-optimizer")
     plugin_dir.mkdir(parents=True)
     (plugin_dir / f"quality-cache-{SID_A}.json").write_text(
-        json.dumps({"last_checkpoint_epoch": 2000}), encoding="utf-8")
+        json.dumps({"last_checkpoint_epoch": 2000,
+                    "last_checkpoint_path": _saved(sb, "new.md")}), encoding="utf-8")
     assert sb._status_bar_checkpoint_epoch(SID_A) == 2000
+
+
+def test_checkpoint_epoch_ignores_a_save_retention_removed(sb):
+    # The quality cache still names the save after retention deleted the file.
+    gone = _saved(sb, "gone.md")
+    Path(gone).unlink()
+    (sb._sb_claude / "token-optimizer" / f"quality-cache-{SID_A}.json").write_text(
+        json.dumps({"last_checkpoint_epoch": 2000, "last_checkpoint_path": gone}), encoding="utf-8")
+    assert sb._status_bar_checkpoint_epoch(SID_A) is None
+    (sb._sb_claude / "token-optimizer" / f"quality-cache-{SID_A}.json").write_text(
+        json.dumps({"last_checkpoint_epoch": 2000}), encoding="utf-8")
+    assert sb._status_bar_checkpoint_epoch(SID_A) is None
 
 
 def test_checkpoint_epoch_counts_stop_checkpoint_files(sb):

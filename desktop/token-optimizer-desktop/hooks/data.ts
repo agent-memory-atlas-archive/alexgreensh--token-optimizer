@@ -404,7 +404,12 @@ export async function gather(
     'compactions' in facts && facts.compactions != null ? facts.compactions : 0,
     base?.quality?.compactions ?? 0,
   )
-  const merged = quality && known > quality.compactions ? { ...quality, compactions: known } : quality
+  const counted = quality && known > quality.compactions ? { ...quality, compactions: known } : quality
+  // A status answer has already checked the checkpoint file is still on disk, so it wins
+  // over the quality cache, which keeps naming a save after retention removes it.
+  const answered = status !== null && typeof status === 'object'
+  const checkpointEpoch = notFound ? null : answered ? facts.checkpointEpoch : newer(quality?.checkpointEpoch ?? null, facts.checkpointEpoch)
+  const merged = counted && answered ? { ...counted, checkpointEpoch } : counted
 
   return {
     sessionId: sid,
@@ -413,11 +418,11 @@ export async function gather(
     ...usage,
     branch,
     ...facts,
-    // The newer of the two: the quality cache knows quality saves the moment they land,
-    // the status command also knows stop and compaction saves (checkpoint files).
+    // Without a status answer, the newer of the two: the quality cache knows quality saves
+    // the moment they land, the status command also knows stop and compaction saves.
     ...seen,
     sawLimits,
-    checkpointEpoch: notFound ? null : newer(quality?.checkpointEpoch ?? null, facts.checkpointEpoch),
+    checkpointEpoch,
     sheetOpen: base?.sheetOpen ?? false,
   }
 }

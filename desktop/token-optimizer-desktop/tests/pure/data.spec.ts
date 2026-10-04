@@ -42,7 +42,7 @@ type World = {
   files: Record<string, [mtimeMs: number, contents: string]>
   dataDirs: string[]
   git: 'branch' | 'no-repo' | 'missing'
-  status: 'ok' | 'timeout' | 'loading' | 'noisy'
+  status: 'ok' | 'timeout' | 'loading' | 'noisy' | 'removed'
   runs: { argv: string[]; timeoutMs: number }[]
 }
 
@@ -119,6 +119,11 @@ function fakeIo(w: World): DataIo {
         return { exitCode: 0, stdout: JSON.stringify({ savings: null, savings_state: 'loading', savings_reason: 'computing savings' }) }
       }
 
+      if (w.status === 'removed') {
+        // The status command checked the files: retention removed this session's checkpoint.
+        return { exitCode: 0, stdout: JSON.stringify({ ...JSON.parse(STATUS), last_checkpoint_epoch: null }) }
+      }
+
       return { exitCode: 0, stdout: STATUS }
     },
   }
@@ -178,6 +183,20 @@ test('a typed clear is caught by the id alone: a stored atom of another session 
   assert.equal(shouldReset(next, 'sess-2'), false)
   assert.equal(shouldReset(next, 'sess-3'), true)
   assert.equal(shouldReset(null, 'sess-2'), true)
+})
+
+test('a checkpoint the status command no longer finds is not shown from the quality cache', async () => {
+  const w = withTokenOptimizer(world({ status: 'removed' }))
+  w.files[`${LEGACY_DIR}/quality-cache-sess-1.json`] = [1, quality(77, 2)]
+
+  const s = await gather(fakeIo(w), null, { savings: true })
+  assert.equal(s.checkpointEpoch, null)
+  assert.equal(s.quality?.checkpointEpoch, null)
+
+  // Without a status answer the quality cache still fills in.
+  w.status = 'timeout'
+  const offline = await gather(fakeIo(w), null, { savings: true })
+  assert.equal(offline.checkpointEpoch, NOW_MS / 1000 - 600)
 })
 
 test('a status command that times out keeps the last savings and does not throw', async () => {

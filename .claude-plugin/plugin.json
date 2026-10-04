@@ -16,5 +16,6 @@
     "audit",
     "cost",
     "coach"
-  ]
+  ],
+  "types": "./desktop/token-optimizer-desktop/types/index.d.ts"
 }
