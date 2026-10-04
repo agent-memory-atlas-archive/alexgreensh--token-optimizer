@@ -1,5 +1,10 @@
 # Changelog
 
+## [5.13.33] - 2026-10-04
+
+- The "start a fresh session" tip shows once per session, as intended, instead of returning on later prompts.
+- Clean up in the desktop status bar says when Claude Code skips the compaction, instead of reporting "Cleaned up."
+
 ## [5.13.32] - 2026-10-04
 
 - Every session now keeps its own checkpoints, so running several sessions at once no longer clears out the quiet ones. Applies on every platform that saves checkpoints through Token Optimizer's engine.
