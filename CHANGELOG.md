@@ -1,5 +1,11 @@
 # Changelog
 
+## [5.13.34] - 2026-10-05
+
+- Works with the new OpenCode 2 plugin system, alongside the current one. Thanks to the contributor who built it.
+- OpenCode tracking counts compactions and failed steps once each, and stays accurate when events repeat.
+- The OpenCode plugin downloads at less than half its old size.
+
 ## [5.13.33] - 2026-10-04
 
 - The "start a fresh session" tip shows once per session, as intended, instead of returning on later prompts.
