@@ -69,6 +69,32 @@ test('a skipped compaction returns the sentence to its rule and names the skip',
   expect(await has(ui, said!)).toBe(true)
 })
 
+test('a /compact Claude Code refuses says why instead of "Cleaned up."', async ($, on) => {
+  const w = stub(on, { compact: 'refused' })
+  await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+
+  await ui.press({ key: 'card-quality-clean' })
+  await w.clock.settle()
+  expect(w.compacts).toBe(1)
+  expect(w.toasts).toEqual(['Clean up skipped: Not enough messages to compact.'])
+  expect(await has(ui, 'Clean up skipped: Not enough messages to compact.')).toBe(true)
+  expect(await has(ui, 'Cleaned up.')).toBe(false)
+})
+
+test('a /compact that prints "Compacted" counts as cleaned up', async ($, on) => {
+  const w = stub(on, { compact: 'said-compacted' })
+  await $.session.start(START)
+  await w.clock.settle() // the status read runs just after the start
+  const ui = await $.ui.mount({ ...BAND, surface: 'desktop' })
+
+  await ui.press({ key: 'card-quality-clean' })
+  await w.clock.settle()
+  expect(w.toasts).toEqual([])
+  expect(await has(ui, 'Cleaned up.')).toBe(true)
+})
+
 test('a compaction that hangs past the timeout no longer says "Cleaning up."', async ($, on) => {
   const w = stub(on, { compact: 'hang' })
   await $.session.start(START)

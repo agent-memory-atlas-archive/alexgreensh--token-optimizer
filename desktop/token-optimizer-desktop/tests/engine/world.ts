@@ -61,7 +61,7 @@ export type World = {
   capture: 'ok' | 'fail' | 'stub'
   lean: string
   /** How Clean up's /compact answers: a compaction, a refusal, or never. */
-  compact: 'ok' | 'skip' | 'hang'
+  compact: 'ok' | 'skip' | 'hang' | 'refused' | 'said-compacted'
   /** How `$.model.fork()` answers. */
   fork: { read: number } | 'nothing'
   theme: string
@@ -318,6 +318,9 @@ export function stub(on: On, patch: Partial<Omit<World, 'clock' | 'runs' | 'toas
       w.compacts += 1
       if (w.compact === 'hang') await w.clock.sleep(10 * 60_000)
       if (w.compact === 'skip') throw new Error('nothing to compact')
+      // What Claude Code really does when there is too little to compact: it answers, it does not throw.
+      if (w.compact === 'refused') return { text: 'Not enough messages to compact.' }
+      if (w.compact === 'said-compacted') return { text: 'Compacted (ctrl+o to see full summary)' }
     }
     if (e.command === 'clear' && w.clearBeneath) await w.clearBeneath()
     return { text: '' }

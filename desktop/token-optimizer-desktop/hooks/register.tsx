@@ -125,6 +125,8 @@ let engineCall: 'compact' | 'clear' | null = null
 let engineCallAt = 0
 /** The live session a render last asked to re-read after finding another session's figures. */
 let resyncFor = ''
+/** Compactions that landed in this process, so Clean up can tell one happened during its /compact. */
+let compactionsLanded = 0
 
 const attempt = async <T,>(work: () => Promise<T>, fallback: T): Promise<T> => {
   try {
@@ -575,7 +577,12 @@ async function runCompact($: EngineInterface, since: number): Promise<void> {
     try {
       // The command, as if typed: $.session.compact() is refused in a headless
       // session, and the desktop app runs its sessions headless.
-      await $.command.run({ command: 'compact' })
+      const landedBefore = compactionsLanded
+      const answer = await $.command.run({ command: 'compact' })
+      // Claude Code answers a refused /compact ("Not enough messages to compact.")
+      // without throwing: no compaction landed, and its line says why.
+      const said = answer?.text?.trim().split('\n')[0] ?? ''
+      if (compactionsLanded === landedBefore && said !== '' && !/^compacted\b/i.test(said)) skip = said
     } catch (error) {
       skip = error instanceof Error && error.message ? error.message.split('\n')[0] ?? 'it failed' : 'it failed'
     } finally {
@@ -1337,6 +1344,7 @@ export const register: Register = on => {
       // The band watched this one land: count it now, before Claude Code writes its
       // marker to the transcript (it does so late) and before Token Optimizer re-reads.
       if (!('skip' in result && result.skip)) {
+        compactionsLanded += 1
         await attempt(
           () =>
             update($, sessionAtom, cur =>
