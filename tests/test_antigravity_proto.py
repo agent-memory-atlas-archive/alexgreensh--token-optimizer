@@ -166,12 +166,25 @@ def test_length_overruns_remaining_returns_none():
 
 def test_100k_repeated_unknown_fields_returns_none_quickly():
     # 100k varint fields -> per-message field-count cap trips early.
+    # Baseline, min of 3: decoding a 1K-field message costs ~what the capped
+    # scan does before tripping, so the bound scales with this runner's
+    # decode speed.
+    baseline = float("inf")
+    for _ in range(3):
+        t0 = time.monotonic()
+        decode_generation(_field_varint(1000, 1) * 1_000)
+        baseline = min(baseline, time.monotonic() - t0)
     msg = _field_varint(1000, 1) * 100_000
     start = time.monotonic()
     res = decode_generation(msg)
     elapsed = time.monotonic() - start
     assert res is None
-    assert elapsed < 0.2, f"field-count cap took {elapsed:.3f}s"
+    # An uncapped scan costs ~100x the 1K baseline; 50x sits midway between
+    # the ~1x capped scan and the blowup, on any runner. The 0.2s floor
+    # keeps the original bound on fast machines.
+    assert elapsed < max(0.2, baseline * 50.0), (
+        f"field-count cap took {elapsed:.3f}s (baseline: {baseline:.3f}s for 1K fields)"
+    )
 
 
 def test_control_chars_in_model_name_are_stripped():

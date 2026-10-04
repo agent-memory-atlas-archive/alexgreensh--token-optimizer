@@ -365,18 +365,44 @@ sys.exit(m.main())
     env = os.environ.copy()
     env["CLAUDE_PLUGIN_ROOT"] = str(REPO)
     env["CLAUDE_CONFIG_DIR"] = str(tmp_path / "claude")
+    # Baseline, min of 2: the same subprocess with a fast subcommand -- this
+    # runner's spawn + runner exec cost before any deadline wait.
+    baseline = float("inf")
+    for _ in range(2):
+        b0 = time.monotonic()
+        base_proc = subprocess.run(
+            [sys.executable, "-c", code.replace("time.sleep(60)", "None")],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=30,
+        )
+        baseline = min(baseline, time.monotonic() - b0)
+        assert base_proc.returncode == 0, (
+            f"baseline run must exit 0: {base_proc.stderr[-2000:]}"
+        )
     started = time.monotonic()
-    proc = subprocess.run(
-        [sys.executable, "-c", code],
-        capture_output=True,
-        text=True,
-        env=env,
-        timeout=30,
-    )
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail(
+            "a hung subcommand ran to the 30s test ceiling; the six-entry "
+            "wiring let it run to the host's 15s ceiling"
+        )
     elapsed = time.monotonic() - started
     assert proc.returncode == 0, f"hung hook must still exit 0: {proc.stderr[-2000:]}"
-    assert elapsed < 8.0, (
-        f"a hung subcommand ran {elapsed:.1f}s against a 1.0s shared deadline; "
+    # The 1.0s shared deadline adds ~1s over the baseline; a missed deadline
+    # runs to the host's 15s ceiling (or the 30s ceiling), however slow the
+    # runner. +8s sits midway between the ~1s healthy wait and the 15s broken.
+    assert elapsed < baseline + 8.0, (
+        f"a hung subcommand ran {elapsed:.1f}s against a 1.0s shared deadline "
+        f"({baseline:.1f}s baseline); "
         "the six-entry wiring let it run to the host's 15s ceiling"
     )
 

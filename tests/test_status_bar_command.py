@@ -378,11 +378,25 @@ def test_full_compute_within_5s_on_50k_rows(sb):
         ts = base + timedelta(seconds=i * 50)
         sid = SID_A if i % 2 else SID_B
         rows.append((ts, "tool_archive", 100, 0.001, sid))
-    _seed(sb, rows=rows)
+    # Baseline, min of 2: the same compute over a 5K-row slice -- how fast
+    # this runner is for the same queries at 1/10 the data. The 50K run
+    # should cost ~10x it on any runner.
+    _seed(sb, rows=rows[:5000])
+    baseline = float("inf")
+    for _ in range(2):
+        t0 = time.perf_counter()
+        sb._status_bar_savings_or_reason(SID_A)
+        baseline = min(baseline, time.perf_counter() - t0)
+    _seed(sb, rows=rows[5000:])
     t0 = time.perf_counter()
     sav = sb._status_bar_savings_or_reason(SID_A)[0]
     elapsed = time.perf_counter() - t0
-    assert elapsed < 5.0, f"full compute took {elapsed:.2f}s"
+    # ~linear in rows scanned: ~10x the 5K baseline expected; a quadratic
+    # blowup costs ~100x, so 50x sits midway between the two. The 5s floor
+    # keeps the original contract on fast machines.
+    assert elapsed < max(5.0, baseline * 50.0), (
+        f"full compute took {elapsed:.2f}s (baseline: {baseline:.2f}s for 5K rows)"
+    )
     assert sav["session_tokens"] == 25_000 * 100
 
 

@@ -61,7 +61,7 @@ def test_deadline_hard_exits_blocking_operations_without_platform_guards(blocker
         "socket": "a, b = socket.socketpair(); a.recv(1)",
         "subprocess": (
             "subprocess.Popen([sys.executable, '-c', "
-            "'import time; time.sleep(1.5)'], stdout=subprocess.DEVNULL, "
+            "'import time; time.sleep(10)'], stdout=subprocess.DEVNULL, "
             "stderr=subprocess.DEVNULL).wait()"
         ),
     }[blocker]
@@ -74,10 +74,15 @@ from hook_runtime import HookDeadline
 HookDeadline(0.15).start()
 {setup}
 """
+    # Bare-interpreter startup on this runner, min of 3: the 0.15s deadline
+    # plus import and stderr write should add well under 1s on top of it; a
+    # missed deadline waits out the block (10s+ or the 60s run timeout),
+    # however slow the runner. +5s sits midway between the two.
+    startup = min(_python("pass")[1] for _ in range(3))
     result, elapsed = _python(code)
     assert (
         result.returncode == 0
-        and 0.08 <= elapsed < 0.9
+        and 0.08 <= elapsed < startup + 5.0
         and "hook budget exceeded" in result.stderr
     )
 
@@ -120,10 +125,11 @@ while True:
 os.set_blocking(2, True)
 from hook_runtime import HookDeadline
 HookDeadline(0.15).start()
-time.sleep(2)
+time.sleep(10)
 """
+    startup = min(_python("pass")[1] for _ in range(3))
     result, elapsed = _python(code)
-    assert result.returncode == 0 and 0.08 <= elapsed < 0.9
+    assert result.returncode == 0 and 0.08 <= elapsed < startup + 5.0
 
 
 def test_live_pid_does_not_prevent_expired_lease_recovery(tmp_path):
@@ -416,13 +422,31 @@ def test_many_contenders_have_one_winner_and_bounded_losers(tmp_path):
     code = """
 import sys, time
 from hook_runtime import LeaseLock
-lock = LeaseLock(sys.argv[1], acquire_timeout=0.075)
+lock = LeaseLock(sys.argv[1], acquire_timeout=0.075, lease_seconds=20)
 if lock.acquire():
     with open(sys.argv[2], "a", encoding="utf-8") as out:
         out.write("won\\n")
     time.sleep(0.2)
     lock.release()
 """
+    # Identical single spawns first, min of 2: how long a cold interpreter +
+    # lease acquire takes on this runner. Twelve parallel spawns can serialize
+    # on a loaded runner, so the bound scales with per-spawn cost. A loser
+    # that misses its 0.075s acquire bound waits out the 20s lease instead,
+    # so the bound is also capped at 18s -- midway between healthy and broken
+    # on any runner, however fast the spawns are.
+    baseline = float("inf")
+    for i in range(2):
+        base_started = time.monotonic()
+        base = subprocess.run(
+            [sys.executable, "-c", code,
+             str(tmp_path / f"base{i}.lease"), str(tmp_path / f"base{i}-wins.txt")],
+            env=_child_env(),
+        )
+        baseline = min(baseline, time.monotonic() - base_started)
+        assert base.returncode == 0
+    bound = min(baseline * 12 + 8.0, 18.0)
+
     started = time.monotonic()
     processes = [
         subprocess.Popen(
@@ -431,10 +455,10 @@ if lock.acquire():
         )
         for _ in range(12)
     ]
-    codes = [process.wait(timeout=60) for process in processes]
+    codes = [process.wait(timeout=max(60, bound + 15)) for process in processes]
     elapsed = time.monotonic() - started
     wins = wins_path.read_text().splitlines()
-    assert codes == [0] * 12 and wins == ["won"] and elapsed < 1.2
+    assert codes == [0] * 12 and wins == ["won"] and elapsed < bound
 
 
 def test_owner_hard_exit_recovers_only_after_lease_expiry(tmp_path):

@@ -59,10 +59,10 @@ MEASURE_PY = REPO / "skills" / "token-optimizer" / "scripts" / "measure.py"
 # deadline fires os._exit(0) ~20s after _install_hook_budget(20) is called,
 # which itself runs after measure.py's import/setup (~0.4-1s). The lower bound
 # proves the collect did not finish instantly (the vacuous case); the upper
-# bound proves the deadline fired well before any "no budget" run could be
-# confused with it (the no-budget control never EOFs at all).
+# bound -- measured against this runner's own measure.py startup -- proves
+# the deadline fired well before any "no budget" run could be confused with
+# it (the no-budget control never EOFs at all).
 EOF_LOWER = 18
-EOF_UPPER = 26
 
 # The no-budget control probe. Must exceed the 20s deadline by enough to prove
 # "without the budget, the read blocks past the deadline window". The FIFO has
@@ -152,23 +152,44 @@ def test_collect_deadline_closes_stdout_pipe(tmp_path):
     ``python measure.py collect --quiet`` fossil shape, and asserts stdout
     EOFs in a tight window around the 20s budget. Because the FIFO makes
     normal completion impossible, the ONLY thing that can close the pipe is
-    the HookDeadline, so an EOF in 18<elapsed<26 proves the deadline fired.
+    the HookDeadline, so an EOF just past the 20s arm proves it fired.
     """
     env = _blocking_collect_env(tmp_path)
+    # measure.py's own startup on this runner (parse + ~35K-line exec +
+    # dispatch), timed with --version, min of 2: the 20s budget is armed only
+    # after that point, so the EOF window's upper bound scales with it
+    # instead of assuming ~1s of startup.
+    startup = float("inf")
+    for _ in range(2):
+        s0 = time.monotonic()
+        subprocess.run(
+            [sys.executable, str(MEASURE_PY), "--version"],
+            env=env, capture_output=True, timeout=60,
+        )
+        startup = min(startup, time.monotonic() - s0)
+    # +8s past the armed deadline: midway between the ~1s healthy overshoot
+    # and a very-late fire; a deadline that never fires is caught by the eof
+    # assert below regardless of this bound.
+    eof_upper = 20.0 + startup + 8.0
     proc = _launch_collect(env)
     try:
-        data, elapsed, eof = _read_until_eof_or_timeout(proc, timeout=EOF_UPPER + 4)
+        data, elapsed, eof = _read_until_eof_or_timeout(proc, timeout=eof_upper + 4)
+        if not eof:
+            # Kill before the assert below reads proc.stderr: a still-alive
+            # blocking collect would hold that pipe open forever.
+            proc.kill()
         assert eof, (
-            f"stdout pipe did NOT EOF within {EOF_UPPER + 4:.0f}s of a blocking "
+            f"stdout pipe did NOT EOF within {eof_upper + 4:.0f}s of a blocking "
             f"collect (elapsed={elapsed:.1f}s). The 20s HookDeadline never fired "
             f"os._exit(0) -- the fix is absent or regressed. stderr="
             f"{proc.stderr.read().decode(errors='replace')[:300]!r}"
         )
-        assert EOF_LOWER < elapsed < EOF_UPPER, (
-            f"stdout EOF'd at {elapsed:.2f}s, outside the tight 20s-deadline "
-            f"window ({EOF_LOWER}<{elapsed:.2f}<{EOF_UPPER}). A sub-{EOF_LOWER}s "
-            f"EOF means collect did not actually block (vacuous); a >{EOF_UPPER}s "
-            f"EOF means the deadline fired late or not at all. stderr="
+        assert EOF_LOWER < elapsed < eof_upper, (
+            f"stdout EOF'd at {elapsed:.2f}s, outside the 20s-deadline window "
+            f"({EOF_LOWER}<{elapsed:.2f}<{eof_upper:.1f}; {startup:.1f}s "
+            f"startup). A sub-{EOF_LOWER}s EOF means collect did not actually "
+            f"block (vacuous); a >{eof_upper:.1f}s EOF means the deadline "
+            f"fired late or not at all. stderr="
             f"{proc.stderr.read().decode(errors='replace')[:300]!r}"
         )
         # The deadline exits 0 (os._exit(0)); a non-zero exit would mean
@@ -264,6 +285,19 @@ def test_hookdeadline_closes_inherited_stdout_pipe_crossplatform():
         "HookDeadline(%r).start()\n" % _DEADLINE_SECONDS
         + "time.sleep(600)\n"  # block far past the deadline; only os._exit ends it
     )
+    # Child startup on this runner (interpreter spawn + hook_runtime import),
+    # min of 3: the deadline fires _DEADLINE_SECONDS after the import, so the
+    # upper window scales with that cost instead of assuming ~1s of it.
+    startup = float("inf")
+    for _ in range(3):
+        s0 = time.monotonic()
+        subprocess.run(
+            [sys.executable, "-c",
+             "import sys; sys.path.insert(0, r'%s'); "
+             "from hook_runtime import HookDeadline" % _SCRIPTS],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        startup = min(startup, time.monotonic() - s0)
     proc = subprocess.Popen(
         [sys.executable, "-c", child],
         stdout=subprocess.PIPE,
@@ -284,11 +318,16 @@ def test_hookdeadline_closes_inherited_stdout_pipe_crossplatform():
             )
     # EOF must arrive from the deadline firing (~2s), not instantly (which would
     # mean the child exited on its own, proving nothing) and not unbounded.
+    # +4s past the armed deadline sits midway between the ~0.1s healthy
+    # overshoot of a timer thread and a fire at 2-3x the budget (or the 600s
+    # block, which the read timeout bounds).
+    eof_upper = _DEADLINE_SECONDS + startup + 4.0
     assert data == b"", f"expected empty stdout (child writes nothing), got {data!r}"
-    assert _DEADLINE_SECONDS - 0.5 < elapsed < _DEADLINE_SECONDS + 6.0, (
+    assert _DEADLINE_SECONDS - 0.5 < elapsed < eof_upper, (
         f"stdout pipe EOF'd at {elapsed:.2f}s, outside the HookDeadline window "
-        f"(~{_DEADLINE_SECONDS}s). A sub-{_DEADLINE_SECONDS}s EOF means the child "
-        f"exited without the deadline; a >{_DEADLINE_SECONDS + 6:.0f}s EOF means "
+        f"(~{_DEADLINE_SECONDS}s + {startup:.1f}s startup). A "
+        f"sub-{_DEADLINE_SECONDS}s EOF means the child exited without the "
+        f"deadline; a >{eof_upper:.0f}s EOF means "
         "os._exit never fired and the pipe was held open (the wedge)."
     )
     assert proc.returncode == 0, f"HookDeadline must os._exit(0); got {proc.returncode}"

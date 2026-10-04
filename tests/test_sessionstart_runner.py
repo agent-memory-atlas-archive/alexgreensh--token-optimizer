@@ -480,6 +480,21 @@ def test_shared_deadline_bounds_total_wall_time(monkeypatch, tmp_path):
     _install_fake_deadline(monkeypatch, runner, total=0.5)
     calls, _marker_dir = _install_call_recorder(monkeypatch, runner, tmp_path)
 
+    # Baseline, min of 2: the same main() dispatch with every entry fast,
+    # under different session ids so the real once-per-session markers stay
+    # clean for the timed run. This is the runner's own dispatch cost on
+    # this machine.
+    baseline = float("inf")
+    for i in range(2):
+        monkeypatch.setattr(
+            runner, "_read_hook_input",
+            lambda i=i: {"session_id": f"sess-ss-baseline-{i}", "source": "compact"})
+        b0 = time.monotonic()
+        assert runner.main() == 0
+        baseline = min(baseline, time.monotonic() - b0)
+    for recorded in calls.values():
+        recorded.clear()
+
     def _slow_ensure_health():
         calls["ensure_health"].append({})
         time.sleep(0.7)  # burn the entire 0.5s shared budget
@@ -501,9 +516,14 @@ def test_shared_deadline_bounds_total_wall_time(monkeypatch, tmp_path):
     assert calls["compact_restore_compact"] == []
     assert calls["clear_compacted"] == []
     assert calls["compact_restore_new_session"] == []
-    assert elapsed < 2.0, (
+    # The 0.7s budget burn adds ~0.7s over baseline dispatch; the historical
+    # regression ran the later subcommands under five independent timeouts
+    # (~85s declared). +5s sits midway between healthy and that broken shape;
+    # the calls asserts above already own the skip-detection.
+    assert elapsed < baseline + 5.0, (
         f"total wall time {elapsed:.2f}s must stay bounded by the one shared "
-        "budget, not by the sum of five per-entry timeouts"
+        f"budget ({baseline:.2f}s baseline dispatch), not by the sum of five "
+        "per-entry timeouts"
     )
 
 

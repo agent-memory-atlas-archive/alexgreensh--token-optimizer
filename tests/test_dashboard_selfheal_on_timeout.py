@@ -31,16 +31,26 @@ def test_deadline_runs_on_timeout_callbacks_before_exiting(tmp_path):
         d = HookDeadline(0.3, on_timeout=lambda: open({str(marker)!r}, "w").write("a"))
         d.add_on_timeout(lambda: open({str(marker)!r}, "a").write("b"))
         d.start()
-        time.sleep(5)
+        time.sleep(15)
         print("should never get here")
         """
     )
+    # Bare-interpreter startup on this runner, min of 3: the 0.3s deadline
+    # plus the callbacks add ~0.3s on top of it; a missed deadline waits out
+    # the child's 15s sleep, however slow the runner. +8s sits midway.
+    startup = float("inf")
+    for _ in range(3):
+        s0 = time.perf_counter()
+        subprocess.run([sys.executable, "-c", "pass"], capture_output=True, timeout=30)
+        startup = min(startup, time.perf_counter() - s0)
     t0 = time.perf_counter()
     proc = subprocess.run([sys.executable, "-c", child], capture_output=True, timeout=30)
     elapsed = time.perf_counter() - t0
     assert proc.returncode == 0, proc.stderr
     assert b"never" not in proc.stdout
-    assert elapsed < 3.0, f"watchdog did not fire promptly ({elapsed:.1f}s)"
+    assert elapsed < startup + 8.0, (
+        f"watchdog did not fire promptly ({elapsed:.1f}s vs {startup:.1f}s startup)"
+    )
     assert marker.read_text() == "ab", "both timeout callbacks must run, in order"
     assert b"hook budget exceeded" in proc.stderr
 
@@ -55,10 +65,30 @@ def test_hanging_callback_cannot_delay_the_exit(tmp_path):
         time.sleep(30)
         """
     )
+    # Bare-interpreter startup on this runner, min of 3: the watchdog's hard
+    # exit lands ~0.2s after it; a missed deadline waits out the 60s hanging
+    # callback (and the 30s run ceiling). +10s sits midway between the two.
+    startup = float("inf")
+    for _ in range(3):
+        s0 = time.perf_counter()
+        subprocess.run([sys.executable, "-c", "pass"], capture_output=True, timeout=30)
+        startup = min(startup, time.perf_counter() - s0)
     t0 = time.perf_counter()
-    proc = subprocess.run([sys.executable, "-c", child], capture_output=True, timeout=30)
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", child], capture_output=True, timeout=30
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail(
+            "the 60s hanging callback delayed the watchdog's exit past the "
+            "30s test ceiling"
+        )
     assert proc.returncode == 0
-    assert time.perf_counter() - t0 < 5.0
+    elapsed = time.perf_counter() - t0
+    assert elapsed < startup + 10.0, (
+        f"hanging callback delayed the exit ({elapsed:.1f}s vs "
+        f"{startup:.1f}s startup)"
+    )
 
 
 def test_normal_completion_never_runs_callbacks(tmp_path):

@@ -126,6 +126,19 @@ def test_rollup_bounded_on_blocking_collect(subcommand, collect_name, tmp_path):
     """A blocking collect is terminated by the armed deadline, not allowed to
     hang.  On unfixed code no deadline is armed so the subprocess sleeps the
     full block and hits the 60s timeout -> TimeoutExpired -> test fails."""
+    # The same subprocess with a fast collect, min of 2: how long this runner
+    # takes for interpreter startup + measure.py exec alone (no deadline wait).
+    baseline = float("inf")
+    for _ in range(2):
+        base_proc, sample = _run_rollup_subprocess(
+            subcommand, collect_name, tmp_path,
+            block=0, budget=5.0,
+        )
+        assert base_proc.returncode == 0, (
+            f"{subcommand} baseline run exit code {base_proc.returncode}; "
+            f"stderr={base_proc.stderr!r}"
+        )
+        baseline = min(baseline, sample)
     try:
         proc, elapsed = _run_rollup_subprocess(
             subcommand, collect_name, tmp_path,
@@ -139,9 +152,12 @@ def test_rollup_bounded_on_blocking_collect(subcommand, collect_name, tmp_path):
     assert proc.returncode == 0, (
         f"{subcommand} exit code {proc.returncode}; stderr={proc.stderr!r}"
     )
-    # 0.3s budget + ~0.3s process startup; well under the 60s hang ceiling.
-    assert elapsed < 4.0, (
-        f"{subcommand} did not bounded-exit: took {elapsed:.2f}s "
+    # The 0.3s watchdog adds ~0.3s over the baseline run; a missed deadline
+    # waits out the 30s block (or the 60s timeout), however slow the runner.
+    # +10s sits midway between the ~0.3s healthy wait and the 30s broken one.
+    assert elapsed < baseline + 10.0, (
+        f"{subcommand} did not bounded-exit: took {elapsed:.2f}s against a "
+        f"{baseline:.2f}s startup baseline "
         f"(deadline should have fired at ~0.3s)"
     )
 

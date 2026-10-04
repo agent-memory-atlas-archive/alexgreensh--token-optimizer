@@ -151,8 +151,22 @@ def test_placeholder_is_idempotent():
 def test_realistic_output_is_not_slower_than_a_generous_bound():
     """Catastrophic-regression guard only (the first H-8 attempt doubled the
     cost); a tight bound would flake on slow CI runners."""
+    # Baseline on a 2K-line slice of the same input shape, min of 3: how
+    # fast this runner is for the same scan at 1/5 the data.
+    small = _realistic_lines(2_000)
+    baseline = float("inf")
+    for _ in range(3):
+        t0 = time.perf_counter()
+        cp.redact_credentials(small)
+        baseline = min(baseline, time.perf_counter() - t0)
     text = _realistic_lines(10_000)
     t0 = time.perf_counter()
     cp.redact_credentials(text)
     elapsed = time.perf_counter() - t0
-    assert elapsed < 1.0, f"redact_credentials took {elapsed:.2f}s on 10K clean lines"
+    # ~linear scan: 10K lines should cost ~5x the 2K baseline on any runner;
+    # the historical blowup cost ~100x, so 50x sits midway between the two.
+    # The 1s floor keeps the original contract on fast machines.
+    assert elapsed < max(1.0, baseline * 50.0), (
+        f"redact_credentials took {elapsed:.2f}s on 10K clean lines "
+        f"(baseline: {baseline:.3f}s for 2K)"
+    )

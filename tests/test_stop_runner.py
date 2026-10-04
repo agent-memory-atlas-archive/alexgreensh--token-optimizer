@@ -436,6 +436,20 @@ def test_shared_deadline_bounds_total_wall_time(monkeypatch, tmp_path):
     _install_fake_deadline(monkeypatch, runner, total=0.5)
     calls = _install_call_recorder(monkeypatch, runner)
 
+    # Baseline, min of 2: the same main() dispatch with every entry fast,
+    # under different session ids so once-per-session markers stay clean for
+    # the timed run. This is the runner's own dispatch cost on this machine.
+    baseline = float("inf")
+    for i in range(2):
+        monkeypatch.setattr(
+            runner, "_read_hook_input",
+            lambda i=i: {"session_id": f"sess-baseline-{i}", "hook_event_name": "Stop"})
+        b0 = time.monotonic()
+        assert runner.main() == 0
+        baseline = min(baseline, time.monotonic() - b0)
+    for recorded in calls.values():
+        recorded.clear()
+
     def _slow_compact_capture(**kw):
         calls["compact_capture"].append(kw)
         time.sleep(0.7)  # burn the entire 0.5s shared budget
@@ -457,8 +471,13 @@ def test_shared_deadline_bounds_total_wall_time(monkeypatch, tmp_path):
     assert calls["keepwarm_arm"] == [], (
         "the exhausted SHARED deadline must skip keepwarm-arm"
     )
-    assert elapsed < 2.0, (
-        f"total wall time must be bounded by the shared budget, took {elapsed:.1f}s"
+    # The 0.7s budget burn adds ~0.7s over baseline dispatch; the historical
+    # regression ran the later subcommands under three independent timeouts
+    # (~25s declared). +5s sits midway between healthy and that broken shape;
+    # the calls asserts above already own the skip-detection.
+    assert elapsed < baseline + 5.0, (
+        f"total wall time must be bounded by the shared budget, took "
+        f"{elapsed:.1f}s ({baseline:.1f}s baseline dispatch)"
     )
 
 

@@ -237,6 +237,12 @@ def test_every_budget_clears_the_smallest_host_ceiling_with_margin():
 def test_over_budget_entry_exits_zero_with_no_output_and_does_not_hang(
     tmp_path, module, args, budget
 ):
+    # Baseline, min of 2: the same entry through module_runner with a hook
+    # that returns instantly -- this runner's spawn + dispatch cost before
+    # any budget wait.
+    (tmp_path / "base").mkdir()
+    base_scripts = _stub_tree(tmp_path / "base", module, "pass\n")
+    startup = min(_run_entry(base_scripts, module, args)[1] for _ in range(2))
     scripts = _stub_tree(tmp_path, module, BLOCK_FOREVER)
     proc, elapsed = _run_entry(scripts, module, args, timeout=60)
 
@@ -244,7 +250,12 @@ def test_over_budget_entry_exits_zero_with_no_output_and_does_not_hang(
     assert proc.stdout == "", f"over-budget hook wrote stdout: {proc.stdout!r}"
     assert proc.stderr == "", f"over-budget hook wrote stderr: {proc.stderr!r}"
     # Fired at the budget, not at the host ceiling and not at the 110s backstop.
-    assert elapsed < budget + 3.0, f"took {elapsed:.1f}s against a {budget}s budget"
+    # Startup is this runner's own dispatch cost; a missed budget waits out the
+    # 60s stub, so +8.0s of slack sits midway between the two on any runner.
+    assert elapsed < startup + budget + 8.0, (
+        f"took {elapsed:.1f}s against a {budget}s budget "
+        f"({startup:.1f}s startup baseline)"
+    )
     assert elapsed >= budget * 0.5, (
         f"exited after {elapsed:.2f}s, well before its {budget}s budget -- the "
         "deadline is firing early, not on time"
@@ -295,7 +306,18 @@ sys.stderr.write("diagnostic\\n")
     assert proc.returncode == 0
     assert json.loads(proc.stdout)["hookSpecificOutput"]["ok"] is True
     assert "diagnostic" in proc.stderr
-    assert elapsed < 5.0
+    # Bare-interpreter startup on this runner, min of 3: a fast hook adds no
+    # meaningful wait; the original contract was <5s, and a delay of several
+    # seconds (a wait past budget, a ceiling) is the broken shape. +3.0s sits
+    # midway between the ~0.2s healthy overhead and that regression.
+    startup = float("inf")
+    for _ in range(3):
+        s0 = time.monotonic()
+        subprocess.run([sys.executable, "-c", "pass"], capture_output=True)
+        startup = min(startup, time.monotonic() - s0)
+    assert elapsed < startup + 3.0, (
+        f"under-budget entry took {elapsed:.1f}s ({startup:.1f}s startup baseline)"
+    )
 
 
 def test_budget_does_not_change_how_a_raising_hook_behaves(tmp_path):
