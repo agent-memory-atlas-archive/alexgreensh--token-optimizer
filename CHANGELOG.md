@@ -1,5 +1,11 @@
 # Changelog
 
+## [5.13.32] - 2026-10-04
+
+- Every session now keeps its own checkpoints, so running several sessions at once no longer clears out the quiet ones. Applies on every platform that saves checkpoints through Token Optimizer's engine.
+- The desktop status bar only shows a checkpoint that is still there to restore.
+- Passes the stricter plugin check in Claude Code 2.1.289.
+
 ## [5.13.31] - 2026-10-04
 
 - The desktop status bar comes alive again: Clawd follows what your session is doing, and the arrow, Clean up, Start fresh and Keep warm respond to a click.
