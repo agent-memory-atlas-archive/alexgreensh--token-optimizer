@@ -325,12 +325,21 @@ def test_cached_answer_is_fast_and_reports_age(sb, monkeypatch):
     _three_day_fixture(sb)
     spawns = []
     monkeypatch.setattr(sb, "spawn_detached", lambda argv, **kw: spawns.append(argv) or object())
+    f0 = time.perf_counter()
     fresh = sb.status_bar_payload(SID_A, sync=True)
+    fresh_elapsed = time.perf_counter() - f0
     assert fresh["savings"]["session_tokens"] == 6500
     t0 = time.perf_counter()
     out = sb.status_bar_payload(SID_A)
     elapsed = time.perf_counter() - t0
-    assert elapsed < 0.3, f"cached path took {elapsed:.3f}s"
+    # Bound scaled to this machine's own fresh-compute cost: a cache that is
+    # secretly ignored pays the full compute again, so 0.6x the fresh call
+    # sits between the two on any runner — with no absolute floor for a fast
+    # machine to hide the regression under. The 5ms min only covers a
+    # degenerate ~0ms fresh measurement.
+    assert elapsed < max(0.005, fresh_elapsed * 0.6), (
+        f"cached path took {elapsed:.3f}s (fresh compute: {fresh_elapsed:.3f}s)"
+    )
     assert out["savings"]["session_tokens"] == 6500
     assert out["savings_state"] == "fresh"
     assert 0 <= out["savings_age_s"] < 60
@@ -378,24 +387,42 @@ def test_full_compute_within_5s_on_50k_rows(sb):
         ts = base + timedelta(seconds=i * 50)
         sid = SID_A if i % 2 else SID_B
         rows.append((ts, "tool_archive", 100, 0.001, sid))
-    # Baseline, min of 2: the same compute over a 5K-row slice -- how fast
-    # this runner is for the same queries at 1/10 the data. The 50K run
-    # should cost ~10x it on any runner.
+    # Untimed warm-up on a 5K-row slice: absorbs lazy costs so the 50K
+    # measurement below is pure throughput on this machine.
     _seed(sb, rows=rows[:5000])
-    baseline = float("inf")
-    for _ in range(2):
-        t0 = time.perf_counter()
-        sb._status_bar_savings_or_reason(SID_A)
-        baseline = min(baseline, time.perf_counter() - t0)
+    sb._status_bar_savings_or_reason(SID_A)
     _seed(sb, rows=rows[5000:])
+
+    # Bound scaled by an INDEPENDENT fixed workload — one plain aggregate over
+    # the very table the compute scans, through the module's own db opener.
+    # A same-function baseline would scale with the slowdown being guarded
+    # against (a uniform ~5x regression is invisible to it), and the old 5s
+    # absolute floor let a ~3.4s quadratic blowup stay green on this machine.
+    def _probe():
+        conn = sb._init_trends_db()
+        try:
+            return conn.execute(
+                "SELECT COUNT(*), SUM(tokens_saved) FROM savings_events"
+            ).fetchone()
+        finally:
+            conn.close()
+
+    probe = float("inf")
+    for _ in range(3):
+        p0 = time.perf_counter()
+        _probe()
+        probe = min(probe, time.perf_counter() - p0)
+
     t0 = time.perf_counter()
     sav = sb._status_bar_savings_or_reason(SID_A)[0]
     elapsed = time.perf_counter() - t0
-    # ~linear in rows scanned: ~10x the 5K baseline expected; a quadratic
-    # blowup costs ~100x, so 50x sits midway between the two. The 5s floor
-    # keeps the original contract on fast machines.
-    assert elapsed < max(5.0, baseline * 50.0), (
-        f"full compute took {elapsed:.2f}s (baseline: {baseline:.2f}s for 5K rows)"
+    # Healthy compute costs ~50x the aggregate probe idle, ~140x under 4xCPU
+    # contention (the tiny probe absorbs less load than the full compute);
+    # a quadratic blowup lands ~6700x, so 500x sits between loaded-healthy
+    # and broken on any runner.
+    assert elapsed < probe * 500.0, (
+        f"full compute took {elapsed:.2f}s "
+        f"(probe: {probe:.4f}s for one aggregate over the same table)"
     )
     assert sav["session_tokens"] == 25_000 * 100
 

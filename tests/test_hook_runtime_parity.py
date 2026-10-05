@@ -419,10 +419,11 @@ def test_acquire_stops_waiting_after_timeout(tmp_path, monkeypatch):
 def test_many_contenders_have_one_winner_and_bounded_losers(tmp_path):
     lock_path = tmp_path / "race.lease"
     wins_path = tmp_path / "wins.txt"
-    code = """
+    lease_seconds = 30
+    code = f"""
 import sys, time
 from hook_runtime import LeaseLock
-lock = LeaseLock(sys.argv[1], acquire_timeout=0.075, lease_seconds=20)
+lock = LeaseLock(sys.argv[1], acquire_timeout=0.075, lease_seconds={lease_seconds})
 if lock.acquire():
     with open(sys.argv[2], "a", encoding="utf-8") as out:
         out.write("won\\n")
@@ -432,9 +433,9 @@ if lock.acquire():
     # Identical single spawns first, min of 2: how long a cold interpreter +
     # lease acquire takes on this runner. Twelve parallel spawns can serialize
     # on a loaded runner, so the bound scales with per-spawn cost. A loser
-    # that misses its 0.075s acquire bound waits out the 20s lease instead,
-    # so the bound is also capped at 18s -- midway between healthy and broken
-    # on any runner, however fast the spawns are.
+    # that misses its 0.075s acquire bound waits out the 30s lease instead,
+    # so the bound is also capped at 0.9x the lease -- midway between healthy
+    # and broken on any runner, however fast the spawns are.
     baseline = float("inf")
     for i in range(2):
         base_started = time.monotonic()
@@ -444,8 +445,10 @@ if lock.acquire():
             env=_child_env(),
         )
         baseline = min(baseline, time.monotonic() - base_started)
-        assert base.returncode == 0
-    bound = min(baseline * 12 + 8.0, 18.0)
+        assert base.returncode == 0, (
+            f"baseline spawn failed: rc={base.returncode} {base.stderr[-2000:]}"
+        )
+    bound = min(baseline * 12 + 8.0, lease_seconds * 0.9)
 
     started = time.monotonic()
     processes = [
@@ -616,11 +619,18 @@ def test_config_contention_is_bounded_and_skips_mutation(
     # Behavioral guarantee (the point of the test): while the lock is held
     # elsewhere, the write is SKIPPED — no mutation, no indefinite block.
     assert holder_acquired and not config_path.exists()
-    # Timing is a generous ceiling that only catches a genuine hang: the config
-    # lock's acquire_timeout is 75ms, so a correct skip returns fast. The bound is
-    # deliberately loose (26x the timeout) so process/FS jitter on a loaded CI
-    # runner can't flake it — measuring performance is not this test's job.
-    assert elapsed < 2.0, f"config write blocked for {elapsed:.2f}s (should skip fast)"
+    # Baseline: the same write uncontended, on this runner's FS. The skipped
+    # path costs one acquire poll cycle (75ms timeout) on top of the same FS
+    # ops, while a broken skip waits out the holder's 10s lease — baseline +
+    # 0.75s sits midway between the two on any machine, unlike a fixed 2s
+    # that a ~5s partial-block regression could hide under.
+    b0 = time.monotonic()
+    module._write_config_flag("baseline_probe", True)
+    baseline = time.monotonic() - b0
+    assert elapsed < baseline + 0.75, (
+        f"config write blocked for {elapsed:.2f}s (should skip fast; "
+        f"uncontended baseline: {baseline:.3f}s)"
+    )
 
 
 def test_throttle_only_cache_miss_never_parses_transcript(

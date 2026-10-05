@@ -128,6 +128,20 @@ def test_acquire_still_respects_the_deadline_under_real_contention(tmp_path):
         t0 = time.monotonic()
         assert contender.acquire() is False
         elapsed = time.monotonic() - t0
-        assert elapsed < 2.0, f"acquire blocked {elapsed:.2f}s, deadline not respected"
+        # Baseline: a free acquire on a sibling path is this runner's
+        # uncontended lock cost; the contender adds only its 0.05s deadline
+        # plus poll overshoot. An ignored deadline waits out the holder's
+        # 10s default lease — baseline + 0.5s sits midway between the two on
+        # any machine, where the old fixed 2s could hide a partial-block
+        # regression on a fast runner.
+        free = LeaseLock(tmp_path / "free.lease", acquire_timeout=0.0)
+        f0 = time.monotonic()
+        assert free.acquire() is True
+        baseline = time.monotonic() - f0
+        free.release()
+        assert elapsed < baseline + 0.5, (
+            f"acquire blocked {elapsed:.2f}s, deadline not respected "
+            f"(free acquire baseline: {baseline:.3f}s)"
+        )
     finally:
         holder.release()

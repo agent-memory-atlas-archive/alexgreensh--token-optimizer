@@ -18,6 +18,7 @@ Tests prove:
 """
 from __future__ import annotations
 
+import re
 import sys
 import time
 from pathlib import Path
@@ -600,27 +601,36 @@ class TestCompress:
 
 class TestPerformance:
     def test_50k_lines_under_2_seconds(self):
-        # Baseline the runner on 10K-line runs first (min of 2): this also
-        # absorbs the one-time lazy costs (regex compiles, credential-pattern
-        # import), so the 50K measurement below is pure throughput on this
-        # machine.
-        baseline = float("inf")
-        for _ in range(2):
-            t0 = time.perf_counter()
-            compress("gcc -c *.c", _large_output(n_lines=10000))
-            baseline = min(baseline, time.perf_counter() - t0)
+        # Untimed warm-up: absorbs the one-time lazy costs (regex compiles,
+        # credential-pattern import), so the 50K measurement below is pure
+        # throughput on this machine.
+        compress("gcc -c *.c", _large_output(n_lines=10000))
 
         output = _large_output(n_lines=50000)
+
+        # Bound scaled by an INDEPENDENT fixed workload — one regex pass over
+        # the same input, work compress() itself never does. A same-function
+        # baseline would scale with the very slowdown being guarded against
+        # (a uniform ~5x slowdown is invisible to it), and an absolute floor
+        # (the old 2s) lets the whole broken path pass on a fast machine.
+        probe_re = re.compile(r"\berror\b|\bwarning\b|\bfailed\b")
+        probe = float("inf")
+        for _ in range(3):
+            p0 = time.perf_counter()
+            probe_re.findall(output)
+            probe = min(probe, time.perf_counter() - p0)
+
         start = time.perf_counter()
         result = compress("gcc -c *.c", output)
         elapsed = time.perf_counter() - start
 
-        # compress() is ~linear, so 50K lines should cost ~5x the 10K baseline
-        # on any runner. A quadratic blowup costs ~25x, so 15x sits midway
-        # between the two -- an absolute budget cannot, on a slow CI runner.
-        assert elapsed < max(2.0, baseline * 15.0), (
+        # Healthy compress costs ~50x one regex pass idle, ~230x under 4xCPU
+        # contention (the tiny probe absorbs less load than the 50K scan);
+        # a quadratic blowup lands ~1900x, so 500x sits between loaded-healthy
+        # and broken on any runner.
+        assert elapsed < probe * 500.0, (
             f"50K-line output took {elapsed:.2f}s "
-            f"(baseline: {baseline:.2f}s for 10K lines, budget: 15x baseline)"
+            f"(probe: {probe:.4f}s for one fixed regex pass over the same output)"
         )
         assert result is not None  # should compress
 

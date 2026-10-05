@@ -348,7 +348,12 @@ def test_the_shared_deadline_is_the_only_kill_switch_and_has_margin(
 def test_shared_deadline_bounds_total_wall_time_for_a_hung_subcommand(tmp_path):
     """A hung subcommand must not run to the host ceiling. This exercises the
     REAL HookDeadline (its os._exit(0) is uncatchable), in a subprocess."""
-    code = f"""
+
+    def _child_code(sub_body: str) -> str:
+        # Both variants are BUILT, not derived by string surgery: a baseline
+        # produced by code.replace("time.sleep(60)", ...) would silently sleep
+        # 60s the day the literal changes shape.
+        return f"""
 import importlib.util, sys, time
 sys.argv = ["posttooluse_runner"]
 spec = importlib.util.spec_from_file_location("ptu", {str(RUNNER)!r})
@@ -356,12 +361,14 @@ m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
 m._RUNNER_TOTAL_BUDGET = 1.0
 m._read_hook_input = lambda: {{"tool_name": "Bash"}}
-m._sub_bash_compress = lambda payload: time.sleep(60)
+m._sub_bash_compress = lambda payload: {sub_body}
 m._sub_archive_result = lambda payload: None
 m._sub_context_intel = lambda payload: None
 m._sub_quality_cache = lambda payload: None
 sys.exit(m.main())
 """
+
+    code = _child_code("time.sleep(60)")
     env = os.environ.copy()
     env["CLAUDE_PLUGIN_ROOT"] = str(REPO)
     env["CLAUDE_CONFIG_DIR"] = str(tmp_path / "claude")
@@ -371,7 +378,7 @@ sys.exit(m.main())
     for _ in range(2):
         b0 = time.monotonic()
         base_proc = subprocess.run(
-            [sys.executable, "-c", code.replace("time.sleep(60)", "None")],
+            [sys.executable, "-c", _child_code("None")],
             capture_output=True,
             text=True,
             env=env,

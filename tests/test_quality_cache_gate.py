@@ -70,12 +70,19 @@ def _quality_cache_dir(tmp_path: Path) -> Path:
     return tmp_path / "token-optimizer"
 
 
-def _run_gate(tmp_path: Path, payload: dict, timeout: float = 30):
+def _run_gate(tmp_path: Path, payload: dict, timeout: float = 30,
+              verbose_imports: bool = False):
     """Run the gate script via module_runner (realistic dispatch path).
+
+    With verbose_imports=True the subprocess runs with PYTHONVERBOSE=1 so its
+    stderr carries one ``import '<mod>'`` line per import — the deterministic
+    way to prove measure.py was never imported, on any runner speed.
 
     Returns (result, elapsed_seconds).
     """
     env = _gate_env(tmp_path)
+    if verbose_imports:
+        env["PYTHONVERBOSE"] = "1"
     module_runner = HOOKS / "module_runner.py"
     cmd = [sys.executable, str(module_runner), str(SCRIPTS), "quality_cache_gate", "--quiet"]
     stdin_data = json.dumps(payload).encode("utf-8")
@@ -88,6 +95,21 @@ def _run_gate(tmp_path: Path, payload: dict, timeout: float = 30):
         timeout=timeout,
     )
     return result, time.monotonic() - started
+
+
+def _assert_measure_never_imported(result) -> None:
+    """The contract the old timing asserts approximated: on the throttled /
+    cache-miss path the gate subprocess must never import measure.py at all.
+    A wall-clock budget can't prove that on a fast machine (the import is a
+    ~130ms warm load here, under every floor we tried); the interpreter's own
+    import trace can.
+    """
+    assert b"import 'measure'" not in result.stderr, (
+        "gate imported measure.py on a path that must stay import-free "
+        "(PYTHONVERBOSE trace):\n"
+        + "\n".join(l for l in result.stderr.decode("utf-8", "replace").splitlines()
+                    if "measure" in l)[-2000:]
+    )
 
 
 def _run_measure_direct(tmp_path: Path, payload: dict, timeout: float = 30):
@@ -176,24 +198,11 @@ def test_gate_does_not_import_measure_when_throttle_active(tmp_path):
     marker.touch()
 
     payload = {"transcript_path": str(session_jsonl), "session_id": "test-trap"}
-    result, elapsed = _run_gate(tmp_path, payload, timeout=30)
+    result, elapsed = _run_gate(tmp_path, payload, timeout=30,
+                                verbose_imports=True)
 
     assert result.returncode == 0
-    # The gate's hot path must skip the measure.py import. Its cost is this
-    # runner's spawn + ~150ms of gate work; a gate that imports measure.py
-    # adds a ~700ms cold import on top. +500ms sits midway between healthy
-    # and that regression; the 0.6s floor keeps the original bound.
-    spawn = float("inf")
-    for _ in range(3):
-        s0 = time.monotonic()
-        subprocess.run([sys.executable, "-c", "pass"], capture_output=True)
-        spawn = min(spawn, time.monotonic() - s0)
-    assert elapsed < max(0.6, spawn + 0.5), (
-        f"Gate took {elapsed*1000:.0f}ms — expected well under the measure.py "
-        f"import it skips ({spawn*1000:.0f}ms spawn baseline). If this is "
-        f"over ~700ms past spawn, the gate is importing measure.py on the "
-        f"hot path."
-    )
+    _assert_measure_never_imported(result)
 
 
 # ---------------------------------------------------------------------------
@@ -267,7 +276,8 @@ def test_gate_treats_missing_marker_as_not_due(tmp_path):
 
     # Do NOT create a throttle marker — it's a cache miss
     payload = {"transcript_path": str(session_jsonl), "session_id": "test-missing"}
-    result, elapsed = _run_gate(tmp_path, payload, timeout=30)
+    result, elapsed = _run_gate(tmp_path, payload, timeout=30,
+                                verbose_imports=True)
 
     assert result.returncode == 0
     # No cache file should be created
@@ -277,19 +287,7 @@ def test_gate_treats_missing_marker_as_not_due(tmp_path):
         "Cache file was created on a cache miss — the gate incorrectly fell "
         "through to the full computation."
     )
-    # Should be fast (no measure.py import): bounded against a bare
-    # interpreter spawn on this runner (min of 3), not a fixed millisecond
-    # budget. +500ms sits midway between the healthy path and the ~700ms
-    # cold import a regression would add.
-    spawn = float("inf")
-    for _ in range(3):
-        s0 = time.monotonic()
-        subprocess.run([sys.executable, "-c", "pass"], capture_output=True)
-        spawn = min(spawn, time.monotonic() - s0)
-    assert elapsed < max(0.6, spawn + 0.5), (
-        f"Gate took {elapsed*1000:.0f}ms on cache miss — expected well under "
-        f"the measure.py import it skips ({spawn*1000:.0f}ms spawn baseline)."
-    )
+    _assert_measure_never_imported(result)
 
 
 # ---------------------------------------------------------------------------
@@ -342,15 +340,14 @@ def test_gate_cold_path_is_faster_than_measure_direct(tmp_path):
     measure_result, measure_elapsed = _run_measure_direct(tmp_path, payload, timeout=30)
     assert measure_result.returncode == 0
 
-    # The gate must be significantly faster. We assert a minimum speedup
-    # rather than an absolute threshold to be robust across machines.
-    # On the profiling container: measure ~800ms cold, gate ~127ms.
-    # On a fast desktop: measure ~400ms cold, gate ~100ms.
-    # A 2x speedup is the minimum meaningful improvement; typically 4-6x.
-    speedup = measure_elapsed / gate_elapsed if gate_elapsed > 0 else float("inf")
-    assert speedup >= 2.0, (
-        f"Gate speedup only {speedup:.1f}x (gate={gate_elapsed*1000:.0f}ms, "
-        f"measure={measure_elapsed*1000:.0f}ms). Expected >= 2x."
+    # The gate must beat the path it protects. A minimum RATIO flakes under
+    # CPU contention — both runs inflate by their fixed spawn cost, so 4-6x
+    # idle collapses toward ~1.3x under load (observed). The deterministic
+    # regression check is the PYTHONVERBOSE import assert in the tests above;
+    # here "strictly faster" is the stable invariant.
+    assert gate_elapsed < measure_elapsed, (
+        f"Gate slower than the work it skips (gate={gate_elapsed*1000:.0f}ms, "
+        f"measure={measure_elapsed*1000:.0f}ms)"
     )
 
 

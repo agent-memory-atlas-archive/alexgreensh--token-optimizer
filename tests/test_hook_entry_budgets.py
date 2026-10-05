@@ -239,10 +239,18 @@ def test_over_budget_entry_exits_zero_with_no_output_and_does_not_hang(
 ):
     # Baseline, min of 2: the same entry through module_runner with a hook
     # that returns instantly -- this runner's spawn + dispatch cost before
-    # any budget wait.
+    # any budget wait. Each baseline run must succeed: a baseline that fails
+    # instantly yields a small, still-discriminating number and hides the
+    # infrastructure break.
     (tmp_path / "base").mkdir()
     base_scripts = _stub_tree(tmp_path / "base", module, "pass\n")
-    startup = min(_run_entry(base_scripts, module, args)[1] for _ in range(2))
+    base_runs = [_run_entry(base_scripts, module, args) for _ in range(2)]
+    for base_proc, _ in base_runs:
+        assert base_proc.returncode == 0, (
+            f"baseline entry run failed: rc={base_proc.returncode} "
+            f"stderr: {base_proc.stderr[-2000:]}"
+        )
+    startup = min(elapsed for _, elapsed in base_runs)
     scripts = _stub_tree(tmp_path, module, BLOCK_FOREVER)
     proc, elapsed = _run_entry(scripts, module, args, timeout=60)
 

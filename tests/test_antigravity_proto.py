@@ -164,25 +164,30 @@ def test_length_overruns_remaining_returns_none():
     assert decode_generation(header + b"\x08\x01") is None
 
 
-def test_100k_repeated_unknown_fields_returns_none_quickly():
-    # 100k varint fields -> per-message field-count cap trips early.
+def test_1m_repeated_unknown_fields_returns_none_quickly():
+    # 1M varint fields -> per-message field-count cap trips early.
     # Baseline, min of 3: decoding a 1K-field message costs ~what the capped
     # scan does before tripping, so the bound scales with this runner's
-    # decode speed.
+    # decode speed. The max() floors the BASELINE (degenerate ~0 measurements
+    # only) — a floor on the bound itself is what let an uncapped ~55ms scan
+    # hide under max(0.2, ...) on fast machines.
     baseline = float("inf")
     for _ in range(3):
         t0 = time.monotonic()
         decode_generation(_field_varint(1000, 1) * 1_000)
         baseline = min(baseline, time.monotonic() - t0)
-    msg = _field_varint(1000, 1) * 100_000
+    baseline = max(baseline, 0.0005)
+    # 1M fields ≈ 3MB: under the 5MiB byte cap, so the byte guard never trips
+    # and this test exercises the FIELD-count cap specifically. An uncapped
+    # scan parses all million fields (~1000x the 1K baseline).
+    msg = _field_varint(1000, 1) * 1_000_000
     start = time.monotonic()
     res = decode_generation(msg)
     elapsed = time.monotonic() - start
     assert res is None
-    # An uncapped scan costs ~100x the 1K baseline; 50x sits midway between
-    # the ~1x capped scan and the blowup, on any runner. The 0.2s floor
-    # keeps the original bound on fast machines.
-    assert elapsed < max(0.2, baseline * 50.0), (
+    # 50x the 1K baseline sits midway between the ~1x capped scan and the
+    # ~1000x blowup, on any runner.
+    assert elapsed < baseline * 50.0, (
         f"field-count cap took {elapsed:.3f}s (baseline: {baseline:.3f}s for 1K fields)"
     )
 
