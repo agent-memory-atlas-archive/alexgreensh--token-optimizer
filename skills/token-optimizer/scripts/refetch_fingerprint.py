@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 
 # SINGLE SOURCE OF TRUTH for the manifest field name the writer stores and the
@@ -28,16 +29,32 @@ ARGS_HASH_KEY = "args_hash"
 # Matched with fnmatch against the full tool name; fnmatch is case-sensitive on
 # POSIX, so names are lowercased first.
 # Hosts spell the same server differently (mcp__claude-in-chrome__,
-# mcp__Claude_in_Chrome__, mcp__plugin_claude-in-chrome_claude-in-chrome__), so
-# match on the server word. Over-matching only means the guard never blocks
-# that tool, which is the safe direction.
+# mcp__Claude_in_Chrome__, mcp__plugin_claude-in-chrome_claude-in-chrome__), and
+# some servers carry the keyword in the tool name instead (mcp__my-tools__
+# browser_click), so match on either segment. Over-matching only means the
+# guard never blocks that tool, which is the safe direction.
 LIVE_STATE_TOOL_PATTERNS: tuple[str, ...] = (
+    # Keyword in the SERVER segment: mcp__browser__click.
     "mcp__*chrome*__*",
     "mcp__*playwright*__*",
     "mcp__*puppeteer*__*",
     "mcp__*browser*__*",
     "mcp__*computer?use*__*",
+    # Keyword in the TOOL segment (after the last __): a server that groups
+    # many tools names its browser tools by prefix — mcp__my-tools__browser_click.
+    "mcp__*__*chrome*",
+    "mcp__*__*playwright*",
+    "mcp__*__*puppeteer*",
+    "mcp__*__*browser*",
+    "mcp__*__*computer?use*",
 )
+
+# Opt-in allowlist for servers whose live-state tools match no keyword:
+# TOKEN_OPTIMIZER_LIVE_STATE_TOOLS="mcp__acme__screen*,mcp__acme__scrape_*".
+# Comma-separated fnmatch patterns, matched against the full (lowercased)
+# tool name. Over-matching only means the guard never denies that tool —
+# the safe direction.
+_LIVE_STATE_TOOLS_ENV = "TOKEN_OPTIMIZER_LIVE_STATE_TOOLS"
 
 # The guard exists to break an immediate loop (the model re-issuing the call it
 # just got a pointer for). Past this window an identical call is far more likely
@@ -46,12 +63,29 @@ LIVE_STATE_TOOL_PATTERNS: tuple[str, ...] = (
 REFETCH_GUARD_WINDOW_SECONDS = 300
 
 
+def _env_live_state_patterns() -> tuple[str, ...]:
+    """Comma-separated fnmatch patterns from TOKEN_OPTIMIZER_LIVE_STATE_TOOLS.
+
+    Fail-open on bad input: a malformed value yields no extra patterns rather
+    than breaking classification. Read per call so a hook subprocess honours
+    the environment it was launched with.
+    """
+    try:
+        raw = os.environ.get(_LIVE_STATE_TOOLS_ENV, "")
+        return tuple(p.strip().lower() for p in raw.split(",") if p.strip())
+    except Exception:
+        return ()
+
+
 def is_live_state_tool(tool_name: str) -> bool:
     """True for tools whose result depends on live external state. Never raises."""
     try:
         import fnmatch
         name = (tool_name or "").lower()
-        return any(fnmatch.fnmatch(name, pat) for pat in LIVE_STATE_TOOL_PATTERNS)
+        return any(
+            fnmatch.fnmatch(name, pat)
+            for pat in LIVE_STATE_TOOL_PATTERNS + _env_live_state_patterns()
+        )
     except Exception:
         return False
 
