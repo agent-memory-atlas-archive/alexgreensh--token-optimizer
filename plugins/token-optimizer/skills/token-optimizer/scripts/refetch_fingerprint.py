@@ -32,29 +32,59 @@ ARGS_HASH_KEY = "args_hash"
 # mcp__Claude_in_Chrome__, mcp__plugin_claude-in-chrome_claude-in-chrome__), and
 # some servers carry the keyword in the tool name instead (mcp__my-tools__
 # browser_click), so match on either segment. Over-matching only means the
-# guard never blocks that tool, which is the safe direction.
+# guard never blocks that tool, which is the safe direction: the worst a broad
+# substring match does is leave a tool un-denied, never deny a legit tool.
 LIVE_STATE_TOOL_PATTERNS: tuple[str, ...] = (
     # Keyword in the SERVER segment: mcp__browser__click.
     "mcp__*chrome*__*",
     "mcp__*playwright*__*",
     "mcp__*puppeteer*__*",
     "mcp__*browser*__*",
+    "mcp__*browse*__*",
+    "mcp__*chromium*__*",
+    "mcp__*devtools*__*",
     "mcp__*computer?use*__*",
+    "mcp__*computeruse*__*",
     # Keyword in the TOOL segment (after the last __): a server that groups
     # many tools names its browser tools by prefix — mcp__my-tools__browser_click.
     "mcp__*__*chrome*",
     "mcp__*__*playwright*",
     "mcp__*__*puppeteer*",
     "mcp__*__*browser*",
+    "mcp__*__*browse*",
+    "mcp__*__*chromium*",
+    "mcp__*__*devtools*",
     "mcp__*__*computer?use*",
+    "mcp__*__*computeruse*",
+    # Observer verbs that live in the tool segment on a generic server:
+    # mcp__x__take_screenshot, mcp__x__page_snapshot, mcp__x__get_page_state.
+    "mcp__*__*screenshot*",
+    "mcp__*__*snapshot*",
+    "mcp__*__*page_state*",
 )
 
 # Opt-in allowlist for servers whose live-state tools match no keyword:
 # TOKEN_OPTIMIZER_LIVE_STATE_TOOLS="mcp__acme__screen*,mcp__acme__scrape_*".
 # Comma-separated fnmatch patterns, matched against the full (lowercased)
-# tool name. Over-matching only means the guard never denies that tool —
-# the safe direction.
+# tool name. A match has THREE effects, all in the safe direction: the
+# re-fetch guard never denies the tool, the archive writer stores
+# args_hash=None (the result is never fingerprinted), and the archive footer
+# tells the model to call the tool again for current state. A broad glob like
+# mcp__* therefore disables the whole re-fetch loop — strictly stronger than
+# TOKEN_OPTIMIZER_REFETCH_GUARD_WINDOW_SECONDS=0, which only lifts the deny.
 _LIVE_STATE_TOOLS_ENV = "TOKEN_OPTIMIZER_LIVE_STATE_TOOLS"
+
+# A pathological allowlist value must not multiply per-call match latency:
+# at most this many comma-separated patterns are honoured.
+_LIVE_STATE_TOOLS_MAX_PATTERNS = 64
+
+# Parsed once per process: hooks spawn a fresh interpreter per call, but
+# within one process (the archive writer, in-process tests) a repeated
+# classification must not re-split the value or re-read settings.json.
+# The sentinel marks "not yet read"; a failed read is NOT cached so a
+# transient settings error does not stick.
+_LIVE_STATE_PATTERNS_UNSET = object()
+_LIVE_STATE_PATTERNS_CACHE: tuple[str, ...] | object = _LIVE_STATE_PATTERNS_UNSET
 
 # The guard exists to break an immediate loop (the model re-issuing the call it
 # just got a pointer for). Past this window an identical call is far more likely
@@ -66,15 +96,39 @@ REFETCH_GUARD_WINDOW_SECONDS = 300
 def _env_live_state_patterns() -> tuple[str, ...]:
     """Comma-separated fnmatch patterns from TOKEN_OPTIMIZER_LIVE_STATE_TOOLS.
 
-    Fail-open on bad input: a malformed value yields no extra patterns rather
-    than breaking classification. Read per call so a hook subprocess honours
-    the environment it was launched with.
+    Read the same way the sibling TOKEN_OPTIMIZER_ARCHIVE_EXEMPT_TOOLS knob is
+    read (archive_result.py): process environment first, then the env block of
+    the user's global settings.json, so hosts that do not inject settings env
+    into hook subprocesses still honour it.
+
+    Parsed once per process and capped: hooks spawn a fresh interpreter per
+    call, but within one process (the archive writer, an in-process test, the
+    delegate seam) a repeated call must not re-split the value, and a
+    pathological 20k-pattern value must not multiply match latency.
+
+    Fail-open on bad input: a malformed value or a broken settings file yields
+    no extra patterns rather than breaking classification. A failed read is
+    NOT cached, so a transient settings read error does not stick.
     """
+    global _LIVE_STATE_PATTERNS_CACHE
+    if _LIVE_STATE_PATTERNS_CACHE is not _LIVE_STATE_PATTERNS_UNSET:
+        return _LIVE_STATE_PATTERNS_CACHE
     try:
-        raw = os.environ.get(_LIVE_STATE_TOOLS_ENV, "")
-        return tuple(p.strip().lower() for p in raw.split(",") if p.strip())
+        raw = os.environ.get(_LIVE_STATE_TOOLS_ENV, "").strip()
+        if not raw:
+            # Lazy import: keeps this module dependency-free for readers that
+            # only need tool_fingerprint, and any failure stays inside the
+            # fail-open except.
+            from runtime_env import settings_env_value
+
+            raw = settings_env_value(_LIVE_STATE_TOOLS_ENV)
+        parsed = tuple(
+            p.strip().lower() for p in raw.split(",") if p.strip()
+        )[:_LIVE_STATE_TOOLS_MAX_PATTERNS]
     except Exception:
         return ()
+    _LIVE_STATE_PATTERNS_CACHE = parsed
+    return parsed
 
 
 def is_live_state_tool(tool_name: str) -> bool:

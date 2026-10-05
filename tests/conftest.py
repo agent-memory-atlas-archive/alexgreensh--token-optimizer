@@ -198,9 +198,20 @@ _RUNTIME_ENV_KEYS = (
 )
 
 
+# Env vars that change hook DECISIONS (not just which runtime/data-dir). The
+# helpers that build hook subprocess envs copy os.environ, so an ambient value
+# — exported by the dev or baked into a CI image — silently un-guards tools and
+# fails assertions through no code fault. Removed for the test, restored after.
+_SANITIZED_ENV_KEYS = (
+    "TOKEN_OPTIMIZER_LIVE_STATE_TOOLS",
+)
+
+
 @pytest.fixture(autouse=True)
 def _restore_runtime_env():
-    saved = {k: os.environ.get(k) for k in _RUNTIME_ENV_KEYS}
+    saved = {k: os.environ.get(k) for k in _RUNTIME_ENV_KEYS + _SANITIZED_ENV_KEYS}
+    for key in _SANITIZED_ENV_KEYS:
+        os.environ.pop(key, None)
     yield
     for key, value in saved.items():
         if value is None:

@@ -34,6 +34,7 @@ BIG_B64 = "iVBORw0KGgo" + "A" * 20000
 def _env(tmp_path, **extra):
     env = {**os.environ, "TOKEN_OPTIMIZER_SNAPSHOT_DIR": str(tmp_path / "snap")}
     env.pop("TOKEN_OPTIMIZER_REFETCH_GUARD_WINDOW_SECONDS", None)
+    env.pop("TOKEN_OPTIMIZER_LIVE_STATE_TOOLS", None)
     env.update(extra)
     return env
 
