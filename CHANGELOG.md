@@ -1,5 +1,10 @@
 # Changelog
 
+## [5.13.35] - 2026-10-05
+
+- Browser and screenshot tools can be called again with the same input, even when the server's name doesn't say "browser". Clicks, snapshots and screenshots go through.
+- Name any other live tools in `TOKEN_OPTIMIZER_LIVE_STATE_TOOLS`, set in your shell or in your settings `env`.
+
 ## [5.13.34] - 2026-10-05
 
 - Works with the new OpenCode 2 plugin system, alongside the current one. Thanks to the contributor who built it.
