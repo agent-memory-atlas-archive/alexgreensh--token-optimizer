@@ -1,5 +1,9 @@
 # Changelog
 
+## [5.13.36] - 2026-10-08
+
+- Up-to-date model prices: haiku_5_5, sonnet_5_5.
+
 ## [5.13.35] - 2026-10-05
 
 - Browser and screenshot tools can be called again with the same input, even when the server's name doesn't say "browser". Clicks, snapshots and screenshots go through.
