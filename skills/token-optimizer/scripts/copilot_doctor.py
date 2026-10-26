@@ -146,6 +146,53 @@ def _invalid_matcher_events(hooks) -> list:
     return bad
 
 
+def _required_payload_modules() -> tuple:
+    """Every module the installer ships next to the bridge. A missing one can
+    silently disable the bridge (for example, no runtime_env means no data dir,
+    so the tally cleanup is skipped), so the payload check covers the full set."""
+    try:
+        from copilot_install import _PAYLOAD_MODULES  # noqa: PLC0415
+        return tuple(_PAYLOAD_MODULES)
+    except Exception:
+        return ("copilot_hook_bridge.py", "codex_io.py", "bash_compress.py")
+
+
+def _measure_reachable(plugin_dir: Path) -> bool:
+    """True when the installed bridge can resolve measure.py: a sibling copy, or
+    a `measure-path` locator naming a regular measure.py file."""
+    sibling = plugin_dir / "measure.py"
+    if sibling.is_file() and not sibling.is_symlink():
+        return True
+    try:
+        locator = plugin_dir / "measure-path"
+        if locator.is_file() and not locator.is_symlink():
+            target = Path(locator.read_text(encoding="utf-8").strip())
+            return target.is_file() and not target.is_symlink() and target.name == "measure.py"
+    except (OSError, ValueError):
+        pass
+    return False
+
+
+def _has_legacy_stop(hooks) -> bool:
+    """True when the file wires Token Optimizer's bridge under the lowercase
+    `stop` key that earlier installs wrote. Copilot has no such event.
+
+    Only a `stop` entry that runs the Token Optimizer bridge counts, so a user's
+    own `stop` entries, and any other event name, are left alone.
+    """
+    if not isinstance(hooks, dict):
+        return False
+    entries = hooks.get("stop")
+    if not isinstance(entries, list):
+        return False
+    for entry in entries:
+        if isinstance(entry, dict):
+            cmd = entry.get("bash") or entry.get("command") or ""
+            if isinstance(cmd, str) and "copilot_hook_bridge" in cmd:
+                return True
+    return False
+
+
 def _hook_config_checks() -> list:
     checks = []
     hook_path = copilot_home() / "hooks" / "token-optimizer.json"
@@ -161,7 +208,11 @@ def _hook_config_checks() -> list:
         return checks
     try:
         config = json.loads(hook_path.read_text(encoding="utf-8"))
-        hooks = config.get("hooks") or {}
+        hooks = config.get("hooks") if isinstance(config, dict) else None
+        if hooks is None and isinstance(config, dict):
+            hooks = {}
+        if not isinstance(hooks, dict):
+            raise ValueError("expected a JSON object with a `hooks` object")
         events = sorted(hooks.keys())
         bad = _invalid_matcher_events(hooks)
         if bad:
@@ -176,6 +227,16 @@ def _hook_config_checks() -> list:
             )
         else:
             checks.append(_check("ok", "TO hook config", f"{hook_path} (events: {', '.join(events)})"))
+        if _has_legacy_stop(hooks):
+            checks.append(
+                _check(
+                    "warn",
+                    "TO session-end hook",
+                    "The hook file wires Token Optimizer under a lowercase `stop` event. "
+                    "Copilot has no such event, so the session-end rollup and cleanup never run.",
+                    _hint("Re-run `python3 measure.py copilot-install` to switch it to sessionEnd."),
+                )
+            )
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         checks.append(
             _check(
@@ -190,10 +251,7 @@ def _hook_config_checks() -> list:
     # tally + capability writes silently no-op (crash recovery dies).
     plugin_dir = copilot_home() / "token-optimizer" / "plugin"
     if plugin_dir.is_dir():
-        missing = [
-            m for m in ("copilot_hook_bridge.py", "codex_io.py", "bash_compress.py")
-            if not (plugin_dir / m).exists()
-        ]
+        missing = [m for m in _required_payload_modules() if not (plugin_dir / m).exists()]
         if missing:
             checks.append(
                 _check(
@@ -205,6 +263,16 @@ def _hook_config_checks() -> list:
             )
         else:
             checks.append(_check("ok", "hook payload", f"{plugin_dir} (complete)"))
+            if not _measure_reachable(plugin_dir):
+                checks.append(
+                    _check(
+                        "warn",
+                        "session-end refresh",
+                        "The installed bridge cannot find measure.py, so the session-end "
+                        "rollup and dashboard refresh are paused.",
+                        _hint("Re-run `python3 measure.py copilot-install` to rewrite the locator."),
+                    )
+                )
     return checks
 
 

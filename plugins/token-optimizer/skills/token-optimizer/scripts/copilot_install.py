@@ -61,7 +61,7 @@ _PAYLOAD_MODULES = (
     "hermes_session.py",
     # spawn_utils supplies spawn_detached — without it the bridge logs
     # "spawn_utils import failed" on every hook and its degraded fallback does
-    # NOT detach, so Stop-hook spawns die with the hook. hook_runtime supplies
+    # NOT detach, so session-end spawns die with the hook. hook_runtime supplies
     # lease_lock (tally RMW); utf8_io is enforced at startup. Cursor and Grok
     # already ship all three.
     "spawn_utils.py",
@@ -71,6 +71,13 @@ _PAYLOAD_MODULES = (
     # copilot_session's topic redaction (both fall back to less without it).
     "credential_patterns.py",
 )
+
+
+# One-line locator written next to the bridge, naming the canonical measure.py
+# in the checkout. measure.py is NOT copied into the plugin dir (version drift:
+# nothing refreshes a plugin-dir copy on update). The bridge's session-end
+# rollup/dashboard spawns resolve it through this locator.
+_MEASURE_LOCATOR_NAME = "measure-path"
 
 
 def _plugin_dir(root: Path) -> Path:
@@ -174,7 +181,9 @@ def _hook_config(bridge_path: Path) -> dict:
             "sessionStart": [cmd("session-start")],
             "preToolUse": [pre],
             "postToolUse": [cmd("post-tool-use")],
-            "stop": [cmd("stop")],
+            # Copilot's end-of-session event. The lowercase `stop` event is not
+            # a Copilot event name, so a hook under it never fires.
+            "sessionEnd": [cmd("session-end")],
         },
     }
 
@@ -215,6 +224,18 @@ def install(*, dry_run: bool = False, home: Path = None) -> dict:
             "missing payload modules in this checkout: "
             f"{actions['skipped']} — refusing to wire hooks against an incomplete bridge."
         )
+
+    measure_py = _SCRIPT_DIR / "measure.py"
+    if measure_py.is_file():
+        actions["measure_locator"] = str(measure_py)
+        if not dry_run:
+            try:
+                locator = plugin_dir / _MEASURE_LOCATOR_NAME
+                tmp = locator.with_name(f".{locator.name}.tmp")
+                tmp.write_text(f"{measure_py}\n", encoding="utf-8")
+                os.replace(tmp, locator)  # swaps a symlink, never follows it
+            except OSError as exc:
+                raise RuntimeError(f"failed writing measure-path locator: {exc}") from exc
 
     hook_path = hooks_dir / HOOK_FILE_NAME
     config = _hook_config(plugin_dir / "copilot_hook_bridge.py")

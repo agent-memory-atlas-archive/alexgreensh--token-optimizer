@@ -48,7 +48,7 @@ def test_pretooluse_matcher_is_a_string_that_matches_bash_only(mods):
 def test_other_events_have_no_matcher(mods):
     inst, _doc, tmp = mods
     hooks = inst._hook_config(tmp / "bridge.py")["hooks"]
-    for event in ("sessionStart", "postToolUse", "stop"):
+    for event in ("sessionStart", "postToolUse", "sessionEnd"):
         assert all("matcher" not in e for e in hooks[event])
 
 
