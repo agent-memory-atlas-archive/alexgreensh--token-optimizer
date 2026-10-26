@@ -163,7 +163,10 @@ def _hook_config(bridge_path: Path) -> dict:
     pre = cmd("pre-tool-use")
     # Only the bash tool is rewritten; the matcher keeps every other tool
     # call out of the bridge's hot path entirely.
-    pre["matcher"] = {"toolName": "bash"}
+    # Copilot reads `matcher` as a regex string tested against the tool name
+    # (anchored as ^(?:PATTERN)$). An object is rejected and the whole hook
+    # entry is skipped.
+    pre["matcher"] = "bash"
 
     return {
         "version": 1,
