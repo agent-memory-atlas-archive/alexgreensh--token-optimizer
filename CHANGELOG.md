@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- GitHub Copilot CLI: the `preToolUse` hook loads again. `copilot-install` wrote its matcher in a form Copilot rejects, so Copilot skipped the hook and bash output was never compressed. Re-run `copilot-install` once to pick up the fix. `copilot-doctor` now reports a hook config whose matcher Copilot would skip instead of showing it as OK. Thanks @imabusyman (#284).
+
 ## [5.13.57] - 2026-10-22
 
 - Codex on Windows: hooks run again instead of failing with "hook exited with code 1" after every tool call and reply. Re-run `codex-install` once to pick up the fix. Thanks @porkmagus for the detailed report (#276).
