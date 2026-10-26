@@ -2,11 +2,13 @@
 
 Run: python3 -m pytest tests/test_copilot_session_end_hook.py -v
 """
+import contextlib
 import importlib
 import json
 import os
 import shlex
 import subprocess
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -16,8 +18,8 @@ import pytest
 SCRIPTS = Path(__file__).resolve().parent.parent / "skills" / "token-optimizer" / "scripts"
 
 
-@pytest.fixture
-def mods(tmp_path, monkeypatch):
+@contextlib.contextmanager
+def _mods_env(tmp_path, monkeypatch):
     monkeypatch.syspath_prepend(str(SCRIPTS))
     home = tmp_path / "home"
     home.mkdir()
@@ -32,12 +34,94 @@ def mods(tmp_path, monkeypatch):
     monkeypatch.setenv("TOKEN_OPTIMIZER_PYTHON", str(py))
     for name in ("copilot_install", "copilot_doctor", "copilot_hook_bridge"):
         sys.modules.pop(name, None)
-    return (
-        importlib.import_module("copilot_install"),
-        importlib.import_module("copilot_doctor"),
-        importlib.import_module("copilot_hook_bridge"),
-        home / ".copilot",
-    )
+    before = set(sys.modules)
+    try:
+        yield (
+            importlib.import_module("copilot_install"),
+            importlib.import_module("copilot_doctor"),
+            importlib.import_module("copilot_hook_bridge"),
+            home / ".copilot",
+        )
+    finally:
+        # Modules first imported here (plugin_env among them) computed their paths from
+        # this test's temp HOME; drop them so later tests re-import against their own.
+        # Runs on a failing with-body and on a failed import too.
+        for name in set(sys.modules) - before:
+            origin = getattr(sys.modules[name], "__file__", None) or ""
+            if str(SCRIPTS) in origin:
+                sys.modules.pop(name, None)
+
+
+@pytest.fixture
+def mods(tmp_path, monkeypatch):
+    with _mods_env(tmp_path, monkeypatch) as loaded:
+        yield loaded
+
+
+def test_mods_env_drops_the_modules_it_first_imported(tmp_path, monkeypatch):
+    def from_scripts():
+        return {n for n, m in list(sys.modules.items()) if str(SCRIPTS) in (getattr(m, "__file__", None) or "")}
+
+    saved = {n: sys.modules[n] for n in ("copilot_install", "copilot_doctor", "copilot_hook_bridge") if n in sys.modules}
+    before = from_scripts() - set(saved)
+    try:
+        with _mods_env(tmp_path, monkeypatch):
+            assert "copilot_install" in sys.modules  # imported under the temp HOME
+            fresh = {
+                n: sys.modules[n]
+                for n in ("copilot_install", "copilot_doctor", "copilot_hook_bridge")
+            }
+            # Fresh objects, not the ones that were loaded before the test.
+            assert all(fresh[n] is not saved[n] for n in fresh if n in saved)
+        # None of the fresh module objects stays registered (checked by identity, so a
+        # name that a prior test also loaded cannot hide a leak).
+        leaked = [n for n, m in list(sys.modules.items()) if any(m is f for f in fresh.values())]
+        assert leaked == []
+        # Whatever else the context manager imported from the scripts folder is gone too.
+        assert from_scripts() - set(saved) == before
+    finally:
+        sys.modules.update(saved)
+
+
+def _scripts_modules():
+    return {n for n, m in list(sys.modules.items()) if str(SCRIPTS) in (getattr(m, "__file__", None) or "")}
+
+
+def test_mods_env_evicts_when_the_with_body_raises(tmp_path, monkeypatch):
+    saved = {n: sys.modules[n] for n in ("copilot_install", "copilot_doctor", "copilot_hook_bridge") if n in sys.modules}
+    before = _scripts_modules() - set(saved)
+    try:
+        with pytest.raises(RuntimeError, match="boom"):
+            with _mods_env(tmp_path, monkeypatch):
+                fresh = [sys.modules[n] for n in ("copilot_install", "copilot_doctor", "copilot_hook_bridge")]
+                raise RuntimeError("boom")
+        assert not [n for n, m in list(sys.modules.items()) if any(m is f for f in fresh)]
+        assert _scripts_modules() - set(saved) == before
+    finally:
+        sys.modules.update(saved)
+
+
+def test_mods_env_evicts_when_a_later_import_fails(tmp_path, monkeypatch):
+    saved = {n: sys.modules[n] for n in ("copilot_install", "copilot_doctor", "copilot_hook_bridge") if n in sys.modules}
+    before = _scripts_modules() - set(saved)
+    real_import = importlib.import_module
+
+    def failing(name, *a, **k):
+        if name == "copilot_hook_bridge":
+            raise ImportError("simulated partial import")
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr(importlib, "import_module", failing)
+    try:
+        with pytest.raises(ImportError, match="simulated"):
+            with _mods_env(tmp_path, monkeypatch):
+                pass
+        monkeypatch.setattr(importlib, "import_module", real_import)
+        # Setup dropped any earlier copy; the copy imported before the failure must not stay.
+        assert "copilot_install" not in sys.modules
+        assert _scripts_modules() - set(saved) == before
+    finally:
+        sys.modules.update(saved)
 
 
 def _doctor_checks(doc):
@@ -146,10 +230,92 @@ def _installed_hook(inst, home):
     return " ".join(shlex.quote(x) for x in parts), home / "token-optimizer"
 
 
+def _find_bash(run=subprocess.run, system=sys.platform, which=shutil.which, env=os.environ):
+    """The bash that runs the generated hook command, or None when this machine has none.
+
+    Only native Windows can lack a usable one: a runner's bash is often WSL's stub, which
+    exits 1 with "no installed distributions". Prefer Git Bash there, then probe with a
+    bounded `bash -c` so the stub or a missing bash is told apart from a real hook failure.
+    Elsewhere bash is required, so a missing one fails the tests instead of skipping them.
+    """
+    if system != "win32":
+        return "bash"
+    candidates = [
+        env.get("GIT_BASH"),
+        r"C:\Program Files\Git\bin\bash.exe",
+        r"C:\Program Files\Git\usr\bin\bash.exe",
+        r"C:\Program Files (x86)\Git\bin\bash.exe",
+        which("bash"),
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            probe = run([candidate, "-c", "echo bash-ok"], capture_output=True, text=True, timeout=15)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if probe.returncode == 0 and (probe.stdout or "").strip() == "bash-ok":
+            return candidate
+    return None
+
+
+_BASH = _find_bash()
+needs_bash = pytest.mark.skipif(_BASH is None, reason="no working bash on this machine (WSL stub or none)")
+
+
 def _run_session_end(cmd, home, payload):
-    env = {**os.environ, "COPILOT_HOME": str(home), "HOME": str(home.parent)}
-    return subprocess.run(["bash", "-c", cmd], input=json.dumps(payload), text=True,
+    (home.parent / ".claude").mkdir(exist_ok=True)
+    env = {**os.environ, "COPILOT_HOME": str(home), "HOME": str(home.parent),
+           "USERPROFILE": str(home.parent), "CLAUDE_CONFIG_DIR": str(home.parent / ".claude")}
+    return subprocess.run([_BASH, "-c", cmd], input=json.dumps(payload), text=True,
                           capture_output=True, env=env, timeout=60)
+
+
+class _Done:
+    def __init__(self, returncode=0, stdout=""):
+        self.returncode, self.stdout = returncode, stdout
+
+
+def test_find_bash_is_bash_off_windows():
+    assert _find_bash(system="linux") == "bash"
+    assert _find_bash(system="darwin") == "bash"
+
+
+def test_find_bash_uses_a_working_windows_bash():
+    seen = []
+
+    def run(argv, **kw):
+        seen.append(argv[0])
+        return _Done(0, "bash-ok\n")
+
+    assert _find_bash(run=run, system="win32", which=lambda _n: "C:/x/bash.exe", env={"GIT_BASH": "D:/git/bash.exe"}) == "D:/git/bash.exe"
+    assert seen == ["D:/git/bash.exe"]
+
+
+def test_find_bash_skips_the_wsl_stub_and_a_missing_bash():
+    def stub(argv, **kw):
+        return _Done(1, "")
+
+    def missing(argv, **kw):
+        raise FileNotFoundError(argv[0])
+
+    assert _find_bash(run=stub, system="win32", which=lambda _n: "C:/Windows/System32/bash.exe", env={}) is None
+    assert _find_bash(run=missing, system="win32", which=lambda _n: None, env={}) is None
+
+
+def test_find_bash_gives_up_on_a_hung_probe():
+    def hang(argv, **kw):
+        raise subprocess.TimeoutExpired(argv, 15)
+
+    assert _find_bash(run=hang, system="win32", which=lambda _n: "bash", env={}) is None
+
+
+def test_find_bash_falls_through_to_the_next_candidate():
+    def run(argv, **kw):
+        return _Done(0, "bash-ok") if argv[0] == "D:/real/bash.exe" else _Done(1, "")
+
+    assert _find_bash(run=run, system="win32", which=lambda _n: "C:/Windows/System32/bash.exe",
+                      env={"GIT_BASH": "D:/real/bash.exe"}) == "D:/real/bash.exe"
 
 
 def test_installer_writes_measure_locator_and_ships_no_measure_copy(mods):
@@ -161,6 +327,7 @@ def test_installer_writes_measure_locator_and_ships_no_measure_copy(mods):
     assert target.name == "measure.py" and target.is_file()
 
 
+@needs_bash
 def test_installed_hook_cleans_up_and_spawns_refresh_via_locator(mods, tmp_path):
     inst, _doc, _br, tmp = mods
     cmd, to_dir = _installed_hook(inst, tmp)
@@ -187,6 +354,7 @@ def test_installed_hook_cleans_up_and_spawns_refresh_via_locator(mods, tmp_path)
     assert lines == ["copilot-rollup --quiet", "dashboard --quiet"]
 
 
+@needs_bash
 def test_installed_hook_cleans_up_even_when_measure_is_unreachable(mods):
     inst, doc, _br, tmp = mods
     cmd, to_dir = _installed_hook(inst, tmp)
@@ -236,7 +404,9 @@ def _dash(monkeypatch, tmp=None):
     home outside any test. The child gets the fixture's throwaway home instead.
     """
     home = Path(os.environ["COPILOT_HOME"]).parent
+    (home / ".claude").mkdir(exist_ok=True)
     env = {**os.environ, "HOME": str(home), "USERPROFILE": str(home),
+           "CLAUDE_CONFIG_DIR": str(home / ".claude"),
            "TOKEN_OPTIMIZER_RUNTIME": "copilot"}
     res = subprocess.run([sys.executable, "-c", _DASH_PROBE, str(SCRIPTS)], env=env,
                          capture_output=True, text=True, timeout=60)
@@ -298,6 +468,7 @@ _HOLDER = (
 )
 
 
+@needs_bash
 def test_session_end_removes_a_released_lease_from_another_process(mods):
     inst, _doc, _br, tmp = mods
     cmd, to_dir = _installed_hook(inst, tmp)
@@ -311,6 +482,7 @@ def test_session_end_removes_a_released_lease_from_another_process(mods):
     assert not lock.exists()
 
 
+@needs_bash
 def test_session_end_keeps_a_lease_a_live_process_still_holds(mods):
     inst, _doc, _br, tmp = mods
     cmd, to_dir = _installed_hook(inst, tmp)
@@ -326,6 +498,7 @@ def test_session_end_keeps_a_lease_a_live_process_still_holds(mods):
         holder.communicate("\n", timeout=30)
 
 
+@needs_bash
 def test_session_end_removes_a_lease_released_long_ago(mods):
     """Past the post-release reuse window the lock is reclaimable even without
     the immediate-reclaim flag; the immediate case is the test above."""
@@ -359,6 +532,7 @@ def test_refresh_warning_does_not_promise_cleanup(mods):
     assert "cleanup" not in detail.lower()
 
 
+@needs_bash
 def test_failed_rollup_does_not_stop_the_dashboard(mods, tmp_path):
     inst, _doc, _br, tmp = mods
     cmd, to_dir = _installed_hook(inst, tmp)
@@ -402,6 +576,7 @@ def _assert_cleanup_without_refresh(cmd, tmp, to_dir, out):
     assert not any(out.iterdir())
 
 
+@needs_bash
 def test_symlinked_locator_file_is_refused_but_cleanup_runs(mods, tmp_path):
     inst, doc, _br, tmp = mods
     cmd, to_dir = _installed_hook(inst, tmp)
@@ -416,6 +591,7 @@ def test_symlinked_locator_file_is_refused_but_cleanup_runs(mods, tmp_path):
     _assert_cleanup_without_refresh(cmd, tmp, to_dir, out)
 
 
+@needs_bash
 def test_symlinked_measure_target_is_refused_but_cleanup_runs(mods, tmp_path):
     inst, doc, _br, tmp = mods
     cmd, to_dir = _installed_hook(inst, tmp)
@@ -429,6 +605,7 @@ def test_symlinked_measure_target_is_refused_but_cleanup_runs(mods, tmp_path):
     _assert_cleanup_without_refresh(cmd, tmp, to_dir, out)
 
 
+@needs_bash
 def test_removed_checkout_target_still_cleans_up(mods, tmp_path):
     inst, doc, _br, tmp = mods
     cmd, to_dir = _installed_hook(inst, tmp)
