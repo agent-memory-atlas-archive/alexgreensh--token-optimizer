@@ -42,6 +42,8 @@ def plugin():
     # Deterministic window: the real resolver reads a model catalog we do not want to couple to.
     module._context_window = lambda model: WINDOW  # noqa: SLF001 — deliberate test seam
     module._native_compression_needs_help = lambda session_id: True  # fallback-policy seam
+    # Fill-band checkpoints start background processes; not under test here.
+    module._maybe_checkpoint = lambda *a, **k: False
 
     module._TALLY.clear()
     module._NUDGED.clear()
