@@ -1423,30 +1423,17 @@ def _literal_prefix_ok(pattern: str) -> bool:
 
 def redaction_patterns() -> list[str]:
     """Token Optimizer's credential patterns (built-in + the user's custom
-    file) in the form Hermes's redactor accepts. Empty on any problem."""
-    bridge = _import_bridge()
-    sdir = bridge.scripts_dir() if bridge is not None else None
-    if sdir is None:
-        return []
-    path = sdir / "credential_patterns.py"
-    if not path.is_file():
-        return []
-    import importlib.util  # noqa: PLC0415
+    file) in the form Hermes's redactor accepts. Empty on any problem.
 
-    spec = importlib.util.spec_from_file_location("to_credential_patterns", path)
-    if spec is None or spec.loader is None:
+    Loaded in a child process under the Hermes runtime, so the custom pattern
+    file is the same one the engines redact with.
+    """
+    bridge = _import_bridge()
+    if bridge is None:
         return []
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    compiled = list(getattr(module, "PATTERNS_ONLY", []))
-    try:
-        compiled += [pat for _, pat in module.get_custom_patterns()]
-    except Exception:
-        pass  # a broken custom file: register the built-ins only
     out: list[str] = []
-    for pat in compiled:
-        text = getattr(pat, "pattern", None)
-        if isinstance(text, str) and text not in out and _literal_prefix_ok(text):
+    for text in bridge.redaction_patterns():
+        if text not in out and _literal_prefix_ok(text):
             out.append(text)
     return out
 

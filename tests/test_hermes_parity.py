@@ -288,6 +288,22 @@ def test_redaction_filter_mirrors_hermes_rules(plugin, pattern, ok):
     assert plugin._literal_prefix_ok(pattern) is ok
 
 
+def test_custom_patterns_from_the_hermes_home_reach_hermes(plugin, home, monkeypatch):
+    custom = home / ".hermes" / "token-optimizer"
+    custom.mkdir(parents=True, exist_ok=True)
+    (custom / "redact-patterns.json").write_text(
+        json.dumps({"patterns": [r"medx_[A-Za-z0-9]{32}"]}), encoding="utf-8")
+    # A Claude Code custom file must not leak into Hermes.
+    cc = home / ".claude" / "token-optimizer"
+    cc.mkdir(parents=True)
+    (cc / "redact-patterns.json").write_text(
+        json.dumps({"patterns": [r"claudeonly_[a-z]{12}"]}), encoding="utf-8")
+    ctx = FakeCtx()
+    plugin.register(ctx)
+    assert r"medx_[A-Za-z0-9]{32}" in ctx.patterns
+    assert not any(p.startswith("claudeonly_") for p in ctx.patterns)
+
+
 def test_redaction_can_be_turned_off(plugin, monkeypatch):
     monkeypatch.setenv("TOKEN_OPTIMIZER_HERMES_REDACTION", "0")
     ctx = FakeCtx()
