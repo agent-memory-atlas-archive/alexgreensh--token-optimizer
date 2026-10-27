@@ -46813,7 +46813,9 @@ def quality_cache(throttle_seconds=120, warn_threshold=70, quiet=False, session_
         result["session_start_ts"] = _extract_session_start_ts(filepath)
         result["active_agents"] = _extract_active_agents(filepath)
 
-        # Cache hit rate for statusline (v5.4.27)
+        # Cache hit rate for statusline (v5.4.27). A billing ratio, so it reads
+        # the top-level (advisor-summed) usage on purpose, unlike context fill,
+        # which uses _context_usage (#287).
         try:
             total_input_all = 0
             total_cache_read = 0
@@ -54216,7 +54218,11 @@ def _advice_session_data(path):
       turns          per-request context size (input + cache_read + cache_creation)
                      of each main-thread assistant usage row, in order; streamed
                      chunks sharing a requestId collapse to the largest row.
-      cache_reads    cache_read_input_tokens per turn (same indexing).
+      cache_reads    cache_read_input_tokens per turn (same indexing). This is
+                     the billed aggregate, while `turns` is executor occupancy
+                     (#287). On advisor sessions avoided reads (derived from
+                     `turns`) are measured against the larger billed total, so
+                     avoided_share_pct can only understate the saving.
       boundaries     indexes in `turns` that directly follow a compact_boundary.
       model          newest model id on a main-thread row, or None.
       post_compact_ctx  context size of the first request after each recorded
