@@ -492,6 +492,17 @@ def test_partial_reads_are_not_treated_as_full_rereads(plugin, tmp_path):
     assert ranged is None
 
 
+def test_relative_paths_never_use_the_read_cache(plugin, tmp_path, monkeypatch):
+    """Hermes resolves relative paths against the session's directory; the
+    plugin cannot see it, so it must not guess (it could map the wrong file)."""
+    src = tmp_path / "rel.py"
+    src.write_text((SCRIPTS / "spawn_utils.py").read_text(encoding="utf-8"), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    for call in ("r1", "r2", "r3"):
+        assert plugin.on_pre_tool_call(tool_name="read_file", args={"path": "rel.py"}, task_id="t",
+                                       session_id="sess_read_04", tool_call_id=call) is None
+
+
 def test_read_cache_can_be_turned_off(plugin, tmp_path, monkeypatch):
     monkeypatch.setenv("TOKEN_OPTIMIZER_HERMES_READ_CACHE", "0")
     src = tmp_path / "m.py"

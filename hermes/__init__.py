@@ -155,8 +155,9 @@ def _import_state():
 #                          "cache_write": int, "reasoning": int}
 # _NUDGED:  session_id -> True once the above-threshold nudge has fired.
 #           Once set, the gate never re-arms within the session: a later drop
-#           below the threshold and a second crossing stay silent. Cleared on
-#           session_finalize/end so the NEXT session starts clean.
+#           below the threshold and a second crossing stay silent. Cleared
+#           when the session ends (finalize, or the CLI exit-path
+#           on_session_end), never at the end of an ordinary turn.
 # ---------------------------------------------------------------------------
 
 _LOCK = threading.Lock()
@@ -947,6 +948,19 @@ def on_pre_tool_call(**kwargs: Any) -> dict[str, str] | None:
         if tool_name == "read_file":
             if not _enabled("READ_CACHE"):
                 return None
+            # Hermes resolves a relative path against the session's working
+            # directory, which this process cannot see. Resolving it here could
+            # answer with a different file's map, so only absolute paths (and
+            # ~/...) use the read cache.
+            raw_path = args.get("path")
+            if not isinstance(raw_path, str) or not raw_path.strip():
+                return None
+            import os  # noqa: PLC0415
+
+            full_path = os.path.expanduser(raw_path.strip())
+            if not os.path.isabs(full_path):
+                return None
+            args = {**args, "path": full_path}
         elif tool_name.startswith("mcp__"):
             if not _enabled("REFETCH_GUARD"):
                 return None
