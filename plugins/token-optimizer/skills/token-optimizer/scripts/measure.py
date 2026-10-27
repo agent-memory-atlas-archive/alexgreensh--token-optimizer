@@ -12680,6 +12680,15 @@ def parse_session_turns(filepath):
                     "tools_used": tools,
                     "cost_usd": round(cost, 6),
                 })
+                context_usage = _context_usage(usage)
+                if context_usage is not usage:
+                    # Preserve the aggregate buckets/cost above for billing.
+                    # Keep-warm compares one executor with its armed prefix.
+                    context_read = _safe_int(context_usage.get("cache_read_input_tokens"))
+                    turns[-1]["context_cache_read"] = context_read
+                    turns[-1]["context_cache_creation"] = (
+                        _context_token_count(context_usage) - context_read
+                        - _safe_int(context_usage.get("input_tokens")))
                 turn_index += 1
 
     except (PermissionError, OSError):
@@ -19001,8 +19010,8 @@ def keepwarm_resume_is_warm(turn, prefix_proxy):
         prefix = 0
     if prefix <= 0 or not isinstance(turn, dict):
         return None
-    cr = int(turn.get("cache_read", 0) or 0)
-    cc = int(turn.get("cache_creation", 0) or 0)
+    cr = int(turn.get("context_cache_read", turn.get("cache_read", 0)) or 0)
+    cc = int(turn.get("context_cache_creation", turn.get("cache_creation", 0)) or 0)
     warm = (cr >= _KEEPWARM_WARM_READ_FRACTION * prefix
             and cc < _KEEPWARM_WARM_WRITE_FRACTION * prefix)
     return bool(warm)

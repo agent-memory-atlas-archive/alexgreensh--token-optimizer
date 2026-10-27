@@ -374,3 +374,62 @@ def test_malformed_executor_cache_creation_container_falls_back(m, nested):
     executor.pop("cache_creation_input_tokens")
     executor["cache_creation"] = nested
     assert mod._context_usage(usage) is usage
+
+
+@pytest.mark.parametrize("warm", [True, False])
+def test_advisor_keepwarm_books_executor_resume_once_without_changing_billing(m, monkeypatch, warm):
+    mod, _, root = m
+    read, write = (350_000, 150_000) if warm else (150_000, 350_000)
+    executor = {"type": "message", "input_tokens": 100,
+                "cache_read_input_tokens": read,
+                "cache_creation_input_tokens": write}
+    usage = {"input_tokens": 200, "cache_read_input_tokens": read * 2,
+             "cache_creation_input_tokens": write * 2,
+             "iterations": [dict(executor),
+                 {"type": "advisor_message", "input_tokens": 900_000}, executor]}
+    path = _advisor_transcript(mod, root, usage)
+    arm_ts = mod._keepwarm_iso_to_epoch("2026-10-27T09:00:00Z")
+    turn = mod._keepwarm_first_usage_after(path, arm_ts)
+    assert turn["cache_read"] == read * 2
+    assert turn["cache_creation"] == write * 2
+    billed_cost = turn["cost_usd"]
+    assert mod.keepwarm_resume_is_warm(turn, 500_000) is warm
+    markers, bookings = [], []
+    monkeypatch.setattr(mod, "classify_keepwarm_record", lambda *a, **kw: "resumed")
+    monkeypatch.setattr(mod, "_keepwarm_load_ledger_rows", lambda: markers)
+    monkeypatch.setattr(mod, "_keepwarm_ledger_append", lambda row: markers.append(row))
+    def book(**kw):
+        bookings.append(kw)
+        return 1
+    monkeypatch.setattr(mod, "_keepwarm_log_realized_savings", book)
+    rec = {"session_id": "advisor-session", "ts": arm_ts,
+           "transcript_path": str(path), "prefix_proxy": 500_000,
+           "model": "claude-sonnet-5-5", "pings_fired": [arm_ts + 30]}
+    result = mod.keepwarm_detect_realized(now=arm_ts + 7200, records=[rec])
+    assert result["realized"] == int(warm)
+    assert result["loss"] == int(not warm)
+    assert markers[0]["status"] == ("realized" if warm else "loss")
+    assert len(bookings) == int(warm)
+    repeat = mod.keepwarm_detect_realized(now=arm_ts + 7300, records=[rec])
+    assert repeat["realized"] == 0
+    assert len(markers) == 1
+    assert len(bookings) == int(warm)
+    plain = dict(usage)
+    plain.pop("iterations")
+    _advisor_transcript(mod, root, plain)
+    assert mod.parse_session_turns(path)[0]["cost_usd"] == billed_cost
+
+
+def test_keepwarm_ordinary_and_invalid_executor_keep_aggregate_comparison(m):
+    mod, _, root = m
+    usage = {"input_tokens": 100, "cache_read_input_tokens": 350_000,
+             "cache_creation_input_tokens": 150_000}
+    for iterations in (None, [{"type": "message", "input_tokens": 100,
+                              "cache_read_input_tokens": "bad"}]):
+        if iterations is not None:
+            usage["iterations"] = iterations
+        path = _advisor_transcript(mod, root, usage)
+        turn = mod.parse_session_turns(path)[0]
+        assert "context_cache_read" not in turn
+        assert "context_cache_creation" not in turn
+        assert mod.keepwarm_resume_is_warm(turn, 500_000) is True
