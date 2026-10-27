@@ -235,6 +235,10 @@ def install(*, dry_run: bool = False, home: Path = None) -> dict:
                 tmp.write_text(f"{measure_py}\n", encoding="utf-8")
                 os.replace(tmp, locator)  # swaps a symlink, never follows it
             except OSError as exc:
+                try:
+                    tmp.unlink()
+                except OSError:
+                    pass
                 raise RuntimeError(f"failed writing measure-path locator: {exc}") from exc
 
     hook_path = hooks_dir / HOOK_FILE_NAME

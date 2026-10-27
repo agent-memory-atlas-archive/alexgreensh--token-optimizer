@@ -25,6 +25,7 @@ import argparse
 import calendar
 import json
 import os
+import re
 import shutil
 import sys
 import time
@@ -126,11 +127,32 @@ def _home_checks() -> list:
     return checks
 
 
-def _invalid_matcher_events(hooks) -> list:
-    """Events with an entry whose `matcher` is present but not a string.
+# Copilot's hook loader is Rust (`[rust:hooks]` in its logs), whose regex engine has no
+# lookaround or backreferences. Python's `re` accepts both, so they are flagged separately.
+_RUST_REGEX_UNSUPPORTED = re.compile(r"\(\?<?[=!]|\\[1-9]")
 
-    Copilot skips a hook entry whose matcher is not a regex string, so an
-    event listed in the file can still never fire.
+
+def _matcher_is_skipped(matcher) -> bool:
+    """True when Copilot would skip a hook entry with this matcher."""
+    if not isinstance(matcher, str):
+        return True
+    if not matcher.strip():
+        return True  # ^(?:)$ matches no tool name, so the hook never fires
+    if _RUST_REGEX_UNSUPPORTED.search(matcher):
+        return True
+    try:
+        re.compile(matcher)
+    except re.error:
+        return True
+    return False
+
+
+def _invalid_matcher_events(hooks) -> list:
+    """Events with an entry whose `matcher` Copilot would reject or never match.
+
+    Copilot compiles `matcher` as the regex ^(?:PATTERN)$ and skips an entry
+    whose matcher is not a valid regex string, so an event listed in the file
+    can still never fire.
     """
     bad = []
     if not isinstance(hooks, dict):
@@ -140,7 +162,7 @@ def _invalid_matcher_events(hooks) -> list:
         if not isinstance(entries, list):
             continue
         for entry in entries:
-            if isinstance(entry, dict) and "matcher" in entry and not isinstance(entry["matcher"], str):
+            if isinstance(entry, dict) and "matcher" in entry and _matcher_is_skipped(entry["matcher"]):
                 bad.append(event)
                 break
     return bad

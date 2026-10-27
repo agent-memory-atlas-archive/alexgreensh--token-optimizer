@@ -96,3 +96,29 @@ def test_doctor_tolerates_malformed_shapes(mods):
     _inst, doc, _tmp = mods
     assert doc._invalid_matcher_events({"preToolUse": "x", "stop": [1, None]}) == []
     assert doc._invalid_matcher_events(None) == []
+
+
+@pytest.mark.parametrize("matcher", ["bash(", "", "   ", "(?=bash)bash", "(?!edit).*", "(b)\\1"])
+def test_doctor_flags_string_matchers_copilot_skips(mods, matcher):
+    """A string matcher can still be skipped: invalid regex, empty (matches no
+    tool), or lookaround/backreference, which Copilot's Rust regex rejects."""
+    inst, doc, tmp = mods
+    inst.install(home=tmp)
+    path = tmp / "hooks" / "token-optimizer.json"
+    data = json.loads(path.read_text())
+    data["hooks"]["preToolUse"][0]["matcher"] = matcher
+    path.write_text(json.dumps(data))
+    check = _doctor_hook_check(doc)
+    assert check["status"] == "fail"
+    assert "preToolUse" in check["detail"]
+
+
+@pytest.mark.parametrize("matcher", ["bash", "bash|powershell", "(bash|shell)"])
+def test_doctor_passes_valid_string_matchers(mods, matcher):
+    inst, doc, tmp = mods
+    inst.install(home=tmp)
+    path = tmp / "hooks" / "token-optimizer.json"
+    data = json.loads(path.read_text())
+    data["hooks"]["preToolUse"][0]["matcher"] = matcher
+    path.write_text(json.dumps(data))
+    assert _doctor_hook_check(doc)["status"] == "ok"

@@ -42786,22 +42786,37 @@ _RESUME_TOPIC_STOPWORDS = frozenset({
 # The Latin-1/Extended-A ranges deliberately skip U+00D7 (×) and U+00F7 (÷): they sit inside
 # the block but are math symbols, not letters. U+0100–U+024F is Latin Extended-A/B, all letters.
 _TOPIC_TOKEN_RE = re.compile(r"[a-zA-Z0-9_.:À-ÖØ-öø-ÿĀ-ɏ/-]+|[^\x00-\x7F]+")
-# Script-aware length floor. Short words in non-Latin scripts (CJK, Cyrillic, Arabic, etc.)
-# carry topic meaning at len>=2. ASCII and accented Latin keep the len>3 English stopword
-# heuristic (a 2-char Latin token like "ré" is stopword-like, not content).
+# Script-aware length floor, defined by fixed code-point ranges so Python, OpenClaw and
+# OpenCode classify every character the same way on any Unicode version.
+#   * Any char at or above U+3000 (Han, Kana, Hangul, fullwidth forms): a 2-char word such as
+#     결제 (payment) or 모듈 (module) is a full topic, so keep len>=2.
+#   * Other non-Latin letters (Cyrillic, Greek, Arabic, Hebrew, Indic...): keep len>=3, which
+#     keeps "кот" but drops 2-letter function words such as "на", "في", "של".
+#   * Latin (ASCII, accented, extended, letterlike): the len>3 English stopword heuristic.
+# Combining marks (accents, niqqud, harakat) never count toward the length.
+_TOPIC_WIDE_MIN = 0x3000
+_TOPIC_LATIN_RANGES = (
+    (0x0000, 0x036F), (0x1D00, 0x1DFF), (0x1E00, 0x1EFF), (0x2000, 0x214F),
+    (0x2C60, 0x2C7F), (0xA720, 0xA7FF), (0xAB30, 0xAB6F),
+)
+_TOPIC_MARK_RANGES = (
+    (0x0300, 0x036F), (0x0483, 0x0489), (0x0591, 0x05C7), (0x0610, 0x061A), (0x064B, 0x065F),
+    (0x0670, 0x0670), (0x06D6, 0x06ED), (0x1AB0, 0x1AFF), (0x1DC0, 0x1DFF), (0x200B, 0x200F),
+    (0x20D0, 0x20FF), (0xFE00, 0xFE0F), (0xFE20, 0xFE2F),
+)
 
-def _has_non_latin_letter(w):
-    """True when a token contains a letter from a non-Latin Unicode script."""
-    return any(
-        ch.isalpha() and not unicodedata.name(ch, "").startswith("LATIN")
-        for ch in w
-    )
+
+def _in_ranges(cp, ranges):
+    return any(lo <= cp <= hi for lo, hi in ranges)
 
 
 def _topic_token_kept(w):
-    if _has_non_latin_letter(w):
-        return len(w) >= 2
-    return len(w) > 3
+    cps = [ord(ch) for ch in w if not _in_ranges(ord(ch), _TOPIC_MARK_RANGES)]
+    if any(cp >= _TOPIC_WIDE_MIN for cp in cps):
+        return len(cps) >= 2
+    if any(not _in_ranges(cp, _TOPIC_LATIN_RANGES) for cp in cps):
+        return len(cps) >= 3
+    return len(cps) > 3
 
 
 def _topic_tokens(text, stopwords=frozenset()):

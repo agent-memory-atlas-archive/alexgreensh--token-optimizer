@@ -108,15 +108,28 @@ const RECOVER_TOKEN_RE = /[a-zA-Z0-9_./:-]+/g;
 // Two branches: ASCII/accented-Latin run OR a whole non-ASCII run as one token (a token never
 // mixes ASCII and non-ASCII). Latin-1/Extended-A ranges skip × U+00D7 / ÷ U+00F7 (symbols).
 const TOPIC_TOKEN_RE = /[a-zA-Z0-9_.:À-ÖØ-öø-ÿĀ-ɏ/-]+|[^\x00-\x7F]+/g;
-// Script-aware floor: short words in non-Latin scripts (CJK, Cyrillic, Arabic, etc.) are kept
-// at len>=2; ASCII/accented-Latin keep the len>3 English stopword heuristic. Code-point counts
-// and script classification match Python.
+// Script-aware floor by fixed code-point ranges, identical to Python measure.py
+// _topic_token_kept (no Unicode property tables, so every runtime agrees):
+//   >= U+3000 (Han, Kana, Hangul, fullwidth) keep len>=2; other non-Latin letters keep len>=3
+//   (drops 2-letter function words like "на"); Latin keeps len>3. Combining marks never count.
+const TOPIC_WIDE_MIN = 0x3000;
+const TOPIC_LATIN_RANGES: ReadonlyArray<readonly [number, number]> = [
+  [0x0000, 0x036f], [0x1d00, 0x1dff], [0x1e00, 0x1eff], [0x2000, 0x214f],
+  [0x2c60, 0x2c7f], [0xa720, 0xa7ff], [0xab30, 0xab6f],
+];
+const TOPIC_MARK_RANGES: ReadonlyArray<readonly [number, number]> = [
+  [0x0300, 0x036f], [0x0483, 0x0489], [0x0591, 0x05c7], [0x0610, 0x061a], [0x064b, 0x065f],
+  [0x0670, 0x0670], [0x06d6, 0x06ed], [0x1ab0, 0x1aff], [0x1dc0, 0x1dff], [0x200b, 0x200f],
+  [0x20d0, 0x20ff], [0xfe00, 0xfe0f], [0xfe20, 0xfe2f],
+];
+function inRanges(cp: number, ranges: ReadonlyArray<readonly [number, number]>): boolean {
+  return ranges.some(([lo, hi]) => lo <= cp && cp <= hi);
+}
 function topicTokenKept(w: string): boolean {
-  const cps = [...w];
-  const hasNonLatinLetter = cps.some((ch) =>
-    /\p{Letter}/u.test(ch) && !/\p{Script=Latin}/u.test(ch),
-  );
-  return hasNonLatinLetter ? cps.length >= 2 : cps.length > 3;
+  const cps = [...w].map((ch) => ch.codePointAt(0) ?? 0).filter((cp) => !inRanges(cp, TOPIC_MARK_RANGES));
+  if (cps.some((cp) => cp >= TOPIC_WIDE_MIN)) return cps.length >= 2;
+  if (cps.some((cp) => !inRanges(cp, TOPIC_LATIN_RANGES))) return cps.length >= 3;
+  return cps.length > 3;
 }
 function extractTopicTokens(text: string, stop?: ReadonlySet<string>): Set<string> {
   const out = new Set<string>();
