@@ -7166,9 +7166,16 @@ def _collect_copilot_hook_status_for_dashboard():
     return {
         "copilot_hooks": {
             "installed": _ok("TO hook config"),
-            "partial": by_name.get("TO hook config", {}).get("status") == "warn",
+            # Installed stays tied to the hook config; a dead legacy `stop` entry
+            # or a bridge that cannot find measure.py (session-end refresh paused), or a
+            # damaged hook payload (missing bridge modules) is installed-but-partial,
+            # not healthy.
+            "partial": any(
+                by_name.get(n, {}).get("status") == "warn"
+                for n in ("TO hook config", "TO session-end hook", "session-end refresh")
+            ) or by_name.get("hook payload", {}).get("status") in ("warn", "fail"),
             "label": "Copilot CLI Hooks",
-            "description": "Wires Token Optimizer into ~/.copilot/hooks/: sessionStart continuity restore, preToolUse bash compression (capability-gated), postToolUse crash-recovery tally + nudges, stop-time rollup.",
+            "description": "Wires Token Optimizer into ~/.copilot/hooks/: sessionStart continuity restore, preToolUse bash compression (capability-gated), postToolUse crash-recovery tally + nudges, session-end rollup.",
             "install_cmd": install_cmd,
             "uninstall_cmd": f"{_runtime_cli('copilot')} copilot-uninstall",
         },
@@ -57448,7 +57455,7 @@ if __name__ == "__main__":
         sys.exit(0)
     elif args[0] == "copilot-rollup":
         # Ingest recent Copilot sessions (CLI + VS Code planes) into trends.db.
-        # Fired by the stop hook via copilot_hook_bridge.handle_stop(); extra
+        # Fired by the sessionEnd hook via copilot_hook_bridge.handle_session_end(); extra
         # flags are silently consumed (INSERT OR IGNORE keeps this idempotent).
         # Wall-clock backstop: this dispatch is spawned fire-and-forget by the
         # Stop hook bridge (start_new_session=True, DEVNULL, no PID tracking),
