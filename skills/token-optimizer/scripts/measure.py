@@ -2102,6 +2102,81 @@ def _safe_int(value):
         return 0
 
 
+def _context_usage(usage):
+    """Select live executor usage, leaving aggregate usage for billing.
+
+    Advisor/server-tool responses can sum several executor reads in the
+    top-level usage. Only the final message iteration describes occupancy.
+    An unusable final executor falls back to the aggregate, never an older
+    executor (which may describe a different context). Ignore advisor tails.
+    """
+    if isinstance(usage, dict) and isinstance(usage.get("iterations"), list):
+        for iteration in reversed(usage["iterations"]):
+            if isinstance(iteration, dict) and iteration.get("type") == "message":
+                if (_valid_context_usage(iteration)
+                        and _context_token_count(iteration) > 0):
+                    return iteration
+                break
+    return usage
+
+
+def _valid_context_usage(usage):
+    """Reject corrupt present executor buckets before lossy int coercion.
+
+    Missing buckets are optional. TTL splits matter only when the flat
+    cache-write count is absent or zero, matching _context_token_count.
+    """
+    values = [usage[key] for key in ("input_tokens", "cache_read_input_tokens",
+              "cache_creation_input_tokens") if key in usage]
+    if not _safe_int(usage.get("cache_creation_input_tokens")):
+        nested = usage.get("cache_creation", {})
+        if not isinstance(nested, dict):
+            return False
+        for key in ("ephemeral_1h_input_tokens", "ephemeral_5m_input_tokens"):
+            if key in nested:
+                values.append(nested[key])
+            if not nested.get(key) and key in usage:
+                values.append(usage[key])
+    try:
+        return all(math.isfinite(float(value)) and float(value) >= 0
+                   for value in values)
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
+def _resume_usage(usage):
+    """The first executor tests whether the cache survived the pause.
+
+    Later executors may read cache written earlier in this same response;
+    that is not evidence that a keep-warm ping avoided the initial rewrite.
+    Unusable first-executor data keeps the aggregate comparison, not a later
+    executor that could hide a paid rewrite.
+    """
+    if isinstance(usage, dict) and isinstance(usage.get("iterations"), list):
+        for iteration in usage["iterations"]:
+            if isinstance(iteration, dict) and iteration.get("type") == "message":
+                if (_valid_context_usage(iteration)
+                        and _context_token_count(iteration) > 0):
+                    return iteration
+                break
+    return usage
+
+
+def _context_token_count(usage):
+    """Input footprint, including flat or TTL-split cache writes."""
+    if not isinstance(usage, dict):
+        return 0
+    creation = _safe_int(usage.get("cache_creation_input_tokens"))
+    if not creation:
+        nested = usage.get("cache_creation")
+        if not isinstance(nested, dict):
+            nested = {}
+        creation = sum(_safe_int(nested.get(key) or usage.get(key)) for key in (
+            "ephemeral_1h_input_tokens", "ephemeral_5m_input_tokens"))
+    return (_safe_int(usage.get("input_tokens"))
+            + _safe_int(usage.get("cache_read_input_tokens")) + creation)
+
+
 def estimate_tokens_from_file(filepath):
     """Estimate tokens by reading file content (character count / 4)."""
     try:
@@ -12647,6 +12722,15 @@ def parse_session_turns(filepath):
                     "tools_used": tools,
                     "cost_usd": round(cost, 6),
                 })
+                resume_usage = _resume_usage(usage)
+                if resume_usage is not usage:
+                    # Billing stays aggregate; pause warmth uses the first
+                    # executor, before any cache writes inside this response.
+                    resume_read = _safe_int(resume_usage.get("cache_read_input_tokens"))
+                    turns[-1]["resume_cache_read"] = resume_read
+                    turns[-1]["resume_cache_creation"] = (
+                        _context_token_count(resume_usage) - resume_read
+                        - _safe_int(resume_usage.get("input_tokens")))
                 turn_index += 1
 
     except (PermissionError, OSError):
@@ -15597,21 +15681,10 @@ def _keepwarm_prefix_proxy(usage):
     cache_creation may be the flat int field OR a nested object (sum its ephemeral
     splits). Falls back to 0 on malformed input.
     """
+    usage = _context_usage(usage)
     if not isinstance(usage, dict):
         return 0
-    cr = int(usage.get("cache_read_input_tokens", 0) or 0)
-    cc = usage.get("cache_creation_input_tokens", 0)
-    if cc is None:
-        cc = 0
-    cc = int(cc or 0)
-    if cc == 0:
-        nested = usage.get("cache_creation", {})
-        if isinstance(nested, dict):
-            cc = int(
-                (nested.get("ephemeral_1h_input_tokens", 0) or 0)
-                + (nested.get("ephemeral_5m_input_tokens", 0) or 0)
-            )
-    return cr + cc
+    return _context_token_count(usage) - _safe_int(usage.get("input_tokens"))
 
 
 def _keepwarm_iso_to_epoch(ts):
@@ -18979,8 +19052,8 @@ def keepwarm_resume_is_warm(turn, prefix_proxy):
         prefix = 0
     if prefix <= 0 or not isinstance(turn, dict):
         return None
-    cr = int(turn.get("cache_read", 0) or 0)
-    cc = int(turn.get("cache_creation", 0) or 0)
+    cr = int(turn.get("resume_cache_read", turn.get("cache_read", 0)) or 0)
+    cc = int(turn.get("resume_cache_creation", turn.get("cache_creation", 0)) or 0)
     warm = (cr >= _KEEPWARM_WARM_READ_FRACTION * prefix
             and cc < _KEEPWARM_WARM_WRITE_FRACTION * prefix)
     return bool(warm)
@@ -36907,9 +36980,7 @@ def _parse_jsonl_for_quality(filepath):
                     # raise and abort the whole parse (losing all quality data).
                     usage = msg.get("usage")
                     if isinstance(usage, dict):
-                        tok = (_safe_int(usage.get("input_tokens"))
-                               + _safe_int(usage.get("cache_creation_input_tokens"))
-                               + _safe_int(usage.get("cache_read_input_tokens")))
+                        tok = _context_token_count(_context_usage(usage))
                         if tok > 0:
                             context_tokens = tok
                     model_str = msg.get("model")
@@ -43844,9 +43915,7 @@ def _transcript_last_turn(sid_safe):
             u = msg.get("usage") or {}
             if not isinstance(u, dict):
                 continue
-            ctx = (_safe_int(u.get("input_tokens"))
-                   + _safe_int(u.get("cache_read_input_tokens"))
-                   + _safe_int(u.get("cache_creation_input_tokens")))
+            ctx = _context_token_count(_context_usage(u))
             if ctx <= 0:
                 continue
             model = _normalize_model_name(msg.get("model"))
@@ -54079,9 +54148,10 @@ def _advice_session_data(path):
                 u = msg.get("usage")
                 if not isinstance(u, dict):
                     continue
+                # Cache-read traffic is billed aggregate usage; occupancy is
+                # only the final executor iteration of an advisor response.
                 cr = _safe_int(u.get("cache_read_input_tokens"))
-                ctx = (_safe_int(u.get("input_tokens")) + cr
-                       + _safe_int(u.get("cache_creation_input_tokens")))
+                ctx = _context_token_count(_context_usage(u))
                 if ctx <= 0:
                     continue
                 m = msg.get("model")
