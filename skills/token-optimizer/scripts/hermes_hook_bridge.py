@@ -364,6 +364,17 @@ def run_measure_context(args: list[str], payload: dict, timeout: float = 10.0) -
     return ctx.strip() if isinstance(ctx, str) else ""
 
 
+def run_turn_context(payload: dict, timeout: float = 10.0) -> dict | None:
+    """Run ``measure.py hermes-turn-context``: continuity pointer, prior-session
+    hint and lean-output nudge for one Hermes turn, in one child process."""
+    measure_py = _locate_measure_py()
+    if measure_py is None:
+        return None
+    out = _run_json([sys.executable, str(measure_py), "hermes-turn-context"], payload, timeout)
+    obj = _last_json_object(out)
+    return obj if isinstance(obj, dict) else None
+
+
 def spawn_checkpoint(
     session_id: str, trigger: str, *, fill_pct: float | None = None, cwd: str | None = None,
 ) -> bool:

@@ -44,6 +44,9 @@ def plugin():
     module._native_compression_needs_help = lambda session_id: True  # fallback-policy seam
     # Fill-band checkpoints start background processes; not under test here.
     module._maybe_checkpoint = lambda *a, **k: False
+    # Lean-output nudge and continuity run a child process per turn; covered
+    # in test_hermes_parity.py, not under test here.
+    module._lean_output_reading = lambda *a, **k: None
 
     module._TALLY.clear()
     module._NUDGED.clear()

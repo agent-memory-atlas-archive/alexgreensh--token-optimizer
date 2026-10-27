@@ -24474,6 +24474,57 @@ def _hermes_checkpoint_cli(args):
     return result
 
 
+def hermes_turn_context(payload):
+    """Per-turn model context for a Hermes session, in one process.
+
+    Same engines Claude Code's SessionStart / UserPromptSubmit hooks run:
+      - first turn: the new-session checkpoint pointer (compact_restore)
+      - every turn: the topic-matched prior-session hint (_continuity_prompt_hint)
+      - when the plugin passes a live fill reading: the lean-output nudge
+        (_verbosity_nudge_text). Hermes has no session-efficiency signal, so
+        only the strong tier (75-89% fill) can apply; the plugin paces it.
+
+    ``payload`` keys: session_id, prompt, first_turn, fill_pct, score.
+    Returns {"parts": [...], "verbosity": bool}. Never raises.
+    """
+    out = {"parts": [], "verbosity": False}
+    if not isinstance(payload, dict):
+        return out
+    sid = str(payload.get("session_id") or "").strip()
+    if not sid:
+        return out
+    if payload.get("first_turn"):
+        from contextlib import redirect_stdout as _redirect_stdout  # noqa: PLC0415
+
+        buf = io.StringIO()
+        try:
+            with _redirect_stdout(buf):
+                compact_restore(session_id=sid, new_session_only=True)
+        except Exception:
+            pass
+        pointer = buf.getvalue().strip()
+        if pointer:
+            out["parts"].append(pointer)
+    prompt = str(payload.get("prompt") or "").strip()
+    if prompt:
+        try:
+            hint = (_continuity_prompt_hint(prompt_text=prompt[:4000], session_id=sid) or "").strip()
+        except Exception:
+            hint = ""
+        if hint:
+            out["parts"].append(hint)
+    fill = payload.get("fill_pct")
+    if isinstance(fill, (int, float)) and not isinstance(fill, bool):
+        score = payload.get("score")
+        score = float(score) if isinstance(score, (int, float)) and not isinstance(score, bool) else 100.0
+        # No efficiency signal on Hermes: 100 keeps the gentle tier off.
+        nudge = _verbosity_nudge_text(float(fill), score, 100, f"{float(fill):.0f}% full")
+        if nudge:
+            out["parts"].append(nudge)
+            out["verbosity"] = True
+    return out
+
+
 def _resolve_copilot_home_wsl_aware(mnt_root=None):
     """Resolve the Copilot home with a WSL-root /mnt/ exception.
 
@@ -46088,6 +46139,9 @@ def _verbosity_nudge_min_fill() -> int:
 
 _VERBOSITY_NUDGE_MIN_FILL = _verbosity_nudge_min_fill()
 _VERBOSITY_NUDGE_EFFICIENCY_THRESHOLD = 75
+# Lean-output nudge pacing: at most this many per session, this far apart.
+_VERBOSITY_MAX_NUDGES = 3
+_VERBOSITY_COOLDOWN_SEC = 300
 _NUDGE_SESSION_CAP = 3
 # Fresh-session nudge: when a session is BOTH long (high fill) and degraded
 # (quality < threshold), suggest starting a fresh session -- cold-resume-lean
@@ -57319,6 +57373,61 @@ def _canonical_session_id_for_compare(sid: str) -> str:
     return sid
 
 
+def _verbosity_nudge_text(fill_pct, score, session_efficiency, fill_label):
+    """The lean-output nudge for a fill level, or "" when none applies.
+
+    Shared by Claude Code / Codex (run_verbosity_steer) and Hermes
+    (hermes-turn-context), so every runtime gets the same tiers and wording.
+    ``fill_label`` is the fill phrase, e.g. "38% of 1M window".
+
+    Tiers:
+      90%+ fill                        -> "" (adding tokens makes it worse)
+      75-89% fill                      -> strong nudge
+      _VERBOSITY_NUDGE_MIN_FILL-74% and session efficiency below
+      _VERBOSITY_NUDGE_EFFICIENCY_THRESHOLD -> gentle nudge
+    """
+    if fill_pct >= 90:
+        return ""
+    # Determine nudge tier.
+    #
+    # The spartan/ADHD phrasing is used verbatim because it produced the
+    # largest reduction in verbose output across multiple models while
+    # maintaining answer quality. Notes on what the data showed:
+    #   - Word ceilings were REMOVED. An earlier draft capped answers at
+    #     80/120 words. A cap makes a model either truncate a genuinely
+    #     complex answer or ignore the nudge, and a nudge that gets ignored
+    #     is the original failure this rewrite exists to fix.
+    #   - The real waste is elaboration, not preamble. The padding-focused
+    #     wording targeted preamble and restatement and cut half as much,
+    #     because verbose answers mostly repeat themselves rather than
+    #     restate the question.
+    #   - Quality held. On the hardest fixture (prompt-caching explainer,
+    #     1159 -> 759 words) the spartan answer kept every concept and
+    #     covered TTL MORE; what it dropped was the same point made six
+    #     times instead of three.
+    #   - Reasoning and deliverables are fenced off explicitly, because the
+    #     nudge fires mid-task where "spartan" could otherwise be read as
+    #     "write less code".
+    #   - Opus is roughly half as responsive as Sonnet here. Do not quote
+    #     the Sonnet figure as the product number.
+    if fill_pct >= 75:
+        return (
+            f"[Token Optimizer] Context {fill_label}, resource health {score:.0f}/100. "
+            "Answer in a focused and spartan way, as if the user has ADHD. Cut everything "
+            "that is not the answer itself. Think as long as you need, and size code, "
+            "diffs and file contents to the task."
+        )
+    if (fill_pct >= _VERBOSITY_NUDGE_MIN_FILL
+          and session_efficiency < _VERBOSITY_NUDGE_EFFICIENCY_THRESHOLD):
+        return (
+            f"[Token Optimizer] Context {fill_label}, "
+            f"session efficiency {session_efficiency:.0f}/100. "
+            "Answer in a focused and spartan way, as if the user has ADHD. "
+            "Think as long as you need, and size code, diffs and file contents to the task."
+        )
+    return ""
+
+
 def run_verbosity_steer(transcript_path=None, quiet=True, session_id=None):
     """Tiered conciseness nudge for UserPromptSubmit.
 
@@ -57446,11 +57555,9 @@ def run_verbosity_steer(transcript_path=None, quiet=True, session_id=None):
         _now = _vs_time.time()
         _nudge_count = cached.get("nudge_count", 0) or 0
         _last_nudge = cached.get("last_nudge_time", 0) or 0
-        _COOLDOWN_SEC = 300
-        _MAX_NUDGES = 3
-        if _nudge_count >= _MAX_NUDGES:
+        if _nudge_count >= _VERBOSITY_MAX_NUDGES:
             return ""
-        if _now - _last_nudge < _COOLDOWN_SEC:
+        if _now - _last_nudge < _VERBOSITY_COOLDOWN_SEC:
             return ""
 
         # At 90%+ fill, don't add more tokens
@@ -57462,44 +57569,9 @@ def run_verbosity_steer(transcript_path=None, quiet=True, session_id=None):
                 )
             return ""
 
-        # Determine nudge tier.
-        #
-        # The spartan/ADHD phrasing is used verbatim because it produced the
-        # largest reduction in verbose output across multiple models while
-        # maintaining answer quality. Notes on what the data showed:
-        #   - Word ceilings were REMOVED. An earlier draft capped answers at
-        #     80/120 words. A cap makes a model either truncate a genuinely
-        #     complex answer or ignore the nudge, and a nudge that gets ignored
-        #     is the original failure this rewrite exists to fix.
-        #   - The real waste is elaboration, not preamble. The padding-focused
-        #     wording targeted preamble and restatement and cut half as much,
-        #     because verbose answers mostly repeat themselves rather than
-        #     restate the question.
-        #   - Quality held. On the hardest fixture (prompt-caching explainer,
-        #     1159 -> 759 words) the spartan answer kept every concept and
-        #     covered TTL MORE; what it dropped was the same point made six
-        #     times instead of three.
-        #   - Reasoning and deliverables are fenced off explicitly, because the
-        #     nudge fires mid-task where "spartan" could otherwise be read as
-        #     "write less code".
-        #   - Opus is roughly half as responsive as Sonnet here. Do not quote
-        #     the Sonnet figure as the product number.
-        if fill_pct >= 75:
-            nudge = (
-                f"[Token Optimizer] Context {_format_context_fill(fill_pct, cached)}, resource health {score:.0f}/100. "
-                "Answer in a focused and spartan way, as if the user has ADHD. Cut everything "
-                "that is not the answer itself. Think as long as you need, and size code, "
-                "diffs and file contents to the task."
-            )
-        elif (fill_pct >= _VERBOSITY_NUDGE_MIN_FILL
-              and session_efficiency < _VERBOSITY_NUDGE_EFFICIENCY_THRESHOLD):
-            nudge = (
-                f"[Token Optimizer] Context {_format_context_fill(fill_pct, cached)}, "
-                f"session efficiency {session_efficiency:.0f}/100. "
-                "Answer in a focused and spartan way, as if the user has ADHD. "
-                "Think as long as you need, and size code, diffs and file contents to the task."
-            )
-        else:
+        nudge = _verbosity_nudge_text(
+            fill_pct, score, session_efficiency, _format_context_fill(fill_pct, cached))
+        if not nudge:
             return ""
 
         payload = json.dumps({
@@ -57933,6 +58005,20 @@ if __name__ == "__main__":
         _tok_hook_deadline = _install_hook_budget(60)
         try:
             _hermes_checkpoint_cli(args[1:])
+        except _HookTimeout:
+            pass
+        except Exception:
+            pass
+        finally:
+            _clear_hook_budget(_tok_hook_deadline)
+        sys.exit(0)
+    elif args[0] == "hermes-turn-context":
+        # One child process per Hermes turn for continuity + lean-output (see
+        # hermes_turn_context). Reads a JSON payload on stdin, prints one JSON
+        # object. Same 8s budget as the Claude Code prompt hooks.
+        _tok_hook_deadline = _install_hook_budget(8)
+        try:
+            print(json.dumps(hermes_turn_context(_read_stdin_hook_input())))
         except _HookTimeout:
             pass
         except Exception:

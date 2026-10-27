@@ -136,6 +136,10 @@ class RecordingBridge:
         self.context_calls.append(list(args))
         return ""
 
+    def run_turn_context(self, payload, timeout=10.0):
+        self.context_calls.append(["hermes-turn-context", payload])
+        return {"parts": ["LEAN NUDGE"], "verbosity": True} if "fill_pct" in payload else {"parts": []}
+
     def to_claude_payload(self, *a, **k):
         import hermes_hook_bridge
 
@@ -674,6 +678,46 @@ def test_session_delete_and_reset_drop_memory(plugin, recorder):
     assert "sess_mem_02" not in plugin._TALLY
 
 
+def test_lean_output_nudge_reaches_the_model_at_high_fill(plugin, home, monkeypatch):
+    monkeypatch.setattr(plugin, "_context_window", lambda model: 100_000)
+    sid = "sess_lean_01"
+    plugin.on_post_api_request(session_id=sid, model="m",
+                               usage={"input_tokens": 80_000, "output_tokens": 10, "prompt_tokens": 80_000})
+    plugin._maybe_checkpoint = lambda *a, **k: False
+    ctx = plugin.on_pre_llm_call(session_id=sid, user_message="", is_first_turn=False,
+                                 conversation_history=[{"role": "user", "content": "x"}] * 4,
+                                 model="m", platform="cli")
+    assert ctx and "focused and spartan" in ctx["context"]
+    assert "80% full" in ctx["context"]
+
+
+def test_lean_output_nudge_is_paced_like_claude_code(plugin, recorder, monkeypatch):
+    monkeypatch.setattr(plugin, "_context_window", lambda model: 100_000)
+    sid = "sess_lean_02"
+    plugin.on_post_api_request(session_id=sid, model="m",
+                               usage={"input_tokens": 80_000, "prompt_tokens": 80_000})
+
+    def turn():
+        plugin.on_pre_llm_call(session_id=sid, user_message="", conversation_history=[], model="m")
+        return sum(1 for c in recorder.context_calls if c[0] == "hermes-turn-context" and "fill_pct" in c[1])
+
+    assert turn() == 1
+    assert turn() == 1                         # inside the 5 minute cooldown
+    for _ in range(3):
+        plugin._VERBOSITY[sid]["last"] = 0.0   # cooldown elapsed
+        turn()
+    assert plugin._VERBOSITY[sid]["count"] == 3  # never more than 3 per session
+
+
+def test_lean_output_nudge_off_switch(plugin, recorder, monkeypatch):
+    monkeypatch.setenv("TOKEN_OPTIMIZER_HERMES_VERBOSITY", "0")
+    monkeypatch.setattr(plugin, "_context_window", lambda model: 100_000)
+    plugin.on_post_api_request(session_id="sess_lean_03", model="m",
+                               usage={"input_tokens": 80_000, "prompt_tokens": 80_000})
+    plugin.on_pre_llm_call(session_id="sess_lean_03", user_message="", conversation_history=[], model="m")
+    assert not any("fill_pct" in c[1] for c in recorder.context_calls if c[0] == "hermes-turn-context")
+
+
 def test_pre_tool_budget_stays_inside_the_host_timeout(plugin):
     plugin._hook_timeout_cache["value"] = 2.0
     assert plugin._pre_tool_timeout() <= 0.8
@@ -819,6 +863,8 @@ def test_mirrored_constants_match_their_sources(plugin):
     assert hermes_session.EDIT_BATCH_WRITE_THRESHOLD == _measure_constant("_EDIT_BATCH_WRITE_THRESHOLD")
     assert hermes_session.EDIT_BATCH_FILE_THRESHOLD == _measure_constant("_EDIT_BATCH_FILE_THRESHOLD")
     assert plugin._CHECKPOINT_COOLDOWN_S == _measure_constant("_CHECKPOINT_COOLDOWN_SECONDS")
+    assert plugin._VERBOSITY_MAX_NUDGES == _measure_constant("_VERBOSITY_MAX_NUDGES")
+    assert plugin._VERBOSITY_COOLDOWN_S == _measure_constant("_VERBOSITY_COOLDOWN_SEC")
     codex = (SCRIPTS / "codex_hook_bridge.py").read_text(encoding="utf-8")
     assert f"_SUBAGENT_SPRAWL_THRESHOLD = {plugin._SUBAGENT_SPRAWL_THRESHOLD}" in codex
 

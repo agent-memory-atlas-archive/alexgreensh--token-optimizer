@@ -193,6 +193,7 @@ _EDITS: dict[str, dict[str, Any]] = {}
 _CKPT_AT: dict[tuple[str, str], float] = {}
 _ONCE: dict[tuple[str, str], bool] = {}
 _SUBAGENTS: dict[str, int] = {}
+_VERBOSITY: dict[str, dict[str, float]] = {}
 _LAST_SESSION = {"id": ""}
 
 _MAX_TRACKED = 512            # cap on every per-key map above
@@ -201,7 +202,9 @@ _STOP_FAILURE_COOLDOWN_S = 300
 _SUBAGENT_SPRAWL_THRESHOLD = 8  # mirrors codex_hook_bridge._SUBAGENT_SPRAWL_THRESHOLD
 _PRE_TOOL_TIMEOUT_S = 3.0     # pre_tool_call FAILS CLOSED on timeout: keep well under it
 _POST_TOOL_TIMEOUT_S = 8.0
-_CONTEXT_TIMEOUT_S = 8.0
+_CONTEXT_TIMEOUT_S = 10.0
+_VERBOSITY_MAX_NUDGES = 3       # mirrors measure._VERBOSITY_MAX_NUDGES
+_VERBOSITY_COOLDOWN_S = 300     # mirrors measure._VERBOSITY_COOLDOWN_SEC
 
 # Hermes tools whose output already went through transform_terminal_output.
 _TERMINAL_TOOLS = frozenset({"terminal", "process_manage"})
@@ -299,6 +302,7 @@ def _forget_session(session_id: str) -> None:
         _BANDS.pop(session_id, None)
         _EDITS.pop(session_id, None)
         _SUBAGENTS.pop(session_id, None)
+        _VERBOSITY.pop(session_id, None)
         for key in [k for k in _CKPT_AT if k[0] == session_id]:
             _CKPT_AT.pop(key, None)
         for key in [k for k in _ONCE if k[0] == session_id]:
@@ -591,10 +595,13 @@ def on_pre_llm_call(**kwargs: Any) -> dict[str, str] | None:
         session_id: str = kwargs.get("session_id") or ""
         _note_session(session_id)
         parts.extend(_take_pending(session_id))
+        history = kwargs.get("conversation_history")
         parts.extend(_continuity_context(
             session_id,
             kwargs.get("user_message"),
             bool(kwargs.get("is_first_turn")),
+            model=str(kwargs.get("model") or ""),
+            message_count=len(history) if isinstance(history, list) else 0,
         ))
     except Exception as exc:
         logger.debug("[token-optimizer] pre_llm_call continuity error: %s", exc)
@@ -618,32 +625,80 @@ def _message_text(message: Any) -> str:
     return ""
 
 
-def _continuity_context(session_id: str, user_message: Any, first_turn: bool) -> list[str]:
-    """New-session pointer (first turn) and prompt-matched prior-session hint."""
-    if not session_id or not _enabled("CONTINUITY"):
+def _continuity_context(
+    session_id: str,
+    user_message: Any,
+    first_turn: bool,
+    *,
+    model: str = "",
+    message_count: int = 0,
+) -> list[str]:
+    """New-session pointer, prompt-matched prior-session hint, lean-output nudge.
+
+    One child process per turn (measure.py hermes-turn-context), the same
+    engines Claude Code's SessionStart / UserPromptSubmit hooks run.
+    """
+    if not session_id:
+        return []
+    continuity = _enabled("CONTINUITY")
+    prompt = _message_text(user_message).strip() if continuity else ""
+    payload: dict[str, Any] = {
+        "session_id": session_id,
+        "prompt": prompt[:4000],
+        "first_turn": bool(first_turn and continuity),
+    }
+    lean = _lean_output_reading(session_id, model, message_count)
+    if lean is not None:
+        payload["fill_pct"], payload["score"] = lean
+    if not payload["prompt"] and not payload["first_turn"] and lean is None:
         return []
     bridge = _import_bridge()
     if bridge is None:
         return []
-    out: list[str] = []
-    if first_turn:
-        pointer = bridge.run_measure_context(
-            ["compact-restore", "--new-session-only"],
-            {"session_id": session_id, "hook_event_name": "SessionStart", "source": "startup"},
-            timeout=_CONTEXT_TIMEOUT_S,
-        )
-        if pointer:
-            out.append(pointer)
-    prompt = _message_text(user_message).strip()
-    if prompt:
-        hint = bridge.run_measure_context(
-            ["prompt-continuity"],
-            {"session_id": session_id, "prompt": prompt[:4000], "hook_event_name": "UserPromptSubmit"},
-            timeout=_CONTEXT_TIMEOUT_S,
-        )
-        if hint:
-            out.append(hint)
-    return out
+    res = bridge.run_turn_context(payload, timeout=_CONTEXT_TIMEOUT_S) or {}
+    if res.get("verbosity"):
+        with _LOCK:
+            state = _VERBOSITY.setdefault(session_id, {"count": 0, "last": 0.0})
+            while len(_VERBOSITY) > _MAX_TRACKED:
+                _VERBOSITY.pop(next(iter(_VERBOSITY)))
+            state["count"] += 1
+            state["last"] = time.time()
+    parts = res.get("parts") or []
+    return [p for p in parts if isinstance(p, str) and p.strip()]
+
+
+def _lean_output_reading(session_id: str, model: str, message_count: int):
+    """(fill %, quality score) for the lean-output nudge, or None.
+
+    None when the feature is off, when this session already had its nudges
+    (max 3, 5 minutes apart, like Claude Code), or before the first real
+    prompt-size reading.
+    """
+    if not _enabled("VERBOSITY"):
+        return None
+    with _LOCK:
+        prompt = int((_TALLY.get(session_id) or {}).get("last_prompt", 0) or 0)
+        state = dict(_VERBOSITY.get(session_id) or {})
+    if prompt <= 0:
+        return None
+    if int(state.get("count", 0)) >= _VERBOSITY_MAX_NUDGES:
+        return None
+    if time.time() - float(state.get("last", 0.0)) < _VERBOSITY_COOLDOWN_S:
+        return None
+    ctx_win = _context_window(model)
+    if ctx_win <= 0:
+        return None
+    fill_ratio = prompt / ctx_win
+    try:
+        from hermes_session import compute_quality_score  # noqa: PLC0415
+
+        score = float(compute_quality_score(
+            input_tokens=prompt, output_tokens=0, message_count=message_count,
+            model=model or "", context_window=ctx_win, context_tokens=prompt,
+        )["score"])
+    except Exception:
+        score = 100.0
+    return round(min(fill_ratio * 100.0, 100.0), 1), score
 
 
 def _fill_nudge(**kwargs: Any) -> dict[str, str] | None:
