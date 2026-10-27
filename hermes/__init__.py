@@ -652,7 +652,7 @@ def _continuity_context(
     }
     lean = _lean_output_reading(session_id, model, message_count)
     if lean is not None:
-        payload["fill_pct"], payload["score"] = lean
+        payload["fill_pct"], payload["score"], payload["context_window"] = lean
     if not payload["prompt"] and not payload["first_turn"] and lean is None:
         return []
     bridge = _import_bridge()
@@ -671,7 +671,7 @@ def _continuity_context(
 
 
 def _lean_output_reading(session_id: str, model: str, message_count: int):
-    """(fill %, quality score) for the lean-output nudge, or None.
+    """(fill %, quality score, model window) for the lean-output nudge, or None.
 
     None when the feature is off, when this session already had its nudges
     (max 3, 5 minutes apart, like Claude Code), or before the first real
@@ -701,7 +701,7 @@ def _lean_output_reading(session_id: str, model: str, message_count: int):
         )["score"])
     except Exception:
         score = 100.0
-    return round(min(fill_ratio * 100.0, 100.0), 1), score
+    return round(min(fill_ratio * 100.0, 100.0), 1), score, int(ctx_win)
 
 
 def _fill_nudge(**kwargs: Any) -> dict[str, str] | None:

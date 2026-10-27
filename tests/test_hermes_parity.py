@@ -748,7 +748,7 @@ def test_lean_output_nudge_reaches_the_model_at_high_fill(plugin, home, monkeypa
                                  conversation_history=[{"role": "user", "content": "x"}] * 4,
                                  model="m", platform="cli")
     assert ctx and "focused and spartan" in ctx["context"]
-    assert "80% full" in ctx["context"]
+    assert "80% (100k window)" in ctx["context"]
 
 
 def test_lean_output_nudge_is_paced_like_claude_code(plugin, recorder, monkeypatch):

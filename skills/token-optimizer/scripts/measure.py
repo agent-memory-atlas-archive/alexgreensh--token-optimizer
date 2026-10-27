@@ -24567,7 +24567,10 @@ def hermes_turn_context(payload):
         score = payload.get("score")
         score = float(score) if isinstance(score, (int, float)) and not isinstance(score, bool) else 100.0
         # No efficiency signal on Hermes: 100 keeps the gentle tier off.
-        nudge = _verbosity_nudge_text(float(fill), score, 100, f"{float(fill):.0f}% full")
+        window = payload.get("context_window")
+        cached = ({"model_context_window": int(window)}
+                  if isinstance(window, int) and not isinstance(window, bool) and window > 0 else {})
+        nudge = _verbosity_nudge_text(float(fill), score, 100, cached)
         if nudge:
             out["parts"].append(nudge)
             out["verbosity"] = True
@@ -57422,61 +57425,6 @@ def _canonical_session_id_for_compare(sid: str) -> str:
     return sid
 
 
-def _verbosity_nudge_text(fill_pct, score, session_efficiency, fill_label):
-    """The lean-output nudge for a fill level, or "" when none applies.
-
-    Shared by Claude Code / Codex (run_verbosity_steer) and Hermes
-    (hermes-turn-context), so every runtime gets the same tiers and wording.
-    ``fill_label`` is the fill phrase, e.g. "38% of 1M window".
-
-    Tiers:
-      90%+ fill                        -> "" (adding tokens makes it worse)
-      75-89% fill                      -> strong nudge
-      _VERBOSITY_NUDGE_MIN_FILL-74% and session efficiency below
-      _VERBOSITY_NUDGE_EFFICIENCY_THRESHOLD -> gentle nudge
-    """
-    if fill_pct >= 90:
-        return ""
-    # Determine nudge tier.
-    #
-    # The spartan/ADHD phrasing is used verbatim because it produced the
-    # largest reduction in verbose output across multiple models while
-    # maintaining answer quality. Notes on what the data showed:
-    #   - Word ceilings were REMOVED. An earlier draft capped answers at
-    #     80/120 words. A cap makes a model either truncate a genuinely
-    #     complex answer or ignore the nudge, and a nudge that gets ignored
-    #     is the original failure this rewrite exists to fix.
-    #   - The real waste is elaboration, not preamble. The padding-focused
-    #     wording targeted preamble and restatement and cut half as much,
-    #     because verbose answers mostly repeat themselves rather than
-    #     restate the question.
-    #   - Quality held. On the hardest fixture (prompt-caching explainer,
-    #     1159 -> 759 words) the spartan answer kept every concept and
-    #     covered TTL MORE; what it dropped was the same point made six
-    #     times instead of three.
-    #   - Reasoning and deliverables are fenced off explicitly, because the
-    #     nudge fires mid-task where "spartan" could otherwise be read as
-    #     "write less code".
-    #   - Opus is roughly half as responsive as Sonnet here. Do not quote
-    #     the Sonnet figure as the product number.
-    if fill_pct >= 75:
-        return (
-            f"[Token Optimizer] Context {fill_label}, resource health {score:.0f}/100. "
-            "Answer in a focused and spartan way, as if the user has ADHD. Cut everything "
-            "that is not the answer itself. Think as long as you need, and size code, "
-            "diffs and file contents to the task."
-        )
-    if (fill_pct >= _VERBOSITY_NUDGE_MIN_FILL
-          and session_efficiency < _VERBOSITY_NUDGE_EFFICIENCY_THRESHOLD):
-        return (
-            f"[Token Optimizer] Context {fill_label}, "
-            f"session efficiency {session_efficiency:.0f}/100. "
-            "Answer in a focused and spartan way, as if the user has ADHD. "
-            "Think as long as you need, and size code, diffs and file contents to the task."
-        )
-    return ""
-
-
 def run_verbosity_steer(transcript_path=None, quiet=True, session_id=None):
     """Tiered conciseness nudge for UserPromptSubmit.
 
@@ -57618,8 +57566,7 @@ def run_verbosity_steer(transcript_path=None, quiet=True, session_id=None):
                 )
             return ""
 
-        nudge = _verbosity_nudge_text(
-            fill_pct, score, session_efficiency, _format_context_fill(fill_pct, cached))
+        nudge = _verbosity_nudge_text(fill_pct, score, session_efficiency, cached)
         if not nudge:
             return ""
 
@@ -57695,6 +57642,62 @@ def run_verbosity_steer(transcript_path=None, quiet=True, session_id=None):
         return payload
     except Exception:
         return ""
+
+
+def _verbosity_nudge_text(fill_pct, score, session_efficiency, cached):
+    """The lean-output nudge for a fill level, or "" when none applies.
+
+    Shared by Claude Code / Codex (run_verbosity_steer) and Hermes
+    (hermes-turn-context), so every runtime gets the same tiers and wording.
+    ``cached`` is the quality-cache dict (or a small stand-in with
+    ``model_context_window``) that ``_format_context_fill`` reads.
+
+    Tiers:
+      90%+ fill                        -> "" (adding tokens makes it worse)
+      75-89% fill                      -> strong nudge
+      _VERBOSITY_NUDGE_MIN_FILL-74% and session efficiency below
+      _VERBOSITY_NUDGE_EFFICIENCY_THRESHOLD -> gentle nudge
+    """
+    if fill_pct >= 90:
+        return ""
+    # Determine nudge tier.
+    #
+    # The spartan/ADHD phrasing is used verbatim because it produced the
+    # largest reduction in verbose output across multiple models while
+    # maintaining answer quality. Notes on what the data showed:
+    #   - Word ceilings were REMOVED. An earlier draft capped answers at
+    #     80/120 words. A cap makes a model either truncate a genuinely
+    #     complex answer or ignore the nudge, and a nudge that gets ignored
+    #     is the original failure this rewrite exists to fix.
+    #   - The real waste is elaboration, not preamble. The padding-focused
+    #     wording targeted preamble and restatement and cut half as much,
+    #     because verbose answers mostly repeat themselves rather than
+    #     restate the question.
+    #   - Quality held. On the hardest fixture (prompt-caching explainer,
+    #     1159 -> 759 words) the spartan answer kept every concept and
+    #     covered TTL MORE; what it dropped was the same point made six
+    #     times instead of three.
+    #   - Reasoning and deliverables are fenced off explicitly, because the
+    #     nudge fires mid-task where "spartan" could otherwise be read as
+    #     "write less code".
+    #   - Opus is roughly half as responsive as Sonnet here. Do not quote
+    #     the Sonnet figure as the product number.
+    if fill_pct >= 75:
+        return (
+            f"[Token Optimizer] Context {_format_context_fill(fill_pct, cached)}, resource health {score:.0f}/100. "
+            "Answer in a focused and spartan way, as if the user has ADHD. Cut everything "
+            "that is not the answer itself. Think as long as you need, and size code, "
+            "diffs and file contents to the task."
+        )
+    if (fill_pct >= _VERBOSITY_NUDGE_MIN_FILL
+          and session_efficiency < _VERBOSITY_NUDGE_EFFICIENCY_THRESHOLD):
+        return (
+            f"[Token Optimizer] Context {_format_context_fill(fill_pct, cached)}, "
+            f"session efficiency {session_efficiency:.0f}/100. "
+            "Answer in a focused and spartan way, as if the user has ADHD. "
+            "Think as long as you need, and size code, diffs and file contents to the task."
+        )
+    return ""
 
 
 if __name__ == "__main__":
