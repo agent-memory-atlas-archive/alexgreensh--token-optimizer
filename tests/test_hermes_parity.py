@@ -402,6 +402,14 @@ def test_loop_detection_nudges_on_identical_reruns(plugin):
     assert results[2].startswith(output)
 
 
+def test_bash_compress_switch_turns_compression_off_but_keeps_loop_detection(plugin, monkeypatch):
+    monkeypatch.setenv("TOKEN_OPTIMIZER_BASH_COMPRESS", "0")
+    assert _terminal(plugin, "sess_term_06", FIND_COMMAND, FIND_OUTPUT) is None
+    output = "E   AssertionError: boom\n1 failed in 0.1s\n"
+    results = [_terminal(plugin, "sess_term_06", "pytest -x", output, returncode=1) for _ in range(3)]
+    assert results[2] and "3 times this session" in results[2]
+
+
 def test_terminal_session_falls_back_to_task_id(plugin):
     # No pre_tool_call seen for this task: attribute to the task id, never drop.
     out = plugin.on_transform_terminal_output(command=FIND_COMMAND, output=FIND_OUTPUT,

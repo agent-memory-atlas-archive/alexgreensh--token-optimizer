@@ -149,6 +149,16 @@ def _collect(objs: list[dict], result: dict) -> None:
             result["notes"].append(msg.strip())
 
 
+def _bash_compress_enabled() -> bool:
+    """The same switch every other bridge honours (env var or dashboard)."""
+    try:
+        from plugin_env import is_v5_flag_enabled
+
+        return bool(is_v5_flag_enabled("v5_bash_compress", "TOKEN_OPTIMIZER_BASH_COMPRESS", default=True))
+    except Exception:
+        return True
+
+
 def run_post_tool(payload: dict) -> dict:
     result: dict = {"replacement": None, "notes": []}
     tool_name = str(payload.get("tool_name") or "")
@@ -159,6 +169,11 @@ def run_post_tool(payload: dict) -> dict:
     if _MATCH_BASH_COMPRESS.search(tool_name):
         import bash_compress_hook
 
+        if not _bash_compress_enabled():
+            # The user turned compression off (env or dashboard toggle). Keep
+            # loop detection: the hook's nudge-only mode skips the compression
+            # compute and still reports reruns.
+            os.environ["TOKEN_OPTIMIZER_NO_UPDATED_TOOL_OUTPUT"] = "1"
         _rebind(bash_compress_hook)
         _collect(_json_objects(_capture(bash_compress_hook.main)), result)
     if _MATCH_ARCHIVE.search(tool_name) and result["replacement"] is None:
