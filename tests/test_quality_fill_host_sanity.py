@@ -194,3 +194,114 @@ def test_denominator_error_still_overrides_when_host_tokens_match(m, monkeypatch
     fd = result["breakdown"]["context_fill_degradation"]
     assert fd.get("fill_source") == "host-stale-override"
     assert result["score"] >= 80
+
+# Advisor responses sum executor iterations for billing, not context occupancy.
+def _advisor_usage():
+    def executor(ctx, read):
+        return {"type": "message", "input_tokens": 100,
+                "cache_creation_input_tokens": ctx - read - 100,
+                "cache_read_input_tokens": read, "output_tokens": 12}
+    return {"input_tokens": 200, "cache_creation_input_tokens": 180_827,
+            "cache_read_input_tokens": 800_000, "output_tokens": 24,
+            "iterations": [executor(489_876, 400_000),
+                           {"type": "advisor_message", "input_tokens": 494_410},
+                           executor(491_151, 400_000)]}
+
+
+def _advisor_transcript(mod, root, usage):
+    project = root / "projects" / "-advisor"
+    project.mkdir(parents=True, exist_ok=True)
+    path = project / "advisor-session.jsonl"
+    path.write_text(json.dumps({"type": "assistant",
+        "timestamp": "2026-10-27T10:00:00Z", "requestId": "advisor-request",
+        "message": {"model": "claude-sonnet-5-5", "usage": usage,
+                    "content": [{"type": "tool_use", "id": "tool-advisor",
+                                 "name": "advisor", "input": {}}]}}) + "\n",
+        encoding="utf-8")
+    return path
+
+
+def test_advisor_context_uses_final_executor_without_changing_billing(m, monkeypatch):
+    mod, _, root = m
+    usage = _advisor_usage()
+    path = _advisor_transcript(mod, root, usage)
+    q = mod._parse_jsonl_for_quality(path)
+    assert q["context_tokens"] == 491_151  # not the 981,027 billed sum
+    q["model_context_window"] = 1_000_000
+    monkeypatch.setattr(mod, "detect_context_window", lambda: (1_000_000, "test"))
+    score = mod.compute_quality_score(q)
+    assert score["breakdown"]["context_fill_degradation"]["fill_pct"] == pytest.approx(49.1151, abs=.1)
+    assert mod._transcript_last_turn("advisor-session")[0] == 491_151
+    replay = mod._advice_session_data(path)
+    assert replay["turns"] == [491_151]
+    assert replay["cache_reads"] == [400_000]
+    assert mod._keepwarm_prefix_proxy(usage) == 491_051
+    # These are billing APIs: every paid executor iteration still counts.
+    billed_session = mod._parse_session_jsonl(path)
+    billed_turn = mod.parse_session_turns(path)[0]
+    assert billed_turn["input_tokens"] == 200
+    assert billed_turn["cache_read"] == 800_000
+    assert billed_turn["cache_creation"] == 180_827
+    assert billed_turn["output_tokens"] == 24
+    plain = dict(usage)
+    plain.pop("iterations")
+    baseline = _advisor_transcript(mod, root, plain)
+    assert mod.parse_session_turns(baseline)[0]["cost_usd"] == billed_turn["cost_usd"]
+    assert mod._parse_session_jsonl(baseline) == billed_session
+
+
+@pytest.mark.parametrize("iterations", [None, "x", {}, [], [None, 5],
+    [{"type": "advisor_message", "input_tokens": 600_000}],
+    [{"type": "message"}],
+    [{"type": "message", "input_tokens": 50}, {"type": "message"}],
+    [{"type": "message", "input_tokens": "bad"}],
+    [{"type": "message", "input_tokens": float("inf")}],
+])
+def test_unusable_executor_usage_keeps_aggregate_fallback(m, iterations):
+    mod, _, root = m
+    usage = {"input_tokens": 100, "cache_read_input_tokens": 200,
+             "cache_creation_input_tokens": 30, "iterations": iterations}
+    path = _advisor_transcript(mod, root, usage)
+    assert mod._parse_jsonl_for_quality(path)["context_tokens"] == 330
+    assert mod._advice_session_data(path)["turns"] == [330]
+    assert mod._transcript_last_turn("advisor-session")[0] == 330
+    assert mod._keepwarm_prefix_proxy(usage) == 230
+
+
+def test_advisor_tail_is_not_executor_and_nested_cache_is_not_lost(m):
+    mod, _, root = m
+    usage = _advisor_usage()
+    last = usage["iterations"][-1]
+    last.pop("cache_creation_input_tokens")
+    last["cache_creation"] = {"ephemeral_1h_input_tokens": 50_000,
+                              "ephemeral_5m_input_tokens": 41_051}
+    usage["iterations"] += [None, {"type": "advisor_message", "input_tokens": 900_000}]
+    path = _advisor_transcript(mod, root, usage)
+    assert mod._parse_jsonl_for_quality(path)["context_tokens"] == 491_151
+    assert mod._advice_session_data(path)["turns"] == [491_151]
+    assert mod._keepwarm_prefix_proxy(usage) == 491_051
+
+
+@pytest.mark.parametrize("usage, expected", [
+    ({"input_tokens": 10, "cache_creation": {
+        "ephemeral_1h_input_tokens": "20", "ephemeral_5m_input_tokens": 30}}, 60),
+    ({"input_tokens": 10, "cache_creation_input_tokens": 40,
+      "cache_creation": {"ephemeral_1h_input_tokens": 40}}, 50),
+    ({"input_tokens": "bad", "cache_read_input_tokens": float("nan")}, 0),
+    (None, 0), ([], 0),
+])
+def test_context_token_count_handles_cache_shapes(m, usage, expected):
+    mod, _, _ = m
+    assert mod._context_token_count(usage) == expected
+
+
+def test_second_reported_advisor_record_uses_latest_executor(m):
+    mod, _, root = m
+    usage = {"input_tokens": 1_032_706, "iterations": [
+        {"type": "message", "input_tokens": 515_846},
+        {"type": "advisor_message", "input_tokens": 900_000},
+        {"type": "message", "input_tokens": 516_860}]}
+    path = _advisor_transcript(mod, root, usage)
+    assert mod._parse_jsonl_for_quality(path)["context_tokens"] == 516_860
+    assert mod._advice_session_data(path)["turns"] == [516_860]
+    assert mod._transcript_last_turn("advisor-session")[0] == 516_860

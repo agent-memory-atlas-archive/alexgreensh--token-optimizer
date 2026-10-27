@@ -2102,6 +2102,38 @@ def _safe_int(value):
         return 0
 
 
+def _context_usage(usage):
+    """Select live executor usage, leaving aggregate usage for billing.
+
+    Advisor/server-tool responses can sum several executor reads in the
+    top-level usage. Only the final message iteration describes occupancy.
+    An unusable final executor falls back to the aggregate, never an older
+    executor (which may describe a different context). Ignore advisor tails.
+    """
+    if isinstance(usage, dict) and isinstance(usage.get("iterations"), list):
+        for iteration in reversed(usage["iterations"]):
+            if isinstance(iteration, dict) and iteration.get("type") == "message":
+                if _context_token_count(iteration) > 0:
+                    return iteration
+                break
+    return usage
+
+
+def _context_token_count(usage):
+    """Input footprint, including flat or TTL-split cache writes."""
+    if not isinstance(usage, dict):
+        return 0
+    creation = _safe_int(usage.get("cache_creation_input_tokens"))
+    if not creation:
+        nested = usage.get("cache_creation")
+        if not isinstance(nested, dict):
+            nested = {}
+        creation = sum(_safe_int(nested.get(key) or usage.get(key)) for key in (
+            "ephemeral_1h_input_tokens", "ephemeral_5m_input_tokens"))
+    return (_safe_int(usage.get("input_tokens"))
+            + _safe_int(usage.get("cache_read_input_tokens")) + creation)
+
+
 def estimate_tokens_from_file(filepath):
     """Estimate tokens by reading file content (character count / 4)."""
     try:
@@ -15573,21 +15605,10 @@ def _keepwarm_prefix_proxy(usage):
     cache_creation may be the flat int field OR a nested object (sum its ephemeral
     splits). Falls back to 0 on malformed input.
     """
+    usage = _context_usage(usage)
     if not isinstance(usage, dict):
         return 0
-    cr = int(usage.get("cache_read_input_tokens", 0) or 0)
-    cc = usage.get("cache_creation_input_tokens", 0)
-    if cc is None:
-        cc = 0
-    cc = int(cc or 0)
-    if cc == 0:
-        nested = usage.get("cache_creation", {})
-        if isinstance(nested, dict):
-            cc = int(
-                (nested.get("ephemeral_1h_input_tokens", 0) or 0)
-                + (nested.get("ephemeral_5m_input_tokens", 0) or 0)
-            )
-    return cr + cc
+    return _context_token_count(usage) - _safe_int(usage.get("input_tokens"))
 
 
 def _keepwarm_iso_to_epoch(ts):
@@ -36809,9 +36830,7 @@ def _parse_jsonl_for_quality(filepath):
                     # raise and abort the whole parse (losing all quality data).
                     usage = msg.get("usage")
                     if isinstance(usage, dict):
-                        tok = (_safe_int(usage.get("input_tokens"))
-                               + _safe_int(usage.get("cache_creation_input_tokens"))
-                               + _safe_int(usage.get("cache_read_input_tokens")))
+                        tok = _context_token_count(_context_usage(usage))
                         if tok > 0:
                             context_tokens = tok
                     model_str = msg.get("model")
@@ -43741,9 +43760,7 @@ def _transcript_last_turn(sid_safe):
             u = msg.get("usage") or {}
             if not isinstance(u, dict):
                 continue
-            ctx = (_safe_int(u.get("input_tokens"))
-                   + _safe_int(u.get("cache_read_input_tokens"))
-                   + _safe_int(u.get("cache_creation_input_tokens")))
+            ctx = _context_token_count(_context_usage(u))
             if ctx <= 0:
                 continue
             model = _normalize_model_name(msg.get("model"))
@@ -53976,9 +53993,9 @@ def _advice_session_data(path):
                 u = msg.get("usage")
                 if not isinstance(u, dict):
                     continue
+                u = _context_usage(u)
                 cr = _safe_int(u.get("cache_read_input_tokens"))
-                ctx = (_safe_int(u.get("input_tokens")) + cr
-                       + _safe_int(u.get("cache_creation_input_tokens")))
+                ctx = _context_token_count(u)
                 if ctx <= 0:
                     continue
                 m = msg.get("model")
