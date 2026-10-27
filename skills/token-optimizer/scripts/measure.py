@@ -149,6 +149,13 @@ def _redirect_bytecode_out_of_repo():
 # main-guard line must appear only once in this file, see below.)
 if __name__ in ("__main__",):
     _redirect_bytecode_out_of_repo()
+    # A leading `--runtime NAME` must reach the environment BEFORE plugin_env
+    # (imported just below) fixes its data directories from the active
+    # runtime at import. Applied later, the flag changed hints but every
+    # archive, checkpoint and trends path still pointed at the default
+    # runtime (`measure.py --runtime hermes expand <id>` found nothing).
+    from runtime_env import consume_runtime_flag as _consume_runtime_flag_early
+    sys.argv[:] = _consume_runtime_flag_early(sys.argv, os.environ)
 
 from hook_io import read_stdin_hook_input as _read_stdin_hook_input_shared
 from hook_runtime import (
