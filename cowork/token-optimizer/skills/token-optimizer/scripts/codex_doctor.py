@@ -348,8 +348,8 @@ def _hook_shell_check() -> list[dict[str, str]]:
         return [_check(
             "WARN", "Hook shell compatibility",
             f"{dev_only} of {ours} hook command(s) come from a development checkout and only run under cmd.exe; "
-            "Codex normally runs hooks in PowerShell, where they exit 1. Reinstalling does not change this: "
-            "install Token Optimizer from the marketplace (versioned folder) or set Codex's shell to cmd.exe")]
+            "Codex normally runs hooks in PowerShell, where they exit 1. To fix: run measure.py codex-install "
+            "again from the checkout (it now writes a form PowerShell runs), then restart Codex")]
     if dev_only or cmd_only:
         cmd_only += dev_only
     if cmd_only:

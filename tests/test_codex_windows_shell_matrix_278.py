@@ -427,3 +427,34 @@ def test_launcher_resolves_a_relative_baked_root_next_to_itself(tmp_path):
     assert proc.returncode == 0, proc.stderr
     out = json.loads(proc.stdout.decode().strip().splitlines()[-1])
     assert Path(out["root"]).resolve() == renamed.resolve()
+
+
+def test_dev_checkout_command_runs_the_checkout_in_every_shell(monkeypatch, tmp_path):
+    """A development checkout used to get the cmd-only ``set ... &&`` form,
+    which exits 1 in PowerShell. It now runs the checkout's own launcher,
+    pinned to the checkout even when version folders sit beside it."""
+    ci = _load_ci(monkeypatch)
+    checkout = tmp_path / "work" / "token-optimizer"
+    (checkout / "hooks").mkdir(parents=True)
+    (checkout / "hooks" / "run.py").write_text(
+        "import json, os, sys\n"
+        "print(json.dumps({'argv': sys.argv[1:], 'runtime': os.environ.get('TOKEN_OPTIMIZER_RUNTIME'),\n"
+        " 'root': os.environ.get('TOKEN_OPTIMIZER_RUNTIME_ROOT')}))\n", encoding="utf-8")
+    shutil.copyfile(LAUNCHER_SOURCE, checkout / "hooks" / "windows-launcher.py")
+    decoy = tmp_path / "work" / "9.9.9" / "hooks"
+    decoy.mkdir(parents=True)
+    (decoy / "run.py").write_text("raise SystemExit('ran the decoy sibling')\n", encoding="utf-8")
+    monkeypatch.setattr(ci, "_repo_root", lambda: checkout)
+    monkeypatch.setattr(ci.sys, "executable", "python")
+    cmd = ci._hook_command("hooks/stop_runner.py", "--quiet")
+    assert ci.is_shell_neutral_command(cmd) and "&&" not in cmd, cmd
+    env = dict(os.environ, HOME=str(tmp_path / "h"))
+    for shell in ("cmd", "powershell-5.1", "pwsh-7"):
+        argv = shells.run_in(shell, cmd, env)
+        argv[0] = sys.executable
+        proc = subprocess.run(argv, input=b"{}", capture_output=True, timeout=60, env=env,
+                              cwd=str(tmp_path))
+        assert proc.returncode == 0, (shell, proc.stderr)
+        out = json.loads(proc.stdout.decode().strip().splitlines()[-1])
+        assert out["argv"] == ["hooks/stop_runner.py", "--quiet"] and out["runtime"] == "codex"
+        assert Path(out["root"]).resolve() == checkout.resolve()

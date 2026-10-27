@@ -364,9 +364,20 @@ def _hook_command(script: str, *args: str, redirect_quiet: bool = False,
             # legacy base64 commands still decode via --decode-launcher.
             return _windows_launcher_command(
                 root, script, args, extra_env, silent=redirect_quiet)
-        else:
-            prefix = f'set "TOKEN_OPTIMIZER_RUNTIME=codex" && {_win_env}'
-            argv = [sys.executable, str(root / "hooks" / "run.py"), script, *args]
+        # Development checkout (non-semver root): run the checkout's own
+        # launcher pinned to this root. A non-semver --baked-root is never
+        # swapped for a sibling, and the same shell-neutral form runs under
+        # PowerShell, where the old ``set ... &&`` form exited 1 (issue #278).
+        env = dict(extra_env)
+        if redirect_quiet:
+            env["TOKEN_OPTIMIZER_HOOK_SILENT"] = "1"
+        neutral = _neutral_launcher_command(
+            sys.executable, str(root / "hooks" / _LAUNCHER_FILENAME), str(root),
+            [f"{k}={v}" for k, v in env.items()], script, args, allow_bootstrap=False)
+        if neutral:
+            return neutral
+        prefix = f'set "TOKEN_OPTIMIZER_RUNTIME=codex" && {_win_env}'
+        argv = [sys.executable, str(root / "hooks" / "run.py"), script, *args]
         redirect = " >NUL 2>&1" if redirect_quiet else ""
         return f"{prefix}{subprocess.list2cmdline(argv)}{redirect}"
 

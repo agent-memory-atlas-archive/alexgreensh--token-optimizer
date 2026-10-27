@@ -157,6 +157,9 @@ def main(argv: list[str] | None = None) -> None:
     # opens with real content: an unreadable, missing, or incomplete
     # candidate is skipped (not fatal), and a genuine ACL denial is honored.
     try:
+        if not _SEMVER_DIR_RE.fullmatch(root.name):
+            # A development checkout is pinned: never trade it for a sibling.
+            raise OSError("not a versioned install")
         candidates = sorted(
             (p for p in root.parent.iterdir()
              if _SEMVER_DIR_RE.fullmatch(p.name)),
