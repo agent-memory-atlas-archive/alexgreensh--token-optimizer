@@ -125,8 +125,9 @@ class RecordingBridge:
         self.checkpoints.append((session_id, trigger, fill_pct))
         return True
 
-    def run_rollup(self, session_id="", platform="hermes", reason="", context_tokens=None):
+    def run_rollup(self, session_id="", platform="hermes", reason="", context_tokens=None, skills=None):
         self.rollups.append(session_id)
+        self.rollup_skills = skills
 
     def run_tool_hooks(self, event, payload, timeout=8.0):
         self.tool_hook_calls.append((event, payload))
@@ -606,6 +607,30 @@ def test_exit_path_session_end_alone_still_rolls_up(plugin, recorder):
     assert recorder.rollups == ["sess_life_03"]
 
 
+def test_skill_loads_are_counted_and_sent_with_the_rollup(plugin, recorder):
+    sid = "sess_skill_01"
+    for _ in range(2):
+        plugin.on_skill_lifecycle(action="loaded", skill_name="pdf-tools", provenance="installed",
+                                  task_id="t", session_id=sid, use_count=3, reused=True)
+    plugin.on_skill_lifecycle(action="patched", skill_name="pdf-tools", session_id=sid)
+    plugin.on_skill_lifecycle(action="loaded", skill_name="git-helper", session_id=sid)
+    plugin.on_session_finalize(session_id=sid, platform="cli")
+    assert recorder.rollups == [sid]
+    assert recorder.rollup_skills == {"pdf-tools": 2, "git-helper": 1}
+
+
+def test_rollup_skill_argument_is_validated():
+    src = (SCRIPTS / "measure.py").read_text(encoding="utf-8")
+    start = src.index("_HERMES_SKILLS_MAX = 200")
+    end = src.index("def _parse_hermes_rollup_context(args):")
+    ns: dict = {"json": json}
+    exec(src[start:end], ns)  # noqa: S102 - the parser under test, isolated from measure's import
+    parse = ns["_parse_hermes_rollup_skills"]
+    assert parse(["--session", "s1", "--skills-json", '{"pdf": 2, "x": 0, "y": "3", "": 1}']) == {"s1": {"pdf": 2}}
+    assert parse(["--session", "s1", "--skills-json", "not json"]) == {}
+    assert parse(["--skills-json", '{"pdf": 2}']) == {}
+
+
 def test_progressive_checkpoints_follow_live_fill_bands(plugin, recorder, monkeypatch):
     monkeypatch.setattr(plugin, "_context_window", lambda model: 100_000)
     sid = "sess_band_01"
@@ -753,6 +778,7 @@ HOOK_CALLS = [
     ("on_api_request_error", dict(session_id="s1", retryable=False)),
     ("on_subagent_start", dict(parent_session_id="s1")),
     ("on_subagent_stop", dict(parent_session_id="s1")),
+    ("on_skill_lifecycle", dict(action="loaded", skill_name="pdf", session_id="s1")),
     ("on_session_start", dict(session_id="s1", model="m", platform="cli")),
     ("on_session_end", dict(session_id="s1", turn_id="t1")),
     ("on_session_finalize", dict(session_id="s1")),
@@ -900,6 +926,9 @@ def test_end_to_end_session_on_the_installed_plugin(home, tmp_path):
                                 session_id=sid, task_id="t", tool_call_id="c1", status="ok")
         assert hooks["transform_tool_result"](tool_name="terminal", args={}, result="{}", session_id=sid,
                                               task_id="t", tool_call_id="c1", status="ok") is None
+        for _ in range(2):
+            hooks["on_skill_lifecycle"](action="loaded", skill_name="pdf-tools", provenance="installed",
+                                        task_id="t", session_id=sid, use_count=1, reused=False)
         hooks["on_session_end"](session_id=sid, task_id="t", turn_id="u1", completed=True, failed=False,
                                 interrupted=False, turn_exit_reason="done", model=model, platform="cli")
         hooks["on_session_finalize"](session_id=sid, platform="cli", reason="exit")
@@ -920,13 +949,16 @@ def test_end_to_end_session_on_the_installed_plugin(home, tmp_path):
                     saved = conn.execute("SELECT COUNT(*) FROM compression_events WHERE session_id = ?",
                                          (sid,)).fetchone()[0]
                     tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master")}
-                    logged = conn.execute("SELECT COUNT(*) FROM session_log WHERE jsonl_path LIKE ?",
-                                          ("hermes:%",)).fetchone()[0] if "session_log" in tables else 0
+                    logged = conn.execute("SELECT skills_json FROM session_log WHERE jsonl_path LIKE ?",
+                                          ("hermes:%",)).fetchall() if "session_log" in tables else []
                 finally:
                     conn.close()
                 if saved and logged:
                     return saved, logged
             return None
-        assert _wait_for(rollup_row, timeout=90)
+        landed = _wait_for(rollup_row, timeout=90)
+        assert landed
+        # Skill usage from on_skill_lifecycle reached the dashboard database.
+        assert json.loads(landed[1][0][0]) == {"pdf-tools": 2}
     finally:
         sys.modules.pop("to_hermes_parity_installed", None)

@@ -24220,6 +24220,11 @@ def _collect_hermes_sessions(days=90, quiet=False, rebuild=False):
             parsed = hermes_session.normalize_session(row, context_tokens=live_context_tokens)
             if not parsed:
                 continue
+            # Skill loads the plugin counted from Hermes's on_skill_lifecycle
+            # hook (state.db does not record them).
+            rollup_skills = globals().get("_HERMES_ROLLUP_SKILLS", {}).get(session_id)
+            if rollup_skills:
+                parsed["skills_used"] = dict(rollup_skills)
 
             slug = parsed.get("slug") or ""
             dedup_key = f"hermes:{slug}" if slug else None
@@ -24242,6 +24247,12 @@ def _collect_hermes_sessions(days=90, quiet=False, rebuild=False):
                             parsed.get("quality_grade", "F"),
                             dedup_key,
                         ),
+                    )
+                    updated_count += 1
+                if rollup_skills:
+                    conn.execute(
+                        "UPDATE session_log SET skills_json = ? WHERE jsonl_path = ?",
+                        (json.dumps(parsed["skills_used"]), dedup_key),
                     )
                     updated_count += 1
                 continue
@@ -24315,6 +24326,44 @@ def _collect_hermes_sessions(days=90, quiet=False, rebuild=False):
         total = conn_total_sessions() if TRENDS_DB.exists() else new_count
         print(f"[Token Optimizer] Collected {new_count} new Hermes sessions. Total in DB: {total}")
     return new_count
+
+
+_HERMES_SKILLS_MAX = 200
+
+
+def _parse_hermes_rollup_skills(args):
+    """Parse ``--session`` + ``--skills-json`` out of hermes-rollup CLI args.
+
+    Returns ``{session_id: {skill_name: loads}}`` or ``{}``. The JSON comes
+    from the plugin's in-memory count; anything malformed is dropped, names
+    are capped at 128 characters and counts must be positive integers.
+    """
+    session = ""
+    raw = ""
+    i = 0
+    while i < len(args):
+        if args[i] == "--session" and i + 1 < len(args):
+            session = args[i + 1]
+            i += 2
+        elif args[i] == "--skills-json" and i + 1 < len(args):
+            raw = args[i + 1]
+            i += 2
+        else:
+            i += 1
+    if not session or not raw or len(raw) > 65_536:
+        return {}
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    skills = {}
+    for name, count in list(data.items())[:_HERMES_SKILLS_MAX]:
+        if (isinstance(name, str) and name.strip() and isinstance(count, int)
+                and not isinstance(count, bool) and count > 0):
+            skills[name.strip()[:128]] = min(count, 1_000_000)
+    return {session: skills} if skills else {}
 
 
 def _parse_hermes_rollup_context(args):
@@ -57986,6 +58035,7 @@ if __name__ == "__main__":
         # session re-collects idempotently), a frozen orphan is not.
         quiet = "--quiet" in args or "-q" in args
         _HERMES_ROLLUP_CONTEXT = _parse_hermes_rollup_context(args[1:])
+        _HERMES_ROLLUP_SKILLS = _parse_hermes_rollup_skills(args[1:])
         _tok_hook_deadline = _install_hook_budget(60)
         try:
             _collect_hermes_sessions(days=90, quiet=quiet)

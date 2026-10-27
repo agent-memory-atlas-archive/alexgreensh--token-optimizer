@@ -166,6 +166,7 @@ def _run_measure(args: list[str], *, capture_output: bool = True, timeout: int =
 def run_rollup(
     session_id: str = "", platform: str = "hermes", reason: str = "",
     context_tokens: int | None = None,
+    skills: dict | None = None,
 ) -> None:
     """Write a session rollup to TO's trends.db.
 
@@ -198,6 +199,11 @@ def run_rollup(
         cmd += ["--reason", reason]
     if context_tokens is not None and context_tokens > 0:
         cmd += ["--context-tokens", str(int(context_tokens))]
+    if skills:
+        try:
+            cmd += ["--skills-json", json.dumps(skills, ensure_ascii=True)]
+        except (TypeError, ValueError):
+            pass
     try:
         _proc = spawn_detached(
             cmd,

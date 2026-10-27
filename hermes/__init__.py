@@ -194,6 +194,7 @@ _CKPT_AT: dict[tuple[str, str], float] = {}
 _ONCE: dict[tuple[str, str], bool] = {}
 _SUBAGENTS: dict[str, int] = {}
 _VERBOSITY: dict[str, dict[str, float]] = {}
+_SKILLS: dict[str, dict[str, int]] = {}
 _LAST_SESSION = {"id": ""}
 
 _MAX_TRACKED = 512            # cap on every per-key map above
@@ -303,6 +304,7 @@ def _forget_session(session_id: str) -> None:
         _EDITS.pop(session_id, None)
         _SUBAGENTS.pop(session_id, None)
         _VERBOSITY.pop(session_id, None)
+        _SKILLS.pop(session_id, None)
         for key in [k for k in _CKPT_AT if k[0] == session_id]:
             _CKPT_AT.pop(key, None)
         for key in [k for k in _ONCE if k[0] == session_id]:
@@ -811,13 +813,19 @@ def _do_rollup(session_id: str, platform: str, reason: str) -> None:
         _ROLLED_UP.add(session_id)
     with _LOCK:
         context_tokens = int((_TALLY.get(session_id) or {}).get("last_prompt", 0) or 0)
+        skills = dict(_SKILLS.get(session_id) or {})
     _maybe_checkpoint(session_id, "end")
     bridge = _import_bridge()
     if bridge is None:
         logger.debug("[token-optimizer] bridge unavailable, skipping rollup for %s", session_id)
     else:
         try:
-            bridge.run_rollup(session_id=session_id, platform=platform, reason=reason, context_tokens=context_tokens or None)
+            if skills:
+                bridge.run_rollup(session_id=session_id, platform=platform, reason=reason,
+                                  context_tokens=context_tokens or None, skills=skills)
+            else:
+                bridge.run_rollup(session_id=session_id, platform=platform, reason=reason,
+                                  context_tokens=context_tokens or None)
         except Exception as exc:
             logger.debug("[token-optimizer] rollup error for %s: %s", session_id, exc)
     # Clear per-session state regardless of rollup outcome.
@@ -1177,6 +1185,29 @@ def on_subagent_stop(**kwargs: Any) -> None:
         logger.debug("[token-optimizer] subagent_stop error: %s", exc)
 
 
+def on_skill_lifecycle(**kwargs: Any) -> None:
+    """Count skill loads per session for the dashboard's skill usage view.
+
+    Hermes fires this after each authoritative skill-usage change; a "loaded"
+    action is one use. The counts ride along with the session rollup.
+    """
+    try:
+        if str(kwargs.get("action") or "") != "loaded":
+            return
+        session_id = str(kwargs.get("session_id") or "")
+        name = kwargs.get("skill_name")
+        if not session_id or not isinstance(name, str) or not name.strip():
+            return
+        with _LOCK:
+            counts = _SKILLS.setdefault(session_id, {})
+            while len(_SKILLS) > _MAX_TRACKED:
+                _SKILLS.pop(next(iter(_SKILLS)))
+            if name in counts or len(counts) < 200:
+                counts[name[:128]] = counts.get(name[:128], 0) + 1
+    except Exception as exc:
+        logger.debug("[token-optimizer] on_skill_lifecycle error: %s", exc)
+
+
 def on_session_start(**kwargs: Any) -> None:
     """A brand-new session: start from clean per-session state."""
     try:
@@ -1326,6 +1357,7 @@ HOOKS: tuple[tuple[str, Any], ...] = (
     ("api_request_error", on_api_request_error),
     ("subagent_start", on_subagent_start),
     ("subagent_stop", on_subagent_stop),
+    ("on_skill_lifecycle", on_skill_lifecycle),
     ("on_session_start", on_session_start),
     ("on_session_end", on_session_end),
     ("on_session_finalize", on_session_finalize),

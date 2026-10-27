@@ -61,6 +61,7 @@ EXPECTED_HOOKS = {
     "api_request_error",
     "subagent_start",
     "subagent_stop",
+    "on_skill_lifecycle",
     "on_session_start",
     "on_session_end",
     "on_session_finalize",
