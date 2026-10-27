@@ -805,6 +805,26 @@ def test_claude_plugin_hooks_survive_an_upgrade_mid_session(sandbox):
     assert not failures, "\n\n".join(failures)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="simulates MSYS separators with POSIX file names")
+def test_claude_plugin_hooks_survive_an_upgrade_with_a_windows_style_root(sandbox):
+    """On Windows, Claude Code hands Git Bash a CLAUDE_PLUGIN_ROOT with
+    backslashes (C:\\...\\token-optimizer\\5.13.50). The upgrade fallback split
+    it on "/" only, found no sibling, and every hook quietly exited 0 until a
+    restart. Simulated here: a root spelled with backslashes where Git Bash
+    would treat them as separators must still find the newest version."""
+    base, old, new = _version_cache(sandbox, REPO, host_dir=".claude")
+    new.symlink_to(REPO, target_is_directory=True)
+    warm(sandbox, "claude")
+    e = pick(harness_entries("claude", sandbox), "PreToolUse", matcher_prefix="Bash")
+    env = harness_env("claude", sandbox)
+    rel = old.relative_to(sandbox.home)
+    env["CLAUDE_PLUGIN_ROOT"] = str(sandbox.home) + "\\" + "\\".join(rel.parts)
+    r = fire_entry(sandbox, e, env)
+    used = " ".join(" ".join(map(str, p.get("argv") or [])) for p in r.procs)
+    assert r.rc == 0 and r.ran(*e.expected_handler()), r
+    assert str(new) + "/hooks/run.py" in used, used
+
+
 def test_claude_plugin_hooks_pick_the_highest_semver_sibling(sandbox):
     """sort -V, not lexical order: 5.13.10 is newer than 5.13.9, and 5.9.0 is
     older than 5.13.0. Hosts sort with BSD sort (macOS) and GNU sort (Linux,
