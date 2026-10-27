@@ -24341,6 +24341,132 @@ def _parse_hermes_rollup_context(args):
     return {session: context_tokens} if session and context_tokens is not None else {}
 
 
+# Private scratch dir for the short-lived transcript a Hermes checkpoint is
+# built from. Files are removed right after use; stragglers from a killed run
+# are swept after a day.
+_HERMES_TRANSCRIPT_STALE_SECONDS = 24 * 3600
+
+
+def _hermes_transcript_dir():
+    return CHECKPOINT_DIR.parent / "hermes-transcripts"
+
+
+def _sweep_hermes_transcripts(directory, now=None):
+    now = time.time() if now is None else now
+    try:
+        for p in directory.glob("*.jsonl"):
+            try:
+                if not p.is_symlink() and now - p.stat().st_mtime > _HERMES_TRANSCRIPT_STALE_SECONDS:
+                    p.unlink()
+            except OSError:
+                continue
+    except OSError:
+        pass
+
+
+def hermes_checkpoint(session_id, trigger="stop", fill_pct=None, cwd=None):
+    """Write a session checkpoint for a Hermes session.
+
+    Hermes keeps its transcript in state.db, not a JSONL file. Read the
+    session's messages read-only, translate them into the record shape the
+    shared checkpoint engine reads, and hand that to ``compact_capture``. The
+    translated file lives in Token Optimizer's own private directory for the
+    duration of the call only.
+
+    Returns the checkpoint path, or None (no session id, no messages, or the
+    engine declined). Never falls back to guessing another transcript: a
+    Claude Code session on the same machine must never become a Hermes
+    checkpoint.
+    """
+    sid = str(session_id or "").strip()
+    if not sid:
+        return None
+    try:
+        import hermes_state as _hs  # noqa: PLC0415
+        import hermes_session as _hsess  # noqa: PLC0415
+    except Exception:
+        return None
+    records = _hsess.messages_to_transcript_records(_hs.session_messages(sid, limit=500))
+    if not records:
+        return None
+    if not cwd:
+        # The session's own working directory, so the checkpoint's git line
+        # describes the user's project, not wherever this process started.
+        row_cwd = (_hs.get_session(sid, live=True) or {}).get("cwd")
+        try:
+            if isinstance(row_cwd, str) and row_cwd and Path(row_cwd).is_dir():
+                cwd = row_cwd
+        except (OSError, ValueError):
+            cwd = None
+    directory = _hermes_transcript_dir()
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(str(directory), 0o700)
+        except OSError:
+            pass
+    except OSError:
+        return None
+    _sweep_hermes_transcripts(directory)
+    fd, tmp_name = tempfile.mkstemp(prefix=".hermes-", suffix=".jsonl", dir=str(directory))
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            for record in records:
+                fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+        return compact_capture(
+            session_id=sid,
+            trigger=trigger,
+            cwd=cwd,
+            fill_pct=fill_pct,
+            _trusted_transcript=tmp_path,
+        )
+    finally:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+
+
+def _hermes_checkpoint_cli(args):
+    """``hermes-checkpoint --session <id> [--trigger T] [--fill-pct N] [--cwd DIR] [--quiet]``."""
+    sid = ""
+    trigger = "stop"
+    fill_pct = None
+    cwd = None
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--session" and i + 1 < len(args):
+            sid = args[i + 1]
+            i += 2
+        elif a == "--trigger" and i + 1 < len(args):
+            trigger = args[i + 1]
+            i += 2
+        elif a == "--fill-pct" and i + 1 < len(args):
+            try:
+                fill_pct = float(args[i + 1])
+            except ValueError:
+                fill_pct = None
+            i += 2
+        elif a == "--cwd" and i + 1 < len(args):
+            cwd = args[i + 1] or None
+            i += 2
+        else:
+            i += 1
+    quiet = "--quiet" in args or "-q" in args
+    if cwd is not None:
+        try:
+            if not Path(cwd).is_dir():
+                cwd = None
+        except (OSError, ValueError):
+            cwd = None
+    result = hermes_checkpoint(sid, trigger=trigger, fill_pct=fill_pct, cwd=cwd)
+    if result and not quiet:
+        print(f"[Token Optimizer] Checkpoint saved: {result}")
+    return result
+
+
 def _resolve_copilot_home_wsl_aware(mnt_root=None):
     """Resolve the Copilot home with a WSL-root /mnt/ exception.
 
@@ -41035,12 +41161,21 @@ def _redaction_skip_notice(session_id):
         return None
 
 
-def compact_capture(transcript_path=None, session_id=None, trigger="auto", cwd=None, fill_pct=None, quality_score=None, backfill_tools=False):
+class _SkipTranscriptQuality(Exception):
+    """Internal: leave the transcript-derived quality block out of a checkpoint."""
+
+
+def compact_capture(transcript_path=None, session_id=None, trigger="auto", cwd=None, fill_pct=None, quality_score=None, backfill_tools=False, _trusted_transcript=None):
     """Capture structured session state before compaction or session end.
 
     Writes a markdown checkpoint to CHECKPOINT_DIR.
     Called by PreCompact, Stop, and SessionEnd hooks via CLI.
     Progressive checkpoints pass fill_pct and trigger="progressive-{band}".
+
+    ``_trusted_transcript`` is for internal callers only: a transcript Token
+    Optimizer built itself in its own private directory (the Hermes adapter
+    translates Hermes's state.db messages into one). It skips the confinement
+    meant for hook-supplied paths. Never pass hook input through it.
 
     Returns the checkpoint file path, or None on failure.
     """
@@ -41063,7 +41198,9 @@ def compact_capture(transcript_path=None, session_id=None, trigger="auto", cwd=N
     ts = now.strftime("%Y-%m-%dT%H:%M:%S%z")
     ts_file = now.strftime("%Y%m%d-%H%M%S")
 
-    if transcript_path:
+    if _trusted_transcript is not None:
+        filepath = Path(_trusted_transcript)
+    elif transcript_path:
         # A supplied path that fails confinement is a forged hook input — do
         # not checkpoint from it, and do not fall through to inference (which
         # would let a bad pointer silently capture a different session).
@@ -41142,6 +41279,11 @@ def compact_capture(transcript_path=None, session_id=None, trigger="auto", cwd=N
     sid = sanitize_session_id(session_id) if session_id else sanitize_session_id(filepath.stem)
     quality_summary = None
     try:
+        if _trusted_transcript is not None:
+            # A translated transcript carries no usage data, so scoring it
+            # would print a fake perfect grade. The caller passes the real
+            # fill instead; the quality block is simply left out.
+            raise _SkipTranscriptQuality()
         # Prefer the per-session quality cache over re-parsing the whole transcript.
         # _parse_jsonl_for_quality is O(file): a ~200MB session costs ~8s, and this
         # runs on the synchronous Stop hook, so an unbounded reparse shows up as
@@ -41185,7 +41327,12 @@ def compact_capture(transcript_path=None, session_id=None, trigger="auto", cwd=N
             pass
     fill_info = f" | Fill: {fill_pct:.0f}%" if fill_pct is not None else ""
     quality_info = f" | Quality: {quality_score:.1f}" if quality_score is not None else ""
-    git_branch, git_sha = _capture_git_state(cwd)
+    if _trusted_transcript is not None and not cwd:
+        # No known working directory: this process's own cwd is not the
+        # session's project, so its git state would be someone else's.
+        git_branch, git_sha = None, None
+    else:
+        git_branch, git_sha = _capture_git_state(cwd)
     git_line = ""
     if git_branch or git_sha:
         git_line = f" | Git: {git_branch or '?'}@{git_sha or '?'}"
@@ -57763,6 +57910,22 @@ if __name__ == "__main__":
         _tok_hook_deadline = _install_hook_budget(60)
         try:
             _collect_hermes_sessions(days=90, quiet=quiet)
+        except _HookTimeout:
+            pass
+        except Exception:
+            pass
+        finally:
+            _clear_hook_budget(_tok_hook_deadline)
+        sys.exit(0)
+    elif args[0] == "hermes-checkpoint":
+        # Session checkpoint for a Hermes session, built from Hermes's own
+        # state.db messages (read-only). Spawned detached by the Hermes plugin
+        # at fill bands, before compaction, before subagent fan-out, after edit
+        # batches, at turn end and at session end. Same 60s backstop as
+        # hermes-rollup: a skipped checkpoint is invisible, a frozen orphan is not.
+        _tok_hook_deadline = _install_hook_budget(60)
+        try:
+            _hermes_checkpoint_cli(args[1:])
         except _HookTimeout:
             pass
         except Exception:
