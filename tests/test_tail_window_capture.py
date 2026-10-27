@@ -235,3 +235,45 @@ def test_task_command_rejects_repeated_tags_without_backtracking():
     start = time.monotonic()
     assert measure._task_user_text({"message": {"content": text}}) == ""
     assert time.monotonic() - start < 1.0
+
+
+@pytest.mark.parametrize("duplicate_field", ["name", "message", "args"])
+@pytest.mark.parametrize("consumer", ["helper", "checkpoint", "topic"])
+def test_complete_duplicate_command_fields_cannot_become_task(tmp_path, duplicate_field, consumer):
+    duplicate_value = "/ce:review" if duplicate_field == "name" else "harness TODO?"
+    wrapper = (
+        "<command-name>/ce:debug</command-name>"
+        "<command-message>ce:debug</command-message>"
+        "<command-args>fix login</command-args>"
+        f"<command-{duplicate_field}>{duplicate_value}</command-{duplicate_field}>"
+    )
+    record = {"type": "user", "message": {"content": wrapper}}
+    if consumer == "helper":
+        assert measure._task_user_text(record) == ""
+    else:
+        p = tmp_path / "duplicate.jsonl"
+        real = {"type": "user", "message": {"content": "fix the login bug"}}
+        # Checkpoint keeps the latest human task; topic finds the first one.
+        records = [real, record] if consumer == "checkpoint" else [record, real]
+        p.write_text("\n".join(json.dumps(r) for r in records), encoding="utf-8")
+        if consumer == "checkpoint":
+            state = measure._extract_session_state(str(p))
+            assert state["current_step"]["last_user"] == "fix the login bug"
+            assert state["open_questions"] == []
+        else:
+            assert measure._parse_session_jsonl(str(p))["topic"] == "fix the login bug"
+
+
+def test_command_and_followup_blocks_keep_order_and_separator(tmp_path):
+    record = {"type": "user", "message": {"content": [
+        {"type": "text", "text": "<command-name>/ce:debug</command-name><command-args>fix login</command-args>"},
+        {"type": "text", "text": "Keep the logout flow unchanged?"},
+    ]}}
+    expected = "/ce:debug fix login\nKeep the logout flow unchanged?"
+    p = tmp_path / "followup.jsonl"
+    p.write_text(json.dumps(record), encoding="utf-8")
+    assert measure._task_user_text(record) == expected
+    state = measure._extract_session_state(str(p))
+    assert state["current_step"]["last_user"] == expected
+    assert state["open_questions"] == [expected]
+    assert measure._parse_session_jsonl(str(p))["topic"] == "/ce:debug fix login"

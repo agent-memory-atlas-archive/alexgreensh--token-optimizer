@@ -141,3 +141,22 @@ def test_session_topic_skips_harness_records(measure, tmp_path, synthetic):
     path = _write_jsonl(tmp_path / "topic.jsonl", [
         {"type": "user", **synthetic}, _user("fix the login bug")])
     assert measure._parse_session_jsonl(path)["topic"] == "fix the login bug"
+
+
+def test_windowed_topic_skips_metadata_and_outside_human_tasks(measure, tmp_path):
+    from datetime import timezone
+
+    records = [
+        {**_user("earlier task outside window"), "timestamp": "2026-10-26T23:59:59Z"},
+        {**_user("synthetic resume inside window"), "isMeta": True, "timestamp": "2026-10-27T00:00:00Z"},
+        {**_user("first real task inside window"), "timestamp": "2026-10-27T00:00:01Z"},
+        {**_user("later real task inside window"), "timestamp": "2026-10-27T23:59:59Z"},
+        {**_user("task at exclusive window end"), "timestamp": "2026-10-28T00:00:00Z"},
+    ]
+    path = _write_jsonl(tmp_path / "window-topic.jsonl", records)
+    start = datetime(2026, 10, 27, tzinfo=timezone.utc)
+    end = datetime(2026, 10, 28, tzinfo=timezone.utc)
+    assert measure._parse_session_jsonl(path, window_start=start, window_end=end)["topic"] == "first real task inside window"
+    # Cache keys must not leak the unwindowed first topic into the windowed view.
+    assert measure._parse_session_jsonl(path)["topic"] == "earlier task outside window"
+    assert measure._parse_session_jsonl(path, window_start=start, window_end=end)["topic"] == "first real task inside window"
