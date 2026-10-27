@@ -87,7 +87,7 @@ Status key: **Yes** works, **Part** partly works (reason given), **No** not avai
 |---|---|
 | Status line | No host support. Hermes has a built-in status bar (which already shows context fill) but no plugin API to add to it: `PluginContext` has no status registration. `/token-optimizer` and the dashboard cover the same numbers. |
 | Keep-warm | No host support. Keep-warm re-sends a Claude Code session's cached prefix with `claude --resume -p`; Hermes has no entry point to ping a session from outside, and it routes to many providers. |
-| Subagent prompt cache TTL, usage recommendations, CLAUDE.md routing injection, smart-compact setup | Claude Code settings; nothing to set in Hermes. |
+| Subagent prompt cache TTL, usage recommendations, model-pin hint, CLAUDE.md routing injection, smart-compact setup | These audit or change Claude Code's own settings (`settings.json`, `CLAUDE.md`); Hermes has no equivalent files for them to read. Session cost per model is still tracked for Hermes. |
 | Quality-drop checkpoints | See above: no per-turn transcript score on Hermes. Fill-band checkpoints cover the same moments. |
 | Dynamic compact instructions | See above: observer-only compression hooks. |
 
