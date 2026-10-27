@@ -12198,22 +12198,10 @@ def _parse_session_jsonl(filepath, window_start=None, window_end=None):
 
                 rec_type = record.get("type")
 
-                # Extract topic from first user message
+                # Topic and checkpoint task share a human-task-only view. Keep
+                # raw user text for message scoring and slash-skill accounting.
                 if rec_type == "user" and topic is None:
-                    msg = record.get("message", {})
-                    content = msg.get("content") if isinstance(msg, dict) else msg
-                    if isinstance(content, str):
-                        topic = _extract_topic(content)
-                    elif isinstance(content, list):
-                        for block in content:
-                            if isinstance(block, dict) and block.get("type") == "text":
-                                topic = _extract_topic(block.get("text", ""))
-                                if topic:
-                                    break
-                            elif isinstance(block, str):
-                                topic = _extract_topic(block)
-                                if topic:
-                                    break
+                    topic = _extract_topic(_task_user_text(record))
 
                 if rec_type in ("user", "assistant"):
                     _conversation_records += 1
@@ -36647,6 +36635,80 @@ def _extract_user_text(record):
     return ""
 
 
+_HARNESS_TASK_PREFIXES = (
+    "<local-command-caveat>", "<local-command-stdout>",
+    "<local-command-stderr>", "<task-notification>",
+    "[SYSTEM NOTIFICATION",
+)
+_COMMAND_TASK_TAG_RE = re.compile(r"\s*<command-(name|message|args)>")
+
+
+def _command_task_text(text):
+    """Unwrap a complete command once, with bounded, non-backtracking scans."""
+    fields = {}
+    pos = 0
+    while pos < len(text):
+        if not text[pos:].strip():
+            break
+        tag = _COMMAND_TASK_TAG_RE.match(text, pos)
+        if tag is None or tag.group(1) in fields:
+            return ""
+        name = tag.group(1)
+        close = "</command-" + name + ">"
+        end = text.find(close, tag.end())
+        if end < 0:
+            return ""
+        fields[name] = text[tag.end():end]
+        pos = end + len(close)
+    command = _SLASH_COMMAND_RE.fullmatch(
+        "<command-name>" + fields.get("name", "") + "</command-name>")
+    if command is None or "args" not in fields:
+        return ""
+    name = command.group(1)
+    if name.lower() in ("compact", "clear"):
+        return ""
+    args = fields["args"].strip()
+    return "/" + name + (" " + args if args else "")
+
+
+def _task_user_text(record):
+    """Task text for continuity only, excluding harness/meta/tool transport.
+
+    A slash-command wrapper is transport, but its name and arguments can be
+    a real task. Preserve those without changing raw scoring/skill-use input.
+    """
+    if record.get("isMeta") or record.get("isCompactSummary"):
+        return ""
+    message = record.get("message", {})
+    content = message.get("content") if isinstance(message, dict) else message
+    if isinstance(content, str):
+        parts = [content]
+    elif isinstance(content, list):
+        parts = [
+            block if isinstance(block, str) else block.get("text", "")
+            for block in content
+            if isinstance(block, str) or (
+                isinstance(block, dict) and block.get("type") == "text")
+        ]
+    else:
+        return ""
+    texts = []
+    for part in parts:
+        if not isinstance(part, str):
+            continue
+        text = part.strip()
+        if not text or text.startswith(_HARNESS_TASK_PREFIXES):
+            continue
+        if text.startswith(("<command-name>", "<command-message>", "<command-args>")):
+            # Only a complete wrapper is an invocation. Do not turn malformed
+            # harness markup into a recovered task, or strip tags from prose.
+            text = _command_task_text(text)
+            if not text:
+                continue
+        texts.append(text)
+    return "\n".join(texts)
+
+
 def _read_stdin_hook_input(max_bytes=65536):
     """Thin wrapper: measure.py callers default to 64KB (PreToolUse payloads)."""
     return _read_stdin_hook_input_shared(max_bytes)
@@ -40642,7 +40704,7 @@ def _extract_session_state(filepath, tail_lines=500):
 
         # User messages
         if rec_type == "user":
-            text = _ingest_redact(_extract_user_text(record))
+            text = _ingest_redact(_task_user_text(record))
             if text.strip():
                 last_user_msg = text.strip()
             # Check for questions

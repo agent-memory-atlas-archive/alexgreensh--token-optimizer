@@ -128,3 +128,16 @@ def test_spent_basis_uses_official_compatible_streaming_usage(measure, tmp_path)
     assert result["basis"] == "fresh_input + streamed assistant output (top-level, no streaming dedup)"
     assert result["complete"] is True
 
+
+
+@pytest.mark.parametrize("synthetic", [
+    {"isMeta": True, "message": {"content": "Your response was cut off. Resume?"}},
+    {"isCompactSummary": True, "message": {"content": "Summary TODO"}},
+    {"message": {"content": "<command-name>/compact</command-name>\n<command-args></command-args>"}},
+    {"message": {"content": "<task-notification>Finished?"}},
+    {"message": {"content": "[SYSTEM NOTIFICATION] TODO"}},
+])
+def test_session_topic_skips_harness_records(measure, tmp_path, synthetic):
+    path = _write_jsonl(tmp_path / "topic.jsonl", [
+        {"type": "user", **synthetic}, _user("fix the login bug")])
+    assert measure._parse_session_jsonl(path)["topic"] == "fix the login bug"
