@@ -815,7 +815,7 @@ def test_claude_plugin_hooks_survive_an_upgrade_with_a_windows_style_root(sandbo
     base, old, new = _version_cache(sandbox, REPO, host_dir=".claude")
     new.symlink_to(REPO, target_is_directory=True)
     warm(sandbox, "claude")
-    e = pick(harness_entries("claude", sandbox), "PreToolUse", matcher_prefix="Bash")
+    e = pick(harness_entries("claude", sandbox), "PreToolUse", matcher_prefix="Read")
     env = harness_env("claude", sandbox)
     rel = old.relative_to(sandbox.home)
     env["CLAUDE_PLUGIN_ROOT"] = str(sandbox.home) + "\\" + "\\".join(rel.parts)
