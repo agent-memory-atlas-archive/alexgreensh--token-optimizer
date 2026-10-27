@@ -2144,6 +2144,24 @@ def _valid_context_usage(usage):
         return False
 
 
+def _resume_usage(usage):
+    """The first executor tests whether the cache survived the pause.
+
+    Later executors may read cache written earlier in this same response;
+    that is not evidence that a keep-warm ping avoided the initial rewrite.
+    Unusable first-executor data keeps the aggregate comparison, not a later
+    executor that could hide a paid rewrite.
+    """
+    if isinstance(usage, dict) and isinstance(usage.get("iterations"), list):
+        for iteration in usage["iterations"]:
+            if isinstance(iteration, dict) and iteration.get("type") == "message":
+                if (_valid_context_usage(iteration)
+                        and _context_token_count(iteration) > 0):
+                    return iteration
+                break
+    return usage
+
+
 def _context_token_count(usage):
     """Input footprint, including flat or TTL-split cache writes."""
     if not isinstance(usage, dict):
@@ -12680,15 +12698,15 @@ def parse_session_turns(filepath):
                     "tools_used": tools,
                     "cost_usd": round(cost, 6),
                 })
-                context_usage = _context_usage(usage)
-                if context_usage is not usage:
-                    # Preserve the aggregate buckets/cost above for billing.
-                    # Keep-warm compares one executor with its armed prefix.
-                    context_read = _safe_int(context_usage.get("cache_read_input_tokens"))
-                    turns[-1]["context_cache_read"] = context_read
-                    turns[-1]["context_cache_creation"] = (
-                        _context_token_count(context_usage) - context_read
-                        - _safe_int(context_usage.get("input_tokens")))
+                resume_usage = _resume_usage(usage)
+                if resume_usage is not usage:
+                    # Billing stays aggregate; pause warmth uses the first
+                    # executor, before any cache writes inside this response.
+                    resume_read = _safe_int(resume_usage.get("cache_read_input_tokens"))
+                    turns[-1]["resume_cache_read"] = resume_read
+                    turns[-1]["resume_cache_creation"] = (
+                        _context_token_count(resume_usage) - resume_read
+                        - _safe_int(resume_usage.get("input_tokens")))
                 turn_index += 1
 
     except (PermissionError, OSError):
@@ -19010,8 +19028,8 @@ def keepwarm_resume_is_warm(turn, prefix_proxy):
         prefix = 0
     if prefix <= 0 or not isinstance(turn, dict):
         return None
-    cr = int(turn.get("context_cache_read", turn.get("cache_read", 0)) or 0)
-    cc = int(turn.get("context_cache_creation", turn.get("cache_creation", 0)) or 0)
+    cr = int(turn.get("resume_cache_read", turn.get("cache_read", 0)) or 0)
+    cc = int(turn.get("resume_cache_creation", turn.get("cache_creation", 0)) or 0)
     warm = (cr >= _KEEPWARM_WARM_READ_FRACTION * prefix
             and cc < _KEEPWARM_WARM_WRITE_FRACTION * prefix)
     return bool(warm)

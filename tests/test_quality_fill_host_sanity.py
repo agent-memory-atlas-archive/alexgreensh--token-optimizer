@@ -377,21 +377,27 @@ def test_malformed_executor_cache_creation_container_falls_back(m, nested):
 
 
 @pytest.mark.parametrize("warm", [True, False])
-def test_advisor_keepwarm_books_executor_resume_once_without_changing_billing(m, monkeypatch, warm):
+@pytest.mark.parametrize("flip_final", [True, False])
+def test_advisor_keepwarm_books_executor_resume_once_without_changing_billing(m, monkeypatch, warm, flip_final):
     mod, _, root = m
     read, write = (350_000, 150_000) if warm else (150_000, 350_000)
     executor = {"type": "message", "input_tokens": 100,
                 "cache_read_input_tokens": read,
                 "cache_creation_input_tokens": write}
-    usage = {"input_tokens": 200, "cache_read_input_tokens": read * 2,
-             "cache_creation_input_tokens": write * 2,
+    final = dict(executor)
+    if flip_final:
+        final["cache_read_input_tokens"] = 0 if warm else 500_000
+        final["cache_creation_input_tokens"] = 500_000 if warm else 0
+    usage = {"input_tokens": 200,
+             "cache_read_input_tokens": read + final["cache_read_input_tokens"],
+             "cache_creation_input_tokens": write + final["cache_creation_input_tokens"],
              "iterations": [dict(executor),
-                 {"type": "advisor_message", "input_tokens": 900_000}, executor]}
+                 {"type": "advisor_message", "input_tokens": 900_000}, final]}
     path = _advisor_transcript(mod, root, usage)
     arm_ts = mod._keepwarm_iso_to_epoch("2026-10-27T09:00:00Z")
     turn = mod._keepwarm_first_usage_after(path, arm_ts)
-    assert turn["cache_read"] == read * 2
-    assert turn["cache_creation"] == write * 2
+    assert turn["cache_read"] == usage["cache_read_input_tokens"]
+    assert turn["cache_creation"] == usage["cache_creation_input_tokens"]
     billed_cost = turn["cost_usd"]
     assert mod.keepwarm_resume_is_warm(turn, 500_000) is warm
     markers, bookings = [], []
@@ -430,6 +436,37 @@ def test_keepwarm_ordinary_and_invalid_executor_keep_aggregate_comparison(m):
             usage["iterations"] = iterations
         path = _advisor_transcript(mod, root, usage)
         turn = mod.parse_session_turns(path)[0]
-        assert "context_cache_read" not in turn
-        assert "context_cache_creation" not in turn
+        assert "resume_cache_read" not in turn
+        assert "resume_cache_creation" not in turn
         assert mod.keepwarm_resume_is_warm(turn, 500_000) is True
+
+
+@pytest.mark.parametrize("first", [None, {"type": "message"},
+    {"type": "message", "input_tokens": 100, "cache_read_input_tokens": "bad"}])
+def test_resume_never_skips_unusable_first_executor_for_warm_later_one(m, first):
+    mod, _, root = m
+    first = first if first is not None else {"type": "message", "input_tokens": None}
+    usage = {"input_tokens": 200, "cache_creation_input_tokens": 500_000,
+        "cache_read_input_tokens": 500_000, "iterations": [first,
+            {"type": "message", "input_tokens": 100,
+             "cache_read_input_tokens": 500_000}]}
+    path = _advisor_transcript(mod, root, usage)
+    turn = mod.parse_session_turns(path)[0]
+    assert "resume_cache_read" not in turn
+    assert mod.keepwarm_resume_is_warm(turn, 500_000) is False
+
+
+def test_initial_cold_write_cannot_be_credited_when_final_executor_reads_it(m):
+    mod, _, root = m
+    usage = {"input_tokens": 200, "cache_read_input_tokens": 500_000,
+        "cache_creation_input_tokens": 500_000, "iterations": [
+            {"type": "message", "input_tokens": 100, "cache_read_input_tokens": 0,
+             "cache_creation_input_tokens": 500_000},
+            {"type": "message", "input_tokens": 100, "cache_read_input_tokens": 500_000,
+             "cache_creation_input_tokens": 0}]}
+    path = _advisor_transcript(mod, root, usage)
+    turn = mod.parse_session_turns(path)[0]
+    assert turn["resume_cache_read"] == 0
+    assert turn["resume_cache_creation"] == 500_000
+    assert mod.keepwarm_resume_is_warm(turn, 500_000) is False
+    assert mod._parse_jsonl_for_quality(path)["context_tokens"] == 500_100
