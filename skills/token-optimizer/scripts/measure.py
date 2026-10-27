@@ -2113,10 +2113,35 @@ def _context_usage(usage):
     if isinstance(usage, dict) and isinstance(usage.get("iterations"), list):
         for iteration in reversed(usage["iterations"]):
             if isinstance(iteration, dict) and iteration.get("type") == "message":
-                if _context_token_count(iteration) > 0:
+                if (_valid_context_usage(iteration)
+                        and _context_token_count(iteration) > 0):
                     return iteration
                 break
     return usage
+
+
+def _valid_context_usage(usage):
+    """Reject corrupt present executor buckets before lossy int coercion.
+
+    Missing buckets are optional. TTL splits matter only when the flat
+    cache-write count is absent or zero, matching _context_token_count.
+    """
+    values = [usage[key] for key in ("input_tokens", "cache_read_input_tokens",
+              "cache_creation_input_tokens") if key in usage]
+    if not _safe_int(usage.get("cache_creation_input_tokens")):
+        nested = usage.get("cache_creation", {})
+        if not isinstance(nested, dict):
+            return False
+        for key in ("ephemeral_1h_input_tokens", "ephemeral_5m_input_tokens"):
+            if key in nested:
+                values.append(nested[key])
+            if not nested.get(key) and key in usage:
+                values.append(usage[key])
+    try:
+        return all(math.isfinite(float(value)) and float(value) >= 0
+                   for value in values)
+    except (TypeError, ValueError, OverflowError):
+        return False
 
 
 def _context_token_count(usage):

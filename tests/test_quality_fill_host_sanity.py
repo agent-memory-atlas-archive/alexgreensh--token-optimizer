@@ -321,3 +321,56 @@ def test_top_level_ttl_splits_describe_plain_and_executor_context(m, selected):
     assert mod._advice_session_data(path)["turns"] == [491_151]
     assert mod._transcript_last_turn("advisor-session")[0] == 491_151
     assert mod._keepwarm_prefix_proxy(usage) == 491_051
+
+
+@pytest.mark.parametrize("bucket", ["input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "nested_1h", "top_5m"])
+@pytest.mark.parametrize("bad", ["bad", float("inf"), float("nan"), None, -1])
+def test_corrupt_executor_bucket_with_positive_counts_falls_back(m, bucket, bad):
+    mod, _, root = m
+    usage = _advisor_usage()
+    executor = usage["iterations"][-1]
+    if bucket.startswith("nested"):
+        executor["cache_creation_input_tokens"] = 0
+        executor["cache_creation"] = {"ephemeral_1h_input_tokens": bad,
+                                      "ephemeral_5m_input_tokens": 91_051}
+    elif bucket.startswith("top"):
+        executor.pop("cache_creation_input_tokens")
+        executor["ephemeral_5m_input_tokens"] = bad
+        executor["ephemeral_1h_input_tokens"] = 91_051
+    else:
+        executor[bucket] = bad
+    path = _advisor_transcript(mod, root, usage)
+    assert mod._context_usage(usage) is usage
+    assert mod._parse_jsonl_for_quality(path)["context_tokens"] == 981_027
+    assert mod._transcript_last_turn("advisor-session")[0] == 981_027
+    assert mod._advice_session_data(path)["turns"] == [981_027]
+    assert mod._keepwarm_prefix_proxy(usage) == 980_827
+
+
+@pytest.mark.parametrize("executor, expected", [
+    ({"type": "message", "input_tokens": "100", "cache_read_input_tokens": "400000", "cache_creation_input_tokens": 91051.0}, 491151),
+    ({"type": "message", "input_tokens": 100}, 100),
+    ({"type": "message", "cache_read_input_tokens": 400000}, 400000),
+    ({"type": "message", "input_tokens": 100, "cache_creation_input_tokens": 20,
+      "cache_creation": {"ephemeral_1h_input_tokens": "unused"}}, 120),
+    ({"type": "message", "input_tokens": 100, "cache_creation_input_tokens": 20,
+      "cache_creation": None}, 120),
+    ({"type": "message", "input_tokens": 100, "cache_creation": {
+        "ephemeral_1h_input_tokens": 20}, "ephemeral_1h_input_tokens": "unused"}, 120),
+])
+def test_executor_numeric_encodings_and_omitted_buckets_remain_supported(m, executor, expected):
+    mod, _, _ = m
+    usage = _advisor_usage()
+    usage["iterations"][-1] = executor
+    assert mod._context_usage(usage) is executor
+    assert mod._context_token_count(executor) == expected
+
+
+@pytest.mark.parametrize("nested", [None, "bad", [], 5])
+def test_malformed_executor_cache_creation_container_falls_back(m, nested):
+    mod, _, _ = m
+    usage = _advisor_usage()
+    executor = usage["iterations"][-1]
+    executor.pop("cache_creation_input_tokens")
+    executor["cache_creation"] = nested
+    assert mod._context_usage(usage) is usage
