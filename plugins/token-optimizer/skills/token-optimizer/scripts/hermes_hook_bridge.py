@@ -352,6 +352,13 @@ def run_tool_hooks(event: str, payload: dict, timeout: float = 8.0) -> dict | No
     return _last_json_object(out)
 
 
+def redaction_patterns(timeout: float = 10.0) -> list[str]:
+    """Credential regexes for Hermes's redactor, loaded under the Hermes runtime."""
+    res = run_tool_hooks("redaction-patterns", {}, timeout=timeout)
+    pats = res.get("patterns") if isinstance(res, dict) else None
+    return [p for p in (pats or []) if isinstance(p, str)]
+
+
 def run_measure_context(args: list[str], payload: dict, timeout: float = 10.0) -> str:
     """Run a measure.py hook subcommand and return its additionalContext text.
 

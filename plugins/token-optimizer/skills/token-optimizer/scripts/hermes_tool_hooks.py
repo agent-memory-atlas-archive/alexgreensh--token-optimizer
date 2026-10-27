@@ -11,12 +11,14 @@ here.
     python3 hermes_tool_hooks.py post-tool     < payload.json
     python3 hermes_tool_hooks.py pre-tool      < payload.json
     python3 hermes_tool_hooks.py clear-reads   < payload.json
+    python3 hermes_tool_hooks.py redaction-patterns
 
 Output is ONE JSON object on stdout (or nothing):
 
     post-tool:   {"replacement": str | null, "notes": [str, ...]}
     pre-tool:    {"block": str | null, "notes": [str, ...]}
     clear-reads: {}
+    redaction-patterns: {"patterns": [str, ...]}
 
 Engines run here (post-tool), by Claude Code tool name:
   - bash_compress_hook  (Bash): output compression, cross-turn dedup, loop
@@ -229,11 +231,36 @@ def run_clear_reads(payload: dict) -> dict:
     return {}
 
 
+def run_redaction_patterns(_payload: dict) -> dict:
+    """Credential regexes (built-in + the user's custom file for this runtime).
+
+    The plugin hands these to Hermes's own redactor. Loaded here, under the
+    Hermes runtime, so the custom pattern file is the one the engines use.
+    A broken custom file contributes nothing; the built-ins still go.
+    """
+    import credential_patterns
+
+    compiled = list(getattr(credential_patterns, "PATTERNS_ONLY", []))
+    try:
+        compiled += [pat for _, pat in credential_patterns.get_custom_patterns()]
+    except Exception:
+        pass
+    seen: list[str] = []
+    for pat in compiled:
+        text = getattr(pat, "pattern", None)
+        if isinstance(text, str) and text not in seen:
+            seen.append(text)
+    return {"patterns": seen}
+
+
 _HANDLERS = {
     "post-tool": run_post_tool,
     "pre-tool": run_pre_tool,
     "clear-reads": run_clear_reads,
+    "redaction-patterns": run_redaction_patterns,
 }
+# Events that need no stdin payload.
+_NO_PAYLOAD = frozenset({"redaction-patterns"})
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -247,8 +274,8 @@ def main(argv: list[str] | None = None) -> int:
         enforce_utf8_io()
     except Exception:
         pass
-    payload = _read_payload()
-    if not payload:
+    payload = {} if args[0] in _NO_PAYLOAD else _read_payload()
+    if not payload and args[0] not in _NO_PAYLOAD:
         return 0
     try:
         out = _HANDLERS[args[0]](payload)
