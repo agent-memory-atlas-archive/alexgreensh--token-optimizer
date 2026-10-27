@@ -10,6 +10,20 @@
 - GitHub Copilot CLI: the `preToolUse` hook loads again. `copilot-install` wrote its matcher in a form Copilot rejects, so Copilot skipped the hook and bash output was never compressed. Re-run `copilot-install` once to pick up the fix. `copilot-doctor` now reports a hook config whose matcher Copilot would skip instead of showing it as OK. Thanks @imabusyman (#284).
 - GitHub Copilot CLI: the end-of-session rollup, dashboard refresh and in-flight tally cleanup run again. `copilot-install` registered them under a `stop` event that Copilot does not have, so they never fired. They now run on `sessionEnd`. Re-run `copilot-install` once to switch. Session cleanup no longer depends on the refresh being available. `copilot-doctor` warns while the old entry is present or the bridge cannot find `measure.py`, and no longer crashes on a malformed hook file.
 
+- Hermes: terminal output is compressed with the same engine Claude Code uses (git, find, tests, builds, logs and more), and the full original stays one command away.
+- Hermes: re-reading a file you already read returns a short structure map, and re-reading it after an edit returns only the diff.
+- Hermes: large MCP results come back as a preview with the full result saved, and repeating the same MCP call reads the saved copy instead.
+- Hermes: a short note appears when the same command keeps failing or returning the same output, so the agent changes approach sooner.
+- Hermes: your task, decisions, files and next step are saved as the context fills, right before Hermes compacts, at each turn and at session end, and they come back after a compaction.
+- Hermes: a new session can pick up where an earlier one left off. A prompt like "continue the parser work" brings back the matching session.
+- Hermes: a short "keep answers focused" note when the context passes 75%, at most three times per session.
+- Hermes: skill usage and compression savings now show per session in the dashboard.
+- Hermes: Token Optimizer's credential patterns, including your custom ones, now also mask secrets in Hermes's own output and logs.
+- Hermes: `/token-optimizer` can show what a past session cost, save a checkpoint now, and print a saved tool result.
+- Hermes: a session is now recorded once when it ends instead of after its first turn, so the dashboard shows the whole session, and the context nudge fires at most once per session as intended.
+- Hermes: `hermes-doctor` lists every live hook and warns when the installed plugin is older than your checkout. Re-run `install.sh --hermes` to get plugin 0.2.0.
+- `measure.py --runtime NAME` now also uses that runtime's data folder, so commands like `expand` find results saved there.
+
 ## [5.13.58] - 2026-10-27
 
 - Up-to-date model prices: gpt-6.1-terra.
