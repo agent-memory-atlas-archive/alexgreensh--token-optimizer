@@ -126,6 +126,26 @@ def _home_checks() -> list:
     return checks
 
 
+def _invalid_matcher_events(hooks) -> list:
+    """Events with an entry whose `matcher` is present but not a string.
+
+    Copilot skips a hook entry whose matcher is not a regex string, so an
+    event listed in the file can still never fire.
+    """
+    bad = []
+    if not isinstance(hooks, dict):
+        return bad
+    for event in sorted(hooks):
+        entries = hooks[event]
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if isinstance(entry, dict) and "matcher" in entry and not isinstance(entry["matcher"], str):
+                bad.append(event)
+                break
+    return bad
+
+
 def _hook_config_checks() -> list:
     checks = []
     hook_path = copilot_home() / "hooks" / "token-optimizer.json"
@@ -141,8 +161,21 @@ def _hook_config_checks() -> list:
         return checks
     try:
         config = json.loads(hook_path.read_text(encoding="utf-8"))
-        events = sorted((config.get("hooks") or {}).keys())
-        checks.append(_check("ok", "TO hook config", f"{hook_path} (events: {', '.join(events)})"))
+        hooks = config.get("hooks") or {}
+        events = sorted(hooks.keys())
+        bad = _invalid_matcher_events(hooks)
+        if bad:
+            checks.append(
+                _check(
+                    "fail",
+                    "TO hook config",
+                    f"{hook_path}: `matcher` must be a regex string in {', '.join(bad)}; "
+                    "Copilot skips those hooks.",
+                    _hint("Re-run `python3 measure.py copilot-install` to rewrite it."),
+                )
+            )
+        else:
+            checks.append(_check("ok", "TO hook config", f"{hook_path} (events: {', '.join(events)})"))
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         checks.append(
             _check(

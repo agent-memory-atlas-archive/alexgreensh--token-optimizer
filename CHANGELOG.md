@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- GitHub Copilot CLI: the `preToolUse` hook loads again. `copilot-install` wrote its matcher in a form Copilot rejects, so Copilot skipped the hook and bash output was never compressed. Re-run `copilot-install` once to pick up the fix. `copilot-doctor` now reports a hook config whose matcher Copilot would skip instead of showing it as OK. Thanks @imabusyman (#284).
+
 ## [5.13.58] - 2026-10-27
 
 - Up-to-date model prices: gpt-6.1-terra.
