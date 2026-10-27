@@ -53993,9 +53993,10 @@ def _advice_session_data(path):
                 u = msg.get("usage")
                 if not isinstance(u, dict):
                     continue
-                u = _context_usage(u)
+                # Cache-read traffic is billed aggregate usage; occupancy is
+                # only the final executor iteration of an advisor response.
                 cr = _safe_int(u.get("cache_read_input_tokens"))
-                ctx = _context_token_count(u)
+                ctx = _context_token_count(_context_usage(u))
                 if ctx <= 0:
                     continue
                 m = msg.get("model")

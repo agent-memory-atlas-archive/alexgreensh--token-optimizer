@@ -234,7 +234,7 @@ def test_advisor_context_uses_final_executor_without_changing_billing(m, monkeyp
     assert mod._transcript_last_turn("advisor-session")[0] == 491_151
     replay = mod._advice_session_data(path)
     assert replay["turns"] == [491_151]
-    assert replay["cache_reads"] == [400_000]
+    assert replay["cache_reads"] == [800_000]
     assert mod._keepwarm_prefix_proxy(usage) == 491_051
     # These are billing APIs: every paid executor iteration still counts.
     billed_session = mod._parse_session_jsonl(path)
@@ -305,3 +305,19 @@ def test_second_reported_advisor_record_uses_latest_executor(m):
     assert mod._parse_jsonl_for_quality(path)["context_tokens"] == 516_860
     assert mod._advice_session_data(path)["turns"] == [516_860]
     assert mod._transcript_last_turn("advisor-session")[0] == 516_860
+
+
+@pytest.mark.parametrize("selected", [False, True])
+def test_top_level_ttl_splits_describe_plain_and_executor_context(m, selected):
+    mod, _, root = m
+    executor = {"type": "message", "input_tokens": 100,
+                "cache_read_input_tokens": 400_000,
+                "ephemeral_1h_input_tokens": 50_000,
+                "ephemeral_5m_input_tokens": 41_051}
+    usage = ({"input_tokens": 200, "cache_read_input_tokens": 800_000,
+              "iterations": [executor]} if selected else executor)
+    path = _advisor_transcript(mod, root, usage)
+    assert mod._parse_jsonl_for_quality(path)["context_tokens"] == 491_151
+    assert mod._advice_session_data(path)["turns"] == [491_151]
+    assert mod._transcript_last_turn("advisor-session")[0] == 491_151
+    assert mod._keepwarm_prefix_proxy(usage) == 491_051
