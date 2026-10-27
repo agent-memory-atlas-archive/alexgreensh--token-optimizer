@@ -20,11 +20,13 @@ Either way, Path(__file__).parent / "measure.py" resolves correctly.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import Any
 
 from runtime_env import runtime_home
 from spawn_utils import spawn_detached
@@ -268,6 +270,170 @@ def run_dashboard(session_id: str = "", port: int = DASHBOARD_PORT) -> None:
     if _proc is None:
         logger.warning("[hermes_hook_bridge] run_dashboard spawn_detached returned None")
         print("[Token Optimizer] Could not open dashboard: spawn failed")
+
+
+# ---------------------------------------------------------------------------
+# Per-tool engines and session continuity (parity with Claude Code / Codex)
+# ---------------------------------------------------------------------------
+#
+# The plugin runs in the Hermes process. Every engine call below runs in a
+# short child process (the same scripts Claude Code's hooks run), so a slow or
+# broken engine can never stall or crash Hermes. All helpers fail open: they
+# return None / "" on any problem and the caller keeps the original output.
+
+_HERMES_ENV = {"TOKEN_OPTIMIZER_RUNTIME": "hermes", "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+
+
+def scripts_dir() -> Path | None:
+    """Directory holding measure.py and the engine scripts, or None."""
+    measure_py = _locate_measure_py()
+    return measure_py.parent if measure_py is not None else None
+
+
+def _run_json(cmd: list[str], payload: dict, timeout: float) -> str:
+    """Run ``cmd`` with ``payload`` as JSON on stdin; return stdout ("" on failure)."""
+    try:
+        data = json.dumps(payload, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        return ""
+    try:
+        result = subprocess.run(
+            cmd,
+            input=data,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=max(0.1, float(timeout)),
+            env={**os.environ, **_HERMES_ENV},
+            creationflags=_NO_WINDOW,
+        )
+    except subprocess.TimeoutExpired:
+        logger.debug("[hermes_hook_bridge] %s timed out", cmd[1:3])
+        return ""
+    except Exception as exc:
+        logger.debug("[hermes_hook_bridge] %s error: %s", cmd[1:3], exc)
+        return ""
+    return result.stdout or ""
+
+
+def _last_json_object(text: str) -> dict | None:
+    for line in reversed((text or "").strip().splitlines()):
+        line = line.strip()
+        if line.startswith("{"):
+            try:
+                obj = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(obj, dict):
+                return obj
+    return None
+
+
+def run_tool_hooks(event: str, payload: dict, timeout: float = 8.0) -> dict | None:
+    """Run ``hermes_tool_hooks.py <event>`` on a Claude-Code-shaped payload.
+
+    Returns the normalized result dict, or None when nothing applies or on any
+    failure (missing script, timeout, bad output).
+    """
+    sdir = scripts_dir()
+    if sdir is None:
+        return None
+    script = sdir / "hermes_tool_hooks.py"
+    if not script.is_file():
+        return None
+    out = _run_json([sys.executable, str(script), event], payload, timeout)
+    return _last_json_object(out)
+
+
+def run_measure_context(args: list[str], payload: dict, timeout: float = 10.0) -> str:
+    """Run a measure.py hook subcommand and return its additionalContext text.
+
+    Used for ``compact-restore`` and ``prompt-continuity``, which read a hook
+    payload on stdin and answer with a hookSpecificOutput envelope.
+    """
+    measure_py = _locate_measure_py()
+    if measure_py is None:
+        return ""
+    out = _run_json([sys.executable, str(measure_py), *args], payload, timeout)
+    obj = _last_json_object(out)
+    if not obj:
+        return ""
+    hso = obj.get("hookSpecificOutput")
+    ctx = hso.get("additionalContext") if isinstance(hso, dict) else None
+    return ctx.strip() if isinstance(ctx, str) else ""
+
+
+def spawn_checkpoint(
+    session_id: str, trigger: str, *, fill_pct: float | None = None, cwd: str | None = None,
+) -> bool:
+    """Write a checkpoint for a Hermes session in the background.
+
+    Fire-and-forget ``measure.py hermes-checkpoint``; returns True when the
+    child was started. Never blocks the Hermes turn.
+    """
+    if not session_id or not trigger:
+        return False
+    measure_py = _locate_measure_py()
+    if measure_py is None:
+        return False
+    cmd = [sys.executable, str(measure_py), "hermes-checkpoint", "--quiet",
+           "--session", str(session_id), "--trigger", str(trigger)]
+    if fill_pct is not None:
+        cmd += ["--fill-pct", f"{float(fill_pct):.1f}"]
+    if cwd:
+        cmd += ["--cwd", str(cwd)]
+    try:
+        proc = spawn_detached(
+            cmd,
+            env={**os.environ, **_HERMES_ENV},
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception as exc:
+        logger.debug("[hermes_hook_bridge] spawn_checkpoint error: %s", exc)
+        return False
+    return proc is not None
+
+
+def run_command_text(args: list[str], timeout: int = 20) -> str:
+    """Run a read-only measure.py command for the slash command; return stdout."""
+    return _run_measure(list(args), capture_output=True, timeout=timeout)
+
+
+def to_claude_payload(
+    tool_name: str,
+    args: Any,
+    *,
+    session_id: str,
+    tool_call_id: str = "",
+    result: Any = None,
+    cwd: str = "",
+) -> list[dict]:
+    """Translate a Hermes tool call into Claude-Code-shaped hook payloads.
+
+    One Hermes call can map to several (a multi-file patch), so a list is
+    returned. Tool output, when given, goes in ``tool_response``.
+    """
+    try:
+        from hermes_session import hermes_tool_to_claude
+    except Exception:
+        return []
+    out = []
+    for cc_name, cc_input in hermes_tool_to_claude(tool_name, args):
+        payload: dict = {
+            "hook_event_name": "PostToolUse" if result is not None else "PreToolUse",
+            "tool_name": cc_name,
+            "tool_input": cc_input,
+            "session_id": session_id,
+            "tool_use_id": tool_call_id,
+        }
+        if cwd:
+            payload["cwd"] = cwd
+        if result is not None:
+            payload["tool_response"] = result
+        out.append(payload)
+    return out
 
 
 if __name__ == "__main__":

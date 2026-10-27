@@ -691,6 +691,9 @@ PROGRESSIVE_BANDS = (20, 35, 50, 65, 80)
 EDIT_BATCH_WRITE_THRESHOLD = 4
 EDIT_BATCH_FILE_THRESHOLD = 3
 
+# Hermes read_file's default line limit (tools/file_operations_common.py).
+HERMES_DEFAULT_READ_LIMIT = 2000
+
 _PATCH_FILE_RE = re.compile(r"^\*\*\* (?:Update|Add|Delete) File:\s*(.+?)\s*$", re.MULTILINE)
 
 
@@ -731,12 +734,16 @@ def hermes_tool_to_claude(name: str, args: Any) -> list[tuple[str, dict]]:
     args = args if isinstance(args, dict) else {}
     name = str(name or "")
     if name == "read_file":
+        # Hermes: offset is 1-indexed (default 1), limit defaults to 2000 lines.
+        # Claude Code: offset/limit absent (0) means "the whole file". Map the
+        # Hermes defaults to absent so a plain read counts as a full read.
         inp: dict = {"file_path": str(args.get("path") or "")}
         offset = _safe_int(args.get("offset"), 0)
+        limit = _safe_int(args.get("limit"), 0)
         if offset > 1:
             inp["offset"] = offset
-            if args.get("limit"):
-                inp["limit"] = _safe_int(args.get("limit"))
+        if limit > 0 and limit != HERMES_DEFAULT_READ_LIMIT:
+            inp["limit"] = limit
         return [("Read", inp)]
     if name == "write_file":
         return [("Write", {"file_path": str(args.get("path") or "")})]
