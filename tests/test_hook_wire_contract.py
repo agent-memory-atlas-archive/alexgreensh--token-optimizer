@@ -929,6 +929,50 @@ def test_checkpoint_hooks_really_write_the_checkpoint(harness, sandbox):
     assert not failures, "\n\n".join(failures)
 
 
+@pytest.mark.parametrize("harness", ["codex-global", "codex-plugin"])
+def test_codex_stop_finds_the_transcript_from_the_session_id_alone(harness, sandbox):
+    """#278: an automatic Codex Stop wrote ``unknown-...-stop.md`` holding only
+    "No transcript data available" while the rollout was right there. With
+    just the session id (Codex may send no transcript_path), Stop must find
+    the real rollout and write a checkpoint with the session's work; with no
+    identity at all it must write nothing rather than an empty placeholder."""
+    warm(sandbox, harness)
+    e = pick(harness_entries(harness, sandbox), "Stop", handler="stop_runner")
+    cps = sandbox.checkpoints_for(harness)
+    sandbox.codex_rollout(SID)
+
+    before = _snapshot(cps)
+    time.sleep(1.05)
+    r = fire_entry(sandbox, e, harness_env(harness, sandbox), transcript_path=None)
+    made = [p for p in _new_files(cps, before) if p.suffix == ".md"]
+    assert r.rc == 0, r
+    ours = [p for p in made if p.name.startswith(SID) and p.stem.endswith("-stop")]
+    assert ours, f"no {SID}-*-stop.md checkpoint\n{r}\nnew={[p.name for p in made]}"
+    body = ours[-1].read_text(encoding="utf-8")
+    assert "app.py" in body and "No transcript data available" not in body, body[:600]
+
+    # Neither a session id nor a transcript, or an id with no rollout on disk:
+    # nothing real to capture, so no placeholder either.
+    before = _snapshot(cps)
+    time.sleep(1.05)
+    # (fire_entry would create a rollout for the id it is given, so call fire.)
+    for sid in (None, "5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b"):
+        payload = sandbox.payload(e.event, e.matcher, session_id=sid, transcript_path=None)
+        r = sandbox.fire(e.command, payload, harness_env(harness, sandbox))
+        assert r.rc == 0, r
+    deadline = time.time() + 10  # the deferred Stop worker runs detached
+    while time.time() < deadline:
+        made = [p for p in _new_files(cps, before) if p.suffix == ".md"]
+        if made:
+            break
+        time.sleep(0.5)
+    for p in _new_files(cps, before):
+        if p.suffix == ".md":
+            text = p.read_text(encoding="utf-8")
+            assert not p.name.startswith("unknown-") and "No transcript data available" not in text, \
+                f"{p.name}: {text[:300]}"
+
+
 def test_posttooluse_bash_compresses_and_archives_on_the_wire(sandbox):
     """The PostToolUse entry's claim: a 700-line `find` comes back to the model
     shorter, with the full output archived for `measure.py expand`."""

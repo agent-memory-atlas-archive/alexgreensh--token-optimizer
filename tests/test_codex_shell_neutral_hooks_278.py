@@ -431,9 +431,14 @@ def test_compact_capture_writes_no_unknown_placeholder_on_codex(monkeypatch, tmp
     monkeypatch.setattr(m, "_find_current_session_jsonl", lambda: None)
     assert m.compact_capture(trigger="stop") is None
     assert not list((tmp_path / "checkpoints").glob("unknown-*"))
-    # A named session whose transcript is missing still leaves its own marker.
-    named = m.compact_capture(trigger="stop", session_id="abcdef123456")
-    assert named and "abcdef123456" in named
+    # A named session whose transcript cannot be found gets no placeholder
+    # either: "No transcript data available" restores nothing (issue #278).
+    status = {}
+    monkeypatch.setattr(m, "_record_hook_status", lambda k, v: status.__setitem__(k, v))
+    assert m.compact_capture(trigger="stop", session_id="abcdef123456") is None
+    assert not list((tmp_path / "checkpoints").glob("*.md"))
+    assert status["stop_capture"].startswith("skipped: no Codex transcript matches")
+    assert "abcdef123456" not in status["stop_capture"]
 
 
 def test_reinstall_replaces_the_old_command_without_duplicating(monkeypatch, tmp_path):

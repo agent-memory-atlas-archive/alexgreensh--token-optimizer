@@ -41081,10 +41081,19 @@ def compact_capture(transcript_path=None, session_id=None, trigger="auto", cwd=N
     trigger_suffix = f"-{trigger}" if trigger and trigger != "auto" else ""
 
     if not filepath or not filepath.exists():
-        if not session_id and _use_codex_session_adapter():
-            # Codex with no session identity at all: an anonymous "unknown"
-            # placeholder only adds a file that can outrank real checkpoints on
-            # restore, and hides that the host sent no identity (issue #278).
+        if _use_codex_session_adapter(transcript_path or None):
+            # Codex with no readable transcript: a "No transcript data
+            # available" placeholder (named "unknown" when the host sent no
+            # session id) holds nothing to restore, can outrank real
+            # checkpoints, and hides that capture failed (issue #278). Say
+            # why instead, for the doctor; never the id or path themselves.
+            _record_hook_status(
+                "stop_capture" if trigger in ("stop", "end") else "checkpoint_capture",
+                "skipped: " + (
+                    "the transcript path the host sent is outside the Codex sessions folder or unreadable"
+                    if transcript_path else
+                    "no Codex transcript matches the session id the host sent" if session_id else
+                    "the hook payload and environment carried no session id"))
             return None
         # Write minimal checkpoint with safe permissions
         sid = sanitize_session_id(session_id)
