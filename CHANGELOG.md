@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [Unreleased]
+
+- Codex on Windows: hook commands now run under PowerShell, which is the shell Codex uses for hooks, as well as cmd.exe. The 5.13.57 command only worked under cmd.exe, so hooks still failed with "hook exited with code 1". Any Token Optimizer command rewrites existing hooks to the new form; restart Codex afterwards, and approve the Token Optimizer entries if Codex asks you to review the changed hooks. Paths with `$`, a backtick or `%`, or a Python path with spaces and no short name, keep the cmd.exe-only form, and `codex-doctor` says so. Thanks @porkmagus (#278).
+- Codex: the Stop hook passes its session id to the background checkpoint job, and no longer saves an anonymous "unknown" checkpoint when the host sent no session id. `codex-doctor` shows which fields the Stop hook received (names only, never values).
+
 - GitHub Copilot CLI: the `preToolUse` hook loads again. `copilot-install` wrote its matcher in a form Copilot rejects, so Copilot skipped the hook and bash output was never compressed. Re-run `copilot-install` once to pick up the fix. `copilot-doctor` now reports a hook config whose matcher Copilot would skip instead of showing it as OK. Thanks @imabusyman (#284).
 - GitHub Copilot CLI: the end-of-session rollup, dashboard refresh and in-flight tally cleanup run again. `copilot-install` registered them under a `stop` event that Copilot does not have, so they never fired. They now run on `sessionEnd`. Re-run `copilot-install` once to switch. Session cleanup no longer depends on the refresh being available. `copilot-doctor` warns while the old entry is present or the bridge cannot find `measure.py`, and no longer crashes on a malformed hook file.
 
