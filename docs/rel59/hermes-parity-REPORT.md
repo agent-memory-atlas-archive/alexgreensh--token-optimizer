@@ -30,7 +30,7 @@ Shared code (all behaviour-preserving for other runtimes, covered by their exist
 - `recovery_output`: recognises the runtime-pinned form, so expanding a saved result is never compressed or archived again.
 
 Tests and docs
-- New `tests/test_hermes_parity.py` (89 tests). Updated `tests/test_bridges_no_window.py` (Hermes bridge now has 4 detached spawn sites) and `tests/test_hermes_context_fill_nudge.py` (stubs the new background work so it stays a unit test).
+- New `tests/test_hermes_parity.py` (89 tests). `skills/token-optimizer/scripts/devin_source.py`: the new module added to the Devin closed-set allow list. Updated `tests/test_bridges_no_window.py` (Hermes bridge now has 4 detached spawn sites) and `tests/test_hermes_context_fill_nudge.py` (stubs the new background work so it stays a unit test).
 - `docs/hermes-parity.md` (new), `hermes/README.md`, docs-site `platforms/hermes.mdx`, `install/hermes.mdx`, `reference/capability-matrix.mdx` (Hermes column), `start/feature-map.mdx`, `features/smart-compaction.mdx`, `features/active-compression.mdx`, root `README.md` Hermes install line, `CHANGELOG.md` under `[Unreleased]`.
 - Mirrors regenerated with `scripts/sync-codex-marketplace-plugin.sh`; `scripts/check-mirror-sync.sh` passes for `plugins/` and `cowork/`. OpenClaw not touched.
 
@@ -112,6 +112,14 @@ The commit "Hermes plugin: register tool, compaction, error, subagent and sessio
 
 ## Full test run
 
-(filled in below)
+`python -m pytest tests/ -q` (throwaway HOME) aborts partway with a pytest INTERNALERROR on this branch AND on untouched `origin/integ/5.13.59`: `tests/test_copilot_safe_python.py` and `tests/test_cursor_safe_python.py` patch `os.stat` with an object lacking `st_size`/`st_ino`, and pytest crashes formatting a failure (and the tree guard in `conftest.py` crashes at session end). So I ran every test file in its own pytest process, for this branch and for base, and compared.
+
+- This branch: 7,989 tests passed across 373 files. 19 files have failures; the same 19 files fail on base with the same counts (base also has `test_hook_never_blocks_cross_harness` failing, which passes here).
+- After the last fix, `test_devin_closedset` matches base (1 failure, `test_allowed_source_open_checks[owner]`, also on base).
+- Files failing on both, not touched by this unit: test_cloud_parity, test_compact_advice, test_consent_gate_race_window, test_copilot_safe_python, test_cowork_adapter, test_cowork_hardening, test_cursor_safe_python, test_daemon_midsession_pulse, test_daemon_snapshot_isolation, test_devin_closedset (1), test_ensure_health_daemon_revive_first, test_heal_hardening, test_measure_no_window, test_posix_session_identity, test_quality_fill_host_sanity, test_sessionend_defer_default, test_sessionstart_context_tax, test_settings_never_clobbered, test_windows_spawn_no_window.
+
+Failures this unit caused and fixed during the run: the verbosity refactor tripped two source guards (`test_every_context_nudge_uses_the_shared_phrase`, `test_nudge_is_suppressed_when_the_window_is_contradicted`), fixed by keeping `_format_context_fill(fill_pct, cached)` in the helper and placing it after the suppression check; the Devin closed-set inventory needed `hermes_tool_hooks`; the Hermes bridge spawn-count pin went from 3 to 4.
+
+Environment note: a probe hook in this sandbox keeps writing `tr-probe-out/` folders into whatever directory a command runs in. Inside `skills/` or `hooks/` they make the mirror tests fail; they are not part of the repo and were moved out before the runs.
 
 UNIT DONE
